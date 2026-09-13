@@ -13,9 +13,9 @@
      REVERSE_TAU    seconds to swap from one drift straight into the other.
      ====================================================================== */
   var MAX_DRIFT_DEG = 38;
-  var BUILD_TAU     = 0.30;
-  var DECAY_TAU     = 0.55;
-  var REVERSE_TAU   = 0.34;
+  var BUILD_TAU     = 0.34;
+  var DECAY_TAU     = 0.72;
+  var REVERSE_TAU   = 0.42;
   /* ====================================================================== */
 
   var MAX_DRIFT = MAX_DRIFT_DEG * Math.PI / 180;
@@ -75,8 +75,9 @@
     },
 
     draw: function (ctx, view) {
-      var x = DR.Road.sx(this.x, view);
-      var y = view.carY;
+      var p = DR.Road.project(this.s, this.x, view);
+      var x = p.x;
+      var y = p.y;
       var yaw = this.drift * VISUAL_YAW;
       var lean = Math.abs(this.drift) / MAX_DRIFT;
 

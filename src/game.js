@@ -11,11 +11,9 @@
   var LOGICAL_W = 720;
   var LOGICAL_H = 1280;
 
-  var CAR_Y     = 940;   // car sits in the lower third (940 / 1280)
-  var LOOKAHEAD = 990;   // world units of road visible ahead — identical for all
-  var BEHIND    = 380;   // and behind, so the road reaches the bottom edge
-
-  var SPEED = 420;       // constant for Milestone 1; the speed system is later
+  // Where the car lands on screen and how far it can see are the camera's to
+  // decide now — see the camera block at the top of road.js.
+  var SPEED = 480;       // constant for now; the speed system is a later milestone
 
   var FIXED = 1 / 60;    // physics runs at a fixed rate so the feel never
                          // changes between a slow phone and a fast monitor
@@ -47,11 +45,11 @@
     return {
       W: LOGICAL_W,
       H: LOGICAL_H,
-      carY: CAR_Y,
+      carY: DR.Road.CAR_Y,
       carS: DR.Car.s,
       camX: camX,
-      sTop: DR.Car.s + LOOKAHEAD,
-      sBot: DR.Car.s - BEHIND
+      sTop: DR.Car.s + DR.Road.LOOKAHEAD,
+      sBot: DR.Road.nearS(DR.Car.s, LOGICAL_H)
     };
   }
 
@@ -91,7 +89,7 @@
     // Camera sits between the car and the road ahead, so a hard bend stays
     // framed instead of sliding out of shot, plus a small lean into the drift.
     var target = DR.Car.x * 0.60 +
-                 DR.Road.centerAt(DR.Car.s + 520) * 0.40 +
+                 DR.Road.centerAt(DR.Car.s + 620) * 0.40 +
                  Math.sin(DR.Car.drift) * 40;
     if (!camReady) { camX = target; camReady = true; }
     camX += (target - camX) * (1 - Math.exp(-dt / 0.18));
@@ -100,7 +98,7 @@
 
     DR.FX.emit(DR.Car, SPEED, dt);
     DR.FX.update(dt, DR.Car.s);
-    DR.Road.trim(DR.Car.s - BEHIND - 600);
+    DR.Road.trim(DR.Car.s - DR.Road.CAM_BACK - 600);
   }
 
   function drawHint(ctx2, v) {
@@ -203,7 +201,7 @@
     SPEED: SPEED,
     LOGICAL_W: LOGICAL_W,
     LOGICAL_H: LOGICAL_H,
-    LOOKAHEAD: LOOKAHEAD
+    LOOKAHEAD: DR.Road.LOOKAHEAD
   };
 
   if (document.readyState === 'loading') {

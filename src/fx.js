@@ -164,18 +164,20 @@
 
   function drawSkids(ctx, view) {
     if (!skids.length) return;
-    var i, m;
+    var i, m, p;
+    var unit = DR.Road.SC_CAR;
     for (var lvl = 0; lvl < 3; lvl++) {
       var opened = false;
       for (i = 0; i < skids.length; i++) {
         m = skids[i];
         if (m.lvl !== lvl) continue;
-        var y = DR.Road.sy(m.s, view);
-        if (y < -40 || y > view.H + 40) continue;
+        p = DR.Road.project(m.s, m.x, view);
+        if (p.y < -40 || p.y > view.H + 40) continue;
+        var r = m.r * p.sc / unit;
+        if (r < 0.4) continue;
         if (!opened) { ctx.beginPath(); opened = true; }
-        var x = DR.Road.sx(m.x, view);
-        ctx.moveTo(x + m.r, y);
-        ctx.arc(x, y, m.r, 0, Math.PI * 2);
+        ctx.moveTo(p.x + r, p.y);
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       }
       if (opened) {
         ctx.fillStyle = 'rgba(6,4,14,' + SKID_ALPHA[lvl] + ')';
@@ -187,16 +189,19 @@
   function drawSmoke(ctx, view) {
     if (!smoke.length) return;
     var img = getPuff();
+    var unit = DR.Road.SC_CAR;
+    var q = { x: 0, y: 0, sc: 0 };
     for (var i = 0; i < smoke.length; i++) {
       var p = smoke[i];
-      var y = DR.Road.sy(p.s, view);
-      if (y < -80 || y > view.H + 80) continue;
+      DR.Road.project(p.s, p.x, view, q);
+      if (q.y < -80 || q.y > view.H + 80) continue;
       var k = p.life / p.max;
       var a = p.peak * (1 - k) * Math.min(1, k * 5);
       if (a <= 0.004) continue;
-      var x = DR.Road.sx(p.x, view);
+      var r = p.r * q.sc / unit;
+      if (r < 0.5) continue;
       ctx.globalAlpha = a;
-      ctx.drawImage(img, x - p.r, y - p.r, p.r * 2, p.r * 2);
+      ctx.drawImage(img, q.x - r, q.y - r, r * 2, r * 2);
     }
     ctx.globalAlpha = 1;
   }
@@ -210,15 +215,12 @@
     // Light up the edge that was actually touched, so you can see where it
     // happened and not just that it happened.
     var pts = DR.Road.buildRibbon(view);
-    DR.Road.edgePath(ctx, pts, flash.side);
+    DR.Road.edgeStrip(ctx, pts, flash.side, 22);
     ctx.globalAlpha = 0.85 * k * flash.strength;
-    ctx.lineWidth = 20;
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = flash.color;
+    ctx.fillStyle = flash.color;
     ctx.shadowColor = flash.color;
     ctx.shadowBlur = 26;
-    ctx.stroke();
+    ctx.fill();
     ctx.shadowBlur = 0;
 
     // Soft border wash. Low peak alpha and a single smooth fade: no strobing.
@@ -249,8 +251,9 @@
       var k = l.t / l.dur;
       var a = Math.min(1, (1 - k) * 2.2);
       // Keep the words on screen even when the car is pinned to an edge.
-      var x = Math.max(120, Math.min(view.W - 120, DR.Road.sx(l.x, view)));
-      var y = Math.max(60, Math.min(view.H - 60, DR.Road.sy(l.s, view) - k * 70));
+      var lp = DR.Road.project(l.s, l.x, view);
+      var x = Math.max(120, Math.min(view.W - 120, lp.x));
+      var y = Math.max(DR.Road.HORIZON_Y + 40, Math.min(view.H - 60, lp.y - k * 70));
       ctx.globalAlpha = a * 0.55;
       ctx.lineWidth = 6;
       ctx.strokeStyle = 'rgba(4,2,10,0.95)';
