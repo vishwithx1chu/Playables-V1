@@ -19,6 +19,17 @@
   var tmp = { x: 0, s: 0 };
   var puff = null;
 
+  // Players who have asked their device for less motion still get the shake,
+  // just gently — they must not lose the signal that they touched an edge.
+  var motionScale = 1;
+  try {
+    var mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    motionScale = mq.matches ? 0.25 : 1;
+    if (mq.addEventListener) {
+      mq.addEventListener('change', function (e) { motionScale = e.matches ? 0.25 : 1; });
+    }
+  } catch (e) { /* older browser: keep the full shake */ }
+
   // One soft blob, drawn once into an offscreen canvas and then stamped over
   // and over. Cheaper than building a gradient per particle per frame.
   function getPuff() {
@@ -140,7 +151,7 @@
   function shakeOffset() {
     if (shake.t >= shake.dur) return { x: 0, y: 0 };
     var k = 1 - shake.t / shake.dur;
-    var amp = shake.mag * k * k;
+    var amp = shake.mag * k * k * motionScale;
     return {
       x: (Math.random() * 2 - 1) * amp,
       y: (Math.random() * 2 - 1) * amp
