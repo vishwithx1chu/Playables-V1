@@ -1,0 +1,140 @@
+# CLAUDE.md — Drift Run (working title)
+
+## About us
+We are two non-coders (Vishwith and Vanchu) building this for YouTube Playables.
+Explain changes in plain English with one line of "why" per change. Propose a
+short plan and wait for approval before building anything beyond what's asked.
+Build in small, testable steps. If a request would break a Playables rule below,
+say so and propose a compliant alternative instead of doing it.
+
+## Core fantasy
+Threading a neon highway at night, carving perfect drifts through curves.
+Mastery should feel like flow — fast, smooth, barely in control.
+
+## Core loop (3-5 seconds, repeated)
+Curve is telegraphed ahead -> hold the correct side -> release at the right
+moment -> get graded on precision -> speed changes as a result -> next curve.
+
+## Controls (one mechanic covers all three input types)
+- Touch: press and HOLD the left or right half of the screen
+- Mouse: click and HOLD the left or right half of the screen
+- Keyboard: hold Left Arrow or Right Arrow
+- Release = straighten out. There are no other inputs. Fully one-thumb playable.
+
+## The drift mechanic (define precisely — this is the whole game)
+- The car has a lateral position across the road and a heading angle.
+- Holding a direction builds drift angle up to a maximum; the car slides
+  sideways at a rate proportional to its current drift angle.
+- Releasing decays the drift angle back toward zero (not instantly — it should
+  feel like weight and momentum, not a switch).
+- The road curves. To stay centred you must start your drift at the right
+  moment and hold it for the right duration.
+- Under-drifting: the car runs wide and hits the OUTER edge.
+- Over-drifting: the car cuts in and hits the INNER edge.
+- Both failure modes must be visibly distinct so the player learns which
+  mistake they made.
+
+## Grading each curve (the skill ceiling)
+Measure the car's maximum deviation from road centre through the curve:
+- PERFECT (tight band around centre): speed boost, score multiplier, big
+  visual/audio feedback
+- GOOD (wider band): small score, slight speed gain
+- SLOPPY (close to an edge but no contact): no score, slight slowdown
+- HIT (contact with an edge): damage taken, significant slowdown
+Grading is what makes the game replayable — surviving is not the same as
+mastering.
+
+## Speed system (self-balancing difficulty)
+- Car has a base speed with a floor and a ceiling.
+- Clean curves raise speed; sloppy curves and hits lower it.
+- Higher speed means less reaction time, so playing well makes the game harder
+  automatically. This removes the need for hand-tuned difficulty tiers early on.
+
+## Health and run end
+- 3 hits allowed. Each hit is clearly signalled (screen shake, red flash,
+  visible damage on the car, damage counter decrements).
+- On the 3rd hit the car explodes, the run ends, and a results screen shows
+  score and best score with "Tap to retry".
+- Explosion must be stylised (geometric burst/particles), not graphic or
+  realistic. This game is for a general 13+ audience, never "made for kids".
+
+## Telegraphing (critical for fairness)
+- The player MUST see a curve coming with enough time to react.
+- Fixed lookahead distance in world units — see the responsive fairness rule.
+- Roadside warning chevrons appear before a curve begins, pointing in the
+  curve's direction, like real road signage. This is both a fairness
+  mechanism and part of the art direction.
+- A player should never feel a crash was unavoidable or unfair.
+
+## Onboarding (no tutorial screens)
+- The first curve is gentle and the starting speed is low.
+- An on-screen prompt ("HOLD <-") appears on the first curve and fades
+  permanently once the player completes their first successful drift.
+- Teach by doing. Never show a wall of instructions.
+
+## Difficulty progression
+- Curve angles get sharper and curves come more frequently with distance.
+- Straight sections between curves start generous and gradually shorten.
+- Combined with the speed system, difficulty rises on two axes at once.
+
+## Art direction (all drawn in code — no image files)
+- Synthwave night: near-black asphalt, magenta and cyan neon lane markings,
+  a purple-to-orange gradient glow on the horizon.
+- Glow/trail behind the car; glow intensity scales with speed.
+- Car and all objects built from simple geometric shapes and gradients.
+- IMPORTANT: no downloaded 3D models, sprites, textures, fonts, or audio.
+  Every asset must be generated procedurally in code. We must own all rights
+  to everything in this game.
+
+## Game feel / juice checklist
+- Tire smoke particles while drifting
+- Skid marks that persist on the road behind the car
+- Screen shake on impact (proportional to severity)
+- Brief hit-stop (a few frames of freeze) on a PERFECT curve
+- Speed lines at high velocity
+- Subtle camera lean toward the drift direction
+- Score popup text on a scoring curve
+
+## Accessibility
+- Never convey critical information by colour alone — damage must show as a
+  number or bar, not just a colour change.
+- High contrast between road surface and road edges.
+- Readable text size on small phone screens.
+- NO rapid full-screen flashing or strobing at any point, including the
+  explosion. Photosensitivity safety is non-negotiable.
+
+## Responsive fairness (design rule, not just a technical one)
+- Define a fixed logical playfield and scale it to the viewport.
+- The visible lookahead distance must be IDENTICAL on every aspect ratio.
+  A player on a tall phone must not see more road ahead than a player on a
+  wide desktop — that would be a gameplay advantage.
+- Letterbox or pillarbox as needed rather than revealing more or less road.
+- Must remain playable from 9:32 (very tall) through 32:9 (very wide), and
+  must keep game state intact when the window is resized mid-run.
+
+## Tech rules
+- Plain HTML5 Canvas + vanilla JavaScript. No build step, no npm packages, no
+  frameworks unless we explicitly agree to add one.
+- No external libraries, fonts, images, or audio loaded from the internet.
+- index.html at the repo root. Relative paths only. Single Page Application.
+- Suggested structure: index.html, style.css, src/ (game.js, input.js,
+  road.js, car.js, fx.js), CLAUDE.md, README.md
+- Keep the Playables SDK integration isolated in its own file when we add it,
+  so the game still runs normally outside YouTube.
+
+## YouTube Playables rules (we build toward these from day one)
+- The SDK script must load before any game code once integrated (not yet).
+- No in-game exit/quit button, no external links, no share prompts, no
+  login-like screens, no collecting any personal information.
+- No external network calls of any kind — no analytics, no CDNs.
+- Must support touch AND mouse AND keyboard.
+- Must be interactive within 5 seconds; keep the total download small.
+- Content suitable for a general 13+ audience.
+
+## Deferred to later phases (do not build yet)
+Audio, the countdown timer system, Playables SDK integration, ads, and the
+eventual upgrade to a 3D first-person-view version.
+
+## How to talk to us
+Before editing: short plan plus which files you'll touch, then wait for us to
+confirm. After editing: what changed, why, and exactly how to test it.
