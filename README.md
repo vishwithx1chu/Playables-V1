@@ -27,7 +27,7 @@ Let go to straighten out. That is every input the game has.
 
 ---
 
-## Current state: Milestone 1.1
+## Current state: Milestone 1.2
 
 Milestone 1 answers one question and nothing else: **does the drift feel
 good?** There is deliberately no score, no grading, no damage, no timer, no
@@ -35,21 +35,25 @@ menu and no results screen — those are later milestones.
 
 What is in:
 
-- Chase camera sitting behind and above the car, so the road recedes to a
-  horizon and you can read the depth. The car still sits in the lower third.
-- Curves both ways with straights between them, repeating forever, plus a
-  long **hairpin** once a lap that swings the road one and a half times its
-  own width — and swaps direction every lap so it never becomes routine
-- Amber warning chevrons ~1.7 seconds ahead of every curve; the hairpin gets
-  doubled red-orange chevrons much earlier
-- The full drift mechanic, with weight and momentum
+- A real **circuit**, not a scrolling strip. The track is a line that genuinely
+  turns through the world, so a corner is a corner: it has a radius, and you
+  come out of it pointing somewhere new.
+- **Two full 180-degree hairpins per lap**, turning opposite ways, driven as
+  one continuous held drift all the way round.
+- **Four back-to-back esses** with no straight between them: three direction
+  changes in a row, flicking the car from one side to the other.
+- 85% of the lap is spent in a corner. The longest straight is 520 units.
+- The lap returns to exactly the heading it started on, so it drives like a
+  circuit rather than a spiral.
+- Chase camera behind and above the car, turning to follow it, with a
+  world-anchored ground grid and a sun that stays put in the world — which is
+  what lets you feel that a hairpin really has turned you around.
+- Chevrons ahead of every corner; doubled red-orange ones for the hairpins.
 - Edge contact detected, with screen shake, an edge flash and a word telling
-  you which mistake you made — but no health lost and the run never ends
-- Tire smoke while drifting, and skid marks that stay on the road
-- Constant speed
-- Same amount of road visible on every screen shape, from 9:32 to 32:9
-
----
+  you which mistake you made — but no health lost and the run never ends.
+- Tire smoke while drifting, and skid marks that stay on the tarmac.
+- Constant speed.
+- Same amount of road visible on every screen shape, from 9:32 to 32:9.
 
 ## What to look for when you test
 
@@ -62,39 +66,84 @@ The point of this milestone is feel, so drive it and answer these:
 3. **Do you get enough warning?** A crash should always feel like your fault.
 4. **Are the two mistakes clear?** Run wide and you hit the outer edge
    (amber, "RAN WIDE"); cut in and you hit the inner edge (violet, "CUT IN").
-5. **The hairpin.** Once a lap, doubled red-orange chevrons warn you well in
-   advance. It needs a near-maximum drift held for about two seconds. It
-   should feel like the hardest thing on the track but never impossible.
-6. **Does it work on your phone?** One thumb, either side.
+5. **The hairpins.** Two a lap, opposite ways, signed with doubled red-orange
+   chevrons. Hold the whole way round — do not let go in the middle.
+6. **The esses.** Four corners with nothing between them. This is where the
+   0.42-second flick time bites; if they feel impossible rather than hard,
+   that is the number to change.
+7. **Look further ahead than feels natural.** Testing showed the same driver
+   goes from 33 contacts to 2 purely by looking further up the road. If that
+   does not come across while playing, the telegraphing needs work.
+8. **Does it work on your phone?** One thumb, either side.
 
 ---
 
-## Changing how the drift feels
+## How the drift works
 
-The four numbers that decide the whole feel are at the top of
-[`src/car.js`](src/car.js), on their own, with comments:
+Holding a side builds a **slip angle** — how far the car's body is slewed away
+from the direction it is travelling. That part has not changed, and neither has
+the weight of it.
+
+What the slip angle *does* changed in Milestone 1.2. It used to shove the car
+sideways. It now **rotates** the car. So:
+
+- Hold, and the car turns harder and harder up to its limit — it carves a
+  circle. Hold all the way through a hairpin and you come out facing backwards.
+- Let go, and the slip angle bleeds away over about three quarters of a second,
+  so the car keeps turning for a moment before it runs straight. That lag is
+  the weight you feel, and it is why you have to release *before* the corner
+  ends rather than at the end of it.
+- Hold the other way and you have to unwind the old drift before the new one
+  builds. That is what makes the esses hard.
+
+## Changing how it feels
+
+Top of [`src/car.js`](src/car.js):
 
 ```js
 var MAX_DRIFT_DEG = 38;    // how far round the car slews
-var BUILD_TAU     = 0.30;  // seconds to lean into a drift
-var DECAY_TAU     = 0.55;  // seconds to straighten after you let go
-var REVERSE_TAU   = 0.34;  // seconds to flick from one drift to the other
+var TURN_GAIN     = 1.55;  // how hard that slew rotates the car
+var BUILD_TAU     = 0.34;  // seconds to lean into a drift
+var DECAY_TAU     = 0.72;  // seconds to straighten after you let go
+var REVERSE_TAU   = 0.42;  // seconds to flick from one drift to the other
 ```
 
-`DECAY_TAU` is the momentum dial. Raise it and the car feels heavier and
-slides longer; lower it and the car snaps back like a switch.
+`DECAY_TAU` is the weight dial. `REVERSE_TAU` is the chicane dial — raise it
+and back-to-back corners get much harder. `TURN_GAIN` is the difficulty dial
+for the whole track at once: it sets the tightest circle the car can possibly
+carve, which is
 
-Track shape is the `PATTERN` list near the top of
-[`src/road.js`](src/road.js). Each curve's `amp` is its peak sideways slope,
-and the drift angle needed to hold the centre through it is `asin(amp)` — so
-`amp` must stay comfortably under `sin(MAX_DRIFT_DEG)` or the corner becomes
-undriveable. The hairpin is the one that sits closest to that ceiling.
+```
+tightest circle = speed / (TURN_GAIN * sin(MAX_DRIFT_DEG))
+```
 
-The camera is the block marked `THE CAMERA` at the top of
-[`src/road.js`](src/road.js). Lower `CAM_BACK` for a more dramatic, lower
-angle; raise it to flatten back toward the old top-down view.
+At the current numbers that is about **503 units**. Every corner on the track
+is checked against it.
 
----
+## Changing the circuit
+
+The lap is the `LAP` list near the top of [`src/road.js`](src/road.js), written
+the way a track map reads — a straight of so many units, then a corner of so
+many degrees at such a radius.
+
+**The one rule: no corner's radius may go near 503.** A corner at exactly that
+radius needs 100% of the car's turning for its whole length, which leaves
+nothing to correct a mistake with and makes it feel unfair rather than hard.
+The tightest corner on the track is 600, which asks for about 84%. There is a
+test that fails if any corner ever breaks this rule.
+
+Two more things worth knowing:
+
+- Corner **radius** is the difficulty, not the angle. A 180 at radius 900 is
+  easy; a 60-degree corner at radius 600 is hard.
+- The lap's left and right degrees are made to cancel out, so the track comes
+  back to the heading it started on.
+
+## Camera
+
+The block marked `THE CAMERA` at the top of [`src/road.js`](src/road.js).
+Lower `CAM_BACK` for a closer, more dramatic angle; raise it to pull back
+toward the old top-down view.
 
 ## Files
 
@@ -110,18 +159,19 @@ src/game.js     the loop, and the responsive fairness rule
 
 ---
 
-## A limit worth knowing about
+## Why the road model was replaced
 
-The track is stored as *how far the road centre has slid sideways at a given
-distance* — a sideways slide, not a rotation. Your only control is a sideways
-slide rate, and it caps at `sin(MAX_DRIFT_DEG)`.
+The old track was stored as *how far the road centre had slid sideways* — a
+sideways slide, not a rotation. That model could not represent a U-turn at all:
+it would have needed the centre to slide sideways infinitely fast.
 
-That means a **literal 180-degree U-turn cannot exist in this model**: it
-would need the road centre to slide sideways infinitely fast. The hairpin is
-the sharpest corner the model can express and still be driveable. A real
-U-turn would need the road stored as a heading that curves through world
-space, and a camera that rotates with the car — a different game to steer,
-and a decision to take deliberately rather than by accident.
+Milestone 1.2 replaced it. The centreline is now integrated from curvature in
+world space, so the road genuinely turns, and the car has a heading in that
+same world. A 180 is now just a corner with 180 degrees in it.
+
+The cost of that change was the control model: holding used to mean "slide
+sideways", and now means "rotate". Everything about the weight and timing of a
+drift was kept, but the thing being steered is different underneath.
 
 ## Two rules the code is built around
 

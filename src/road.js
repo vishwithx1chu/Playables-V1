@@ -1,140 +1,174 @@
-/* road.js — the track, and the camera that looks at it.
-   The track itself is still one number in, one number out: give it a distance
-   and it says how far the road centre has slid sideways there. What changed in
-   Milestone 1.1 is the camera: instead of looking straight down, it now sits
-   behind and above the car, so the road recedes toward a horizon. */
+/* road.js — a real circuit in world space, and the camera that follows it.
+   The track is no longer a strip that slides sideways: it is a line that
+   genuinely turns, built by integrating curvature along its length. That is
+   what makes a 180 degree hairpin possible at all. */
 
 (function (DR) {
   'use strict';
 
-  var STEP = 8;              // world units between stored centre samples
   var HALF_W = 170;          // road is 340 units wide
-  var CHEVRON_LEAD = 800;    // ~1.7 seconds of warning before a curve
-  var HAIRPIN_LEAD = 1150;   // the big one gets warned about much earlier
+  var SAMPLE = 8;            // world units between stored centreline points
 
   /* ---------------------------- THE CAMERA ----------------------------
-     It sits CAM_BACK behind the car and high enough that the car lands at
-     CAR_Y on screen. Everything further away shrinks toward HORIZON_Y,
-     which is what gives the picture depth. Drop CAM_BACK for a more
-     dramatic, lower camera; raise it to flatten back toward top-down. */
+     Sits CAM_BACK behind the car, turned to face the way the car is going,
+     high enough that the car lands on CAR_Y. Lower CAM_BACK for a more
+     dramatic angle, raise it to flatten back toward top-down. */
   var HORIZON_Y = 240;
-  var CAR_Y     = 930;       // car still sits in the lower third (930/1280)
+  var CAR_Y     = 930;
   var CAM_BACK  = 520;
-  var FOCAL     = 489;       // sets how wide the road reads at the car
-  var LOOKAHEAD = 4800;      // world units of road drawn ahead of the car
-  var K         = (CAR_Y - HORIZON_Y) * CAM_BACK;   // camera height x focal
-  var SC_CAR    = FOCAL / CAM_BACK;                 // projection scale at the car
+  var FOCAL     = 489;
+  var NEAR      = 70;        // nothing closer than this can be drawn
+  var LOOKAHEAD = 2600;      // world units of road drawn ahead of the car
+  var K         = (CAR_Y - HORIZON_Y) * CAM_BACK;
+  var SC_CAR    = FOCAL / CAM_BACK;
   /* -------------------------------------------------------------------- */
 
-  // Peak sideways slope of a curve. The drift angle needed to hold the centre
-  // is asin(amp), so 0.36 asks for ~21 degrees and 0.56 asks for ~34 — against
-  // a 38 degree maximum. The hairpin is deliberately near the limit.
-  var PATTERN = [
-    { kind: 'straight', len: 720 },
-    { kind: 'curve', len: 900, dir:  1, amp: 0.36 },
-    { kind: 'straight', len: 680 },
-    { kind: 'curve', len: 900, dir: -1, amp: 0.38 },
-    { kind: 'straight', len: 660 },
-    { kind: 'curve', len: 960, dir:  1, amp: 0.50 },
-    { kind: 'straight', len: 640 },
-    { kind: 'curve', len: 960, dir: -1, amp: 0.52 },
-    { kind: 'straight', len: 880 },
-    // The hairpin: holds peak slope through the middle instead of easing
-    // straight back out, so it is a long committed slide, not a flick.
-    { kind: 'curve', len: 1250, dir: 1, amp: 0.56, hairpin: true },
-    { kind: 'straight', len: 940 }
+  var CHEVRON_LEAD = 900;
+  var HAIRPIN_LEAD = 1300;
+
+  /* ------------------------------ THE LAP ------------------------------
+     Radius is what makes a corner hard: the car's tightest possible circle
+     is speed / (TURN_GAIN * sin(MAX_DRIFT)), about 500 units. A 620 radius
+     corner therefore needs ~81% of everything the car has, held the whole
+     way round. Nothing here is below 620.
+
+     Total heading change over one lap is exactly zero — every left is paid
+     back by a right — so it drives like a circuit rather than a spiral. */
+  var LAP = [
+    { kind: 'str',  len: 520 },
+    { kind: 'turn', dir:  1, r: 820, deg:  95 },   // opening sweeper
+    { kind: 'str',  len: 140 },
+    { kind: 'turn', dir: -1, r: 620, deg:  55 },   // chicane: nothing between
+    { kind: 'turn', dir:  1, r: 620, deg:  55 },
+    { kind: 'str',  len: 160 },
+    { kind: 'turn', dir: -1, r: 600, deg: 180, hairpin: true },   // tightest corner
+    { kind: 'str',  len: 180 },
+    { kind: 'turn', dir:  1, r: 700, deg:  70 },
+    { kind: 'str',  len: 120 },
+    { kind: 'turn', dir:  1, r: 640, deg:  60 },   // four esses back to back:
+    { kind: 'turn', dir: -1, r: 640, deg:  60 },   // three full reversals with
+    { kind: 'turn', dir:  1, r: 640, deg:  60 },   // no rest anywhere in them
+    { kind: 'turn', dir: -1, r: 640, deg:  60 },
+    { kind: 'str',  len: 200 },
+    { kind: 'turn', dir:  1, r: 900, deg: 100 },   // long committed right
+    { kind: 'str',  len: 140 },
+    { kind: 'turn', dir: -1, r: 640, deg: 150 },   // almost a hairpin
+    { kind: 'str',  len: 160 },
+    { kind: 'turn', dir:  1, r: 620, deg: 180, hairpin: true },   // hairpin the other way
+    { kind: 'str',  len: 220 },
+    { kind: 'turn', dir: -1, r: 760, deg: 115 },
+    { kind: 'str',  len: 300 }
   ];
 
-  var INTRO_LEN = 1500;
+  var INTRO_LEN = 1100;
 
-  var samples, baseS, segs, genS, genX, genIndex, genSegS, inIntro, lap;
+  // Centreline, sampled every SAMPLE units. Uniform spacing means arc length
+  // converts to an array index by division — no searching.
+  var cx, cy, ch, ck, baseS;
+  var segs, genX, genY, genH, genS, genIndex, genT, inIntro, lapNo;
 
-  // ---------------------------------------------------------------- generation
+  function segLength(seg) {
+    if (seg.kind === 'str') return seg.len;
+    var ang = seg.deg * Math.PI / 180;
+    var arc = ang * seg.r;
+    var T = Math.min(150, seg.r * 0.5, arc * 0.5);
+    return arc + T;
+  }
+
+  // Curvature ramps in and out so no corner arrives as a step change — the
+  // same easing a real road uses, and the reason a corner can be caught.
+  function segCurvature(seg, t) {
+    if (seg.kind === 'str') return 0;
+    var ang = seg.deg * Math.PI / 180;
+    var arc = ang * seg.r;
+    var T = Math.min(150, seg.r * 0.5, arc * 0.5);
+    var hold = arc - T;
+    var total = arc + T;
+    var f;
+    if (t < T) f = 0.5 - 0.5 * Math.cos(Math.PI * (t / T));
+    else if (t < T + hold) f = 1;
+    else f = 0.5 - 0.5 * Math.cos(Math.PI * ((total - t) / T));
+    if (f < 0) f = 0;
+    return seg.dir * f / seg.r;
+  }
 
   function currentSeg() {
-    return inIntro ? { kind: 'straight', len: INTRO_LEN } : PATTERN[genIndex];
+    return inIntro ? { kind: 'str', len: INTRO_LEN } : LAP[genIndex];
   }
 
   function advanceSeg() {
     if (inIntro) { inIntro = false; genIndex = 0; }
     else {
-      genIndex = genIndex + 1;
-      if (genIndex >= PATTERN.length) { genIndex = 0; lap++; }
+      genIndex++;
+      if (genIndex >= LAP.length) { genIndex = 0; lapNo++; }
     }
-    genSegS = 0;
+    genT = 0;
     var seg = currentSeg();
-    // The hairpin swaps direction every lap, so it never becomes muscle memory.
-    var dir = seg.dir || 0;
-    if (seg.hairpin && (lap % 2 === 1)) dir = -dir;
     segs.push({
-      s0: genS, s1: genS + seg.len,
-      kind: seg.kind, dir: dir, amp: seg.amp || 0,
+      s0: genS, s1: genS + segLength(seg),
+      turn: seg.kind === 'turn',
+      dir: seg.dir || 0,
+      r: seg.r || 0,
       hairpin: !!seg.hairpin
     });
-  }
-
-  function slopeAt(seg, rec, t) {
-    if (seg.kind !== 'curve') return 0;
-    var f;
-    if (seg.hairpin) {
-      // Ramp in, HOLD, ramp out. The exit ramp is the generous one: a heavy
-      // car needs room to unwind, and every hairpin crash in testing was a
-      // driver still drifting after the road had already straightened.
-      var ramp = 0.30;
-      if (t < ramp) f = 0.5 - 0.5 * Math.cos(Math.PI * (t / ramp));
-      else if (t > 1 - ramp) f = 0.5 - 0.5 * Math.cos(Math.PI * ((1 - t) / ramp));
-      else f = 1;
-    } else {
-      var b = Math.sin(Math.PI * t);
-      f = b * b;
-    }
-    return seg.amp * rec.dir * f;
   }
 
   function ensure(sMax) {
     while (genS < sMax) {
       var seg = currentSeg();
-      if (genSegS >= seg.len) { advanceSeg(); seg = currentSeg(); }
-      var rec = segs[segs.length - 1];
-      genX += slopeAt(seg, rec, genSegS / seg.len) * STEP;
-      genS += STEP;
-      genSegS += STEP;
-      samples.push(genX);
+      if (genT >= segLength(seg)) { advanceSeg(); seg = currentSeg(); }
+
+      // Midpoint step: turn half, move, turn the rest. Keeps tight corners
+      // the right radius instead of slowly bulging outward.
+      var k = segCurvature(seg, genT + SAMPLE * 0.5);
+      genH += k * SAMPLE * 0.5;
+      genX += Math.sin(genH) * SAMPLE;
+      genY += Math.cos(genH) * SAMPLE;
+      genH += k * SAMPLE * 0.5;
+
+      genS += SAMPLE;
+      genT += SAMPLE;
+      cx.push(genX); cy.push(genY); ch.push(genH); ck.push(k);
     }
   }
 
   function reset() {
-    samples = [0];
+    cx = [0]; cy = [0]; ch = [0]; ck = [0];
     baseS = 0;
-    segs = [{ s0: 0, s1: INTRO_LEN, kind: 'straight', dir: 0, amp: 0, hairpin: false }];
-    genS = 0;
-    genX = 0;
-    genIndex = -1;
-    genSegS = 0;
-    inIntro = true;
-    lap = 0;
-    ensure(6000);
+    segs = [{ s0: 0, s1: INTRO_LEN, turn: false, dir: 0, r: 0, hairpin: false }];
+    genX = 0; genY = 0; genH = 0; genS = 0;
+    genIndex = -1; genT = 0; inIntro = true; lapNo = 0;
+    ensure(9000);
   }
 
   function trim(sMin) {
-    var drop = Math.floor((sMin - baseS) / STEP);
-    if (drop > 1500) {
-      samples.splice(0, drop);
-      baseS += drop * STEP;
+    var drop = Math.floor((sMin - baseS) / SAMPLE);
+    if (drop > 2000) {
+      cx.splice(0, drop); cy.splice(0, drop); ch.splice(0, drop); ck.splice(0, drop);
+      baseS += drop * SAMPLE;
     }
     while (segs.length > 2 && segs[0].s1 < sMin) segs.shift();
   }
 
   // ------------------------------------------------------------------ queries
 
-  function centerAt(s) {
-    ensure(s + STEP * 3);
-    var f = (s - baseS) / STEP;
-    if (f <= 0) return samples[0];
-    var i = Math.floor(f);
-    if (i >= samples.length - 1) return samples[samples.length - 1];
-    var a = samples[i];
-    return a + (samples[i + 1] - a) * (f - i);
+  function indexAt(s) {
+    var i = Math.round((s - baseS) / SAMPLE);
+    if (i < 0) i = 0;
+    if (i > cx.length - 1) i = cx.length - 1;
+    return i;
+  }
+
+  function lengthGenerated() { return baseS + (cx.length - 1) * SAMPLE; }
+
+  // Where the centreline is, and which way it points, at an arc length.
+  var _c = { x: 0, y: 0, h: 0, k: 0 };
+  function centreAt(s, out) {
+    out = out || _c;
+    ensure(s + SAMPLE * 4);
+    var i = indexAt(s);
+    out.x = cx[i]; out.y = cy[i]; out.h = ch[i]; out.k = ck[i];
+    return out;
   }
 
   function segAt(s) {
@@ -148,44 +182,70 @@
     return null;
   }
 
-  function dirAt(s) {
-    var g = segAt(s);
-    return (g && g.kind === 'curve') ? g.dir : 0;
-  }
+  function dirAt(s) { var g = segAt(s); return (g && g.turn) ? g.dir : 0; }
+  function isHairpin(s) { var g = segAt(s); return !!(g && g.hairpin); }
+  function radiusAt(s) { var g = segAt(s); return (g && g.turn) ? g.r : 0; }
 
-  function isHairpin(s) {
-    var g = segAt(s);
-    return !!(g && g.hairpin);
+  // Where is the car relative to the road? Walks out from a hint index, so
+  // it costs a handful of comparisons however long the track gets.
+  var _loc = { s: 0, dev: 0, h: 0, k: 0, i: 0, px: 0, py: 0, nx: 0, ny: 0 };
+  function locate(wx, wy, hintS, out) {
+    out = out || _loc;
+    ensure(hintS + 600);
+    var i0 = indexAt(hintS);
+    var best = i0, bestD = Infinity, i, dx, dy, d;
+    var lo = Math.max(0, i0 - 40), hi = Math.min(cx.length - 1, i0 + 40);
+    for (i = lo; i <= hi; i++) {
+      dx = wx - cx[i]; dy = wy - cy[i];
+      d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    // If the answer sits on the edge of the window the hint was stale, so
+    // widen the search once rather than returning something wrong.
+    if (best === lo || best === hi) {
+      lo = Math.max(0, i0 - 600); hi = Math.min(cx.length - 1, i0 + 600);
+      for (i = lo; i <= hi; i++) {
+        dx = wx - cx[i]; dy = wy - cy[i];
+        d = dx * dx + dy * dy;
+        if (d < bestD) { bestD = d; best = i; }
+      }
+    }
+    var h = ch[best];
+    var ex = wx - cx[best], ey = wy - cy[best];
+    var sn = Math.sin(h), cs = Math.cos(h);
+    out.i = best;
+    out.h = h;
+    out.k = ck[best];
+    out.px = cx[best]; out.py = cy[best];
+    out.nx = cs; out.ny = -sn;            // unit normal, pointing right
+    out.dev = ex * cs - ey * sn;          // + is right of the centreline
+    out.s = baseS + best * SAMPLE + (ex * sn + ey * cs);
+    return out;
   }
 
   // --------------------------------------------------------------- projection
 
-  // Where a point on the ground lands on screen, and how much it has shrunk.
-  // Written into a shared object so the particle loops allocate nothing.
-  var _p = { x: 0, y: 0, sc: 0 };
-  function project(s, worldX, view, out) {
+  var _p = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+  function project(wx, wy, view, out) {
     out = out || _p;
-    var dz = (s - view.carS) + CAM_BACK;
-    if (dz < 10) dz = 10;
-    var sc = FOCAL / dz;
+    var dx = wx - view.camX, dy = wy - view.camY;
+    var rz = dx * view.camSin + dy * view.camCos;
+    out.rz = rz;
+    if (rz < NEAR) { out.vis = false; return out; }
+    var sc = FOCAL / rz;
     out.sc = sc;
-    out.x = view.W * 0.5 + (worldX - view.camX) * sc;
-    out.y = HORIZON_Y + K / dz;
+    out.x = view.W * 0.5 + (dx * view.camCos - dy * view.camSin) * sc;
+    out.y = HORIZON_Y + K / rz;
+    out.vis = true;
     return out;
-  }
-
-  // Nearest bit of road the camera can actually see, just off the bottom edge.
-  function nearS(carS, H) {
-    return carS - CAM_BACK + K / (H + 60 - HORIZON_Y);
   }
 
   // ------------------------------------------------------------------ drawing
 
-  var skyGrad = null, groundGrad = null, asphaltGrad = null, fogGrad = null;
+  var skyGrad = null, groundGrad = null, fogGrad = null;
 
   function drawBackground(ctx, view) {
     var W = view.W, H = view.H;
-
     if (!skyGrad) {
       skyGrad = ctx.createLinearGradient(0, -60, 0, HORIZON_Y);
       skyGrad.addColorStop(0.00, '#140a26');
@@ -210,14 +270,19 @@
     drawGrid(ctx, view);
   }
 
-  // The sun sits on the vanishing point and drifts a touch as you steer, so it
-  // reads as something out there rather than something stuck to the glass.
+  // The sun swings across the sky as you turn, which is most of what tells
+  // you a 180 has actually turned you around.
   function drawSun(ctx, view) {
     var W = view.W;
-    var cx = W * 0.5 - view.camX * 0.02;
+    var sunWorld = -0.55;                       // fixed bearing in the world
+    var rel = sunWorld - view.camAngle;
+    while (rel > Math.PI) rel -= Math.PI * 2;
+    while (rel < -Math.PI) rel += Math.PI * 2;
+    if (Math.abs(rel) > 1.5) return;            // behind you
+    var cxp = W * 0.5 + Math.tan(rel) * FOCAL;
     var r = 190;
 
-    var halo = ctx.createRadialGradient(cx, HORIZON_Y, r * 0.3, cx, HORIZON_Y, r * 2.4);
+    var halo = ctx.createRadialGradient(cxp, HORIZON_Y, r * 0.3, cxp, HORIZON_Y, r * 2.4);
     halo.addColorStop(0.00, 'rgba(255,138,60,0.42)');
     halo.addColorStop(0.40, 'rgba(224,70,140,0.18)');
     halo.addColorStop(1.00, 'rgba(0,0,0,0)');
@@ -226,193 +291,199 @@
 
     ctx.save();
     ctx.beginPath();
-    ctx.rect(-60, -60, W + 120, HORIZON_Y + 60);   // sun never spills onto the road
+    ctx.rect(-60, -60, W + 120, HORIZON_Y + 60);
     ctx.clip();
-
     var disc = ctx.createLinearGradient(0, HORIZON_Y - r, 0, HORIZON_Y + 10);
     disc.addColorStop(0.00, '#ffd76a');
     disc.addColorStop(0.45, '#ff8a3d');
     disc.addColorStop(1.00, '#ff2f8e');
     ctx.beginPath();
-    ctx.arc(cx, HORIZON_Y, r, 0, Math.PI * 2);
+    ctx.arc(cxp, HORIZON_Y, r, 0, Math.PI * 2);
     ctx.fillStyle = disc;
     ctx.fill();
-
-    // Slit bands: wider apart towards the bottom, the way the genre draws it.
     ctx.fillStyle = 'rgba(20,10,38,0.85)';
     for (var i = 0; i < 7; i++) {
-      var yy = HORIZON_Y - i * i * 3.4 - 8;
-      var hh = 3 + i * 1.5;
-      ctx.fillRect(cx - r, yy, r * 2, hh);
+      ctx.fillRect(cxp - r, HORIZON_Y - i * i * 3.4 - 8, r * 2, 3 + i * 1.5);
     }
     ctx.restore();
   }
 
-  // Perspective grid: every line of constant world-x runs to the vanishing
-  // point, which is what sells the depth outside the road.
-  function drawGrid(ctx, view) {
-    var W = view.W, H = view.H;
-    var vpX = W * 0.5, vpY = HORIZON_Y;
-    var i, p;
+  // A straight line on the ground stays straight on screen under this
+  // projection, so each grid line costs two projections instead of twenty.
+  // Lines crossing behind the camera get clipped to the near plane.
+  var _sa = { x: 0, y: 0 }, _sb = { x: 0, y: 0 };
+  function projectSegment(ax, ay, bx, by, view) {
+    var adx = ax - view.camX, ady = ay - view.camY;
+    var bdx = bx - view.camX, bdy = by - view.camY;
+    var arz = adx * view.camSin + ady * view.camCos;
+    var brz = bdx * view.camSin + bdy * view.camCos;
+    if (arz < NEAR && brz < NEAR) return false;
+    if (arz < NEAR) {
+      var t = (NEAR - arz) / (brz - arz);
+      adx += (bdx - adx) * t; ady += (bdy - ady) * t; arz = NEAR;
+    } else if (brz < NEAR) {
+      var u = (NEAR - brz) / (arz - brz);
+      bdx += (adx - bdx) * u; bdy += (ady - bdy) * u; brz = NEAR;
+    }
+    var sa = FOCAL / arz, sb = FOCAL / brz;
+    _sa.x = view.W * 0.5 + (adx * view.camCos - ady * view.camSin) * sa;
+    _sa.y = HORIZON_Y + K / arz;
+    _sb.x = view.W * 0.5 + (bdx * view.camCos - bdy * view.camSin) * sb;
+    _sb.y = HORIZON_Y + K / brz;
+    return true;
+  }
 
-    // Lines across, at fixed distances, bunching up as they recede.
-    ctx.strokeStyle = 'rgba(214,86,214,0.10)';
+  // World-anchored, so it slides and swings underneath you through a corner —
+  // which is most of what tells you the car has actually turned.
+  function drawGrid(ctx, view) {
+    var W = view.W, G = 240, R = 3400;
+    var gx0 = Math.floor((view.camX - R) / G) * G;
+    var gy0 = Math.floor((view.camY - R) / G) * G;
+    var g;
+
+    ctx.strokeStyle = 'rgba(158,116,240,0.14)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    var stepS = 200;
-    var s0 = Math.ceil((view.carS - CAM_BACK) / stepS) * stepS;
-    for (var s = s0; s < view.carS + LOOKAHEAD; s += stepS) {
-      p = project(s, view.camX, view);
-      if (p.y > H + 60 || p.y < HORIZON_Y + 2) continue;
-      ctx.moveTo(-60, p.y);
-      ctx.lineTo(W + 60, p.y);
+    for (g = gx0; g <= view.camX + R; g += G) {
+      if (!projectSegment(g, view.camY - R, g, view.camY + R, view)) continue;
+      if ((_sa.x < -80 && _sb.x < -80) || (_sa.x > W + 80 && _sb.x > W + 80)) continue;
+      ctx.moveTo(_sa.x, _sa.y); ctx.lineTo(_sb.x, _sb.y);
     }
-    ctx.stroke();
-
-    // Lines running away from you, converging on the vanishing point.
-    ctx.strokeStyle = 'rgba(90,214,255,0.09)';
-    ctx.beginPath();
-    var stepX = 220;
-    var nS = nearS(view.carS, H);
-    var near = project(nS, view.camX, view);
-    var spanNear = (W * 0.5 + 260) / near.sc;
-    var wx0 = Math.floor((view.camX - spanNear) / stepX) * stepX;
-    for (var wx = wx0; wx <= view.camX + spanNear; wx += stepX) {
-      var nx = W * 0.5 + (wx - view.camX) * near.sc;
-      ctx.moveTo(nx, H + 60);
-      ctx.lineTo(vpX, vpY);
+    for (g = gy0; g <= view.camY + R; g += G) {
+      if (!projectSegment(view.camX - R, g, view.camX + R, g, view)) continue;
+      if ((_sa.x < -80 && _sb.x < -80) || (_sa.x > W + 80 && _sb.x > W + 80)) continue;
+      ctx.moveTo(_sa.x, _sa.y); ctx.lineTo(_sb.x, _sb.y);
     }
     ctx.stroke();
   }
 
-  // Slices sampled evenly down the SCREEN rather than evenly along the road,
-  // so the far distance does not eat all the work for a few pixels.
+  // Walk the centreline and project both edges. Steps get longer with
+  // distance, because far-off road is worth fewer pixels.
+  // The ribbon is rebuilt every frame, so its points are pooled and reused.
+  // Allocating a hundred fresh objects per frame is what turns a smooth 60
+  // into periodic garbage-collection stutter.
+  var ribPool = [];
+  ribPool.count = 0;
+
   function buildRibbon(view) {
-    var pts = [];
-    var farY = HORIZON_Y + K / (CAM_BACK + LOOKAHEAD);
-    var sy = view.H + 60;
-    while (sy > farY) {
-      var dz = K / (sy - HORIZON_Y);
-      var s = view.carS - CAM_BACK + dz;
-      var sc = FOCAL / dz;
-      var cx = centerAt(s);
-      pts.push({
-        s: s, sc: sc, y: sy,
-        x: view.W * 0.5 + (cx - view.camX) * sc,
-        hw: HALF_W * sc
-      });
-      sy -= 9;
+    var out = ribPool, n = 0;
+    var sStart = view.carS - (CAM_BACK - NEAR) - 40;
+    var sEnd = view.carS + LOOKAHEAD;
+    ensure(sEnd + 200);
+
+    var pL = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+    var pR = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+    var pC = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+
+    var s = sStart;
+    while (s <= sEnd) {
+      var i = indexAt(s);
+      var h = ch[i], sn = Math.sin(h), cs = Math.cos(h);
+      var nx = cs, ny = -sn;                       // unit normal, pointing right
+      project(cx[i] - nx * HALF_W, cy[i] - ny * HALF_W, view, pL);
+      project(cx[i] + nx * HALF_W, cy[i] + ny * HALF_W, view, pR);
+      project(cx[i], cy[i], view, pC);
+      var e = out[n];
+      if (!e) { e = out[n] = { s: 0, ok: false, lx: 0, ly: 0, rx: 0, ry: 0, sc: 0, rz: 0 }; }
+      e.s = s; e.ok = pL.vis && pR.vis;
+      e.lx = pL.x; e.ly = pL.y; e.rx = pR.x; e.ry = pR.y;
+      e.sc = pC.sc; e.rz = pC.rz;
+      n++;
+      var ahead = s - view.carS;
+      s += ahead < 400 ? 10 : (ahead < 1100 ? 26 : 52);
     }
-    return pts;
+    out.count = n;
+    return out;
   }
 
-  // A band running along one edge of the road, thinning with distance.
-  function edgeStrip(ctx, pts, sign, wCar) {
-    var i, p, w, x;
-    ctx.beginPath();
-    for (i = 0; i < pts.length; i++) {
-      p = pts[i];
-      w = Math.max(0.7, wCar * p.sc / SC_CAR);
-      x = p.x + sign * p.hw;
-      if (i === 0) ctx.moveTo(x - w * 0.5, p.y);
-      else ctx.lineTo(x - w * 0.5, p.y);
+  // Each piece of road is its own closed shape in one path, so a corner that
+  // folds back over itself just overlaps instead of filling in its own middle.
+  function quads(ctx, rib, fromL, fromR, toL, toR) {
+    for (var i = 0; i < rib.count - 1; i++) {
+      var a = rib[i], b = rib[i + 1];
+      if (!a.ok || !b.ok) continue;
+      var ax1 = a.lx + (a.rx - a.lx) * fromL, ay1 = a.ly + (a.ry - a.ly) * fromL;
+      var ax2 = a.lx + (a.rx - a.lx) * fromR, ay2 = a.ly + (a.ry - a.ly) * fromR;
+      var bx1 = b.lx + (b.rx - b.lx) * toL,   by1 = b.ly + (b.ry - b.ly) * toL;
+      var bx2 = b.lx + (b.rx - b.lx) * toR,   by2 = b.ly + (b.ry - b.ly) * toR;
+      ctx.moveTo(ax1, ay1); ctx.lineTo(ax2, ay2);
+      ctx.lineTo(bx2, by2); ctx.lineTo(bx1, by1);
+      ctx.closePath();
     }
-    for (i = pts.length - 1; i >= 0; i--) {
-      p = pts[i];
-      w = Math.max(0.7, wCar * p.sc / SC_CAR);
-      x = p.x + sign * p.hw;
-      ctx.lineTo(x + w * 0.5, p.y);
-    }
-    ctx.closePath();
   }
 
   function draw(ctx, view) {
-    ensure(view.sTop + 200);
-    var pts = buildRibbon(view);
-    var i;
+    var rib = buildRibbon(view);
 
-    if (!asphaltGrad) {
-      asphaltGrad = ctx.createLinearGradient(0, HORIZON_Y, 0, view.H);
-      asphaltGrad.addColorStop(0, '#0e0b1e');
-      asphaltGrad.addColorStop(1, '#17142c');
-    }
     ctx.beginPath();
-    ctx.moveTo(pts[0].x - pts[0].hw, pts[0].y);
-    for (i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x - pts[i].hw, pts[i].y);
-    for (i = pts.length - 1; i >= 0; i--) ctx.lineTo(pts[i].x + pts[i].hw, pts[i].y);
-    ctx.closePath();
-    ctx.fillStyle = asphaltGrad;
+    quads(ctx, rib, 0, 1, 0, 1);
+    ctx.fillStyle = '#100d20';
     ctx.fill();
 
-    drawLaneDashes(ctx, pts);
+    drawLaneDashes(ctx, rib);
 
-    for (var side = -1; side <= 1; side += 2) {
-      edgeStrip(ctx, pts, side, 20);
-      ctx.fillStyle = 'rgba(34,230,255,0.14)';
-      ctx.fill();
+    // Edges, as a fraction of the road width so they thin out with distance
+    // for free.
+    var eo = 10 / (HALF_W * 2);
+    ctx.beginPath(); quads(ctx, rib, -eo * 2.4, eo * 2.4, -eo * 2.4, eo * 2.4);
+    ctx.fillStyle = 'rgba(34,230,255,0.13)'; ctx.fill();
+    ctx.beginPath(); quads(ctx, rib, 1 - eo * 2.4, 1 + eo * 2.4, 1 - eo * 2.4, 1 + eo * 2.4);
+    ctx.fillStyle = 'rgba(34,230,255,0.13)'; ctx.fill();
 
-      edgeStrip(ctx, pts, side, 7);
-      ctx.fillStyle = '#22e6ff';
-      ctx.shadowColor = '#22e6ff';
-      ctx.shadowBlur = 14;
-      ctx.fill();
-      ctx.shadowBlur = 0;
+    // Bloom comes from stacked translucent passes rather than a canvas blur.
+    var eb = eo * 5.0;
+    ctx.beginPath(); quads(ctx, rib, -eb, eb, -eb, eb);
+    ctx.fillStyle = 'rgba(34,230,255,0.07)'; ctx.fill();
+    ctx.beginPath(); quads(ctx, rib, 1 - eb, 1 + eb, 1 - eb, 1 + eb);
+    ctx.fillStyle = 'rgba(34,230,255,0.07)'; ctx.fill();
 
-      edgeStrip(ctx, pts, side, 2.2);
-      ctx.fillStyle = 'rgba(240,252,255,0.92)';
-      ctx.fill();
-    }
+    ctx.beginPath(); quads(ctx, rib, -eo, eo, -eo, eo);
+    ctx.fillStyle = '#22e6ff'; ctx.fill();
+    ctx.beginPath(); quads(ctx, rib, 1 - eo, 1 + eo, 1 - eo, 1 + eo);
+    ctx.fillStyle = '#22e6ff'; ctx.fill();
 
-    return pts;
+    var wo = 3 / (HALF_W * 2);
+    ctx.beginPath(); quads(ctx, rib, -wo, wo, -wo, wo);
+    ctx.fillStyle = 'rgba(240,252,255,0.92)'; ctx.fill();
+    ctx.beginPath(); quads(ctx, rib, 1 - wo, 1 + wo, 1 - wo, 1 + wo);
+    ctx.fillStyle = 'rgba(240,252,255,0.92)'; ctx.fill();
+
+    return rib;
   }
 
-  function drawLaneDashes(ctx, pts) {
-    var period = 128, DASH = 62;
-    var offs = [-HALF_W / 3, HALF_W / 3];
-    var i, k;
+  function drawLaneDashes(ctx, rib) {
+    var period = 132, DASH = 66;
+    var dw = 7 / (HALF_W * 2);
     ctx.beginPath();
-    for (i = 0; i < pts.length - 1; i++) {
-      var a = pts[i], b = pts[i + 1];
-      if (a.sc < 0.07) continue;                 // too far to read; the haze takes over
+    for (var i = 0; i < rib.count - 1; i++) {
+      var a = rib[i], b = rib[i + 1];
+      if (!a.ok || !b.ok || a.sc < 0.07) continue;
       var ms = (a.s + b.s) * 0.5;
       if (ms - Math.floor(ms / period) * period > DASH) continue;
-      var wa = Math.max(0.8, 6 * a.sc / SC_CAR);
-      var wb = Math.max(0.8, 6 * b.sc / SC_CAR);
-      for (k = 0; k < 2; k++) {
-        var xa = a.x + offs[k] * a.sc;
-        var xb = b.x + offs[k] * b.sc;
-        ctx.moveTo(xa - wa * 0.5, a.y);
-        ctx.lineTo(xa + wa * 0.5, a.y);
-        ctx.lineTo(xb + wb * 0.5, b.y);
-        ctx.lineTo(xb - wb * 0.5, b.y);
+      for (var k = 0; k < 2; k++) {
+        var f = k === 0 ? 1 / 3 : 2 / 3;
+        var ax1 = a.lx + (a.rx - a.lx) * (f - dw), ay1 = a.ly + (a.ry - a.ly) * (f - dw);
+        var ax2 = a.lx + (a.rx - a.lx) * (f + dw), ay2 = a.ly + (a.ry - a.ly) * (f + dw);
+        var bx1 = b.lx + (b.rx - b.lx) * (f - dw), by1 = b.ly + (b.ry - b.ly) * (f - dw);
+        var bx2 = b.lx + (b.rx - b.lx) * (f + dw), by2 = b.ly + (b.ry - b.ly) * (f + dw);
+        ctx.moveTo(ax1, ay1); ctx.lineTo(ax2, ay2);
+        ctx.lineTo(bx2, by2); ctx.lineTo(bx1, by1);
         ctx.closePath();
       }
     }
     ctx.fillStyle = 'rgba(255,74,206,0.88)';
-    ctx.shadowColor = '#ff4ace';
-    ctx.shadowBlur = 8;
     ctx.fill();
-    ctx.shadowBlur = 0;
   }
 
   function drawChevron(ctx, x, y, sc, dir, alpha, doubled) {
-    // Far off, chevrons collapse to a few pixels and bunch into noise. Fade
-    // them in with distance instead of cutting them off, so nothing pops. The
-    // window sits beyond the 1150-unit warning lead, so no needed warning is
-    // ever withheld — they are simply faint before they matter.
-    var fade = (sc - 0.22) / 0.14;
+    var fade = (sc - 0.20) / 0.14;
     if (fade <= 0) return;
     if (fade > 1) fade = 1;
-    alpha *= fade;
-
     var w = 16 * sc / SC_CAR, h = 14 * sc / SC_CAR;
-    if (w < 1.5) return;
-    ctx.globalAlpha = alpha;
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-
-    var passes = doubled ? 2 : 1;
-    for (var n = 0; n < passes; n++) {
+    if (w < 1.4) return;
+    ctx.globalAlpha = alpha * fade;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    for (var n = 0; n < (doubled ? 2 : 1); n++) {
       var off = n * 13 * sc / SC_CAR * -dir;
       ctx.beginPath();
       ctx.moveTo(x - w * dir + off, y - h);
@@ -421,7 +492,6 @@
       ctx.lineWidth = Math.max(1, 12 * sc / SC_CAR);
       ctx.strokeStyle = doubled ? 'rgba(255,90,60,0.22)' : 'rgba(255,150,40,0.20)';
       ctx.stroke();
-
       ctx.beginPath();
       ctx.moveTo(x - w * dir + off, y - h);
       ctx.lineTo(x + w * dir + off, y);
@@ -434,69 +504,59 @@
   }
 
   function drawChevrons(ctx, view) {
-    var p = { x: 0, y: 0, sc: 0 };
+    var p = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+    var sEnd = view.carS + LOOKAHEAD;
     for (var i = 0; i < segs.length; i++) {
       var g = segs[i];
-      if (g.kind !== 'curve') continue;
-
+      if (!g.turn) continue;
       var len = g.s1 - g.s0;
       var lead = g.hairpin ? HAIRPIN_LEAD : CHEVRON_LEAD;
-      var spacing = g.hairpin ? 78 : 96;
+      var spacing = g.hairpin ? 86 : 104;
       var from = g.s0 - lead;
-      var to = g.s0 + len * (g.hairpin ? 0.55 : 0.28);
-      if (to < view.sBot || from > view.sTop) continue;
+      // Where corners run straight into each other there is no approach to
+      // sign, and a full run of arrows would cross the previous corner's and
+      // read as a row of X's. Sign the entry only.
+      var prev = segs[i - 1];
+      if (prev && prev.turn && from < prev.s1) from = g.s0 - 130;
+      var to = g.s0 + len * (g.hairpin ? 0.65 : 0.4);
+      if (to < view.carS - 400 || from > sEnd) continue;
 
-      var start = Math.ceil(from / spacing) * spacing;
-      for (var s = start; s <= to; s += spacing) {
-        if (s < view.sBot || s > view.sTop) continue;
-        var a = s <= g.s0 ? 1 : Math.max(0, 1 - (s - g.s0) / (len * 0.28));
-        var cx = centerAt(s);
-        project(s, cx - HALF_W - 40, view, p);
-        drawChevron(ctx, p.x, p.y, p.sc, g.dir, a, g.hairpin);
-        project(s, cx + HALF_W + 40, view, p);
-        drawChevron(ctx, p.x, p.y, p.sc, g.dir, a, g.hairpin);
+      for (var s = Math.ceil(from / spacing) * spacing; s <= to; s += spacing) {
+        if (s < view.carS - 400 || s > sEnd) continue;
+        var a = s <= g.s0 ? 1 : Math.max(0, 1 - (s - g.s0) / (len * 0.4));
+        var idx = indexAt(s);
+        var hh = ch[idx], nx = Math.cos(hh), ny = -Math.sin(hh);
+        var off = HALF_W + 42;
+        project(cx[idx] - nx * off, cy[idx] - ny * off, view, p);
+        if (p.vis) drawChevron(ctx, p.x, p.y, p.sc, g.dir, a, g.hairpin);
+        project(cx[idx] + nx * off, cy[idx] + ny * off, view, p);
+        if (p.vis) drawChevron(ctx, p.x, p.y, p.sc, g.dir, a, g.hairpin);
       }
     }
   }
 
-  // Haze where the road meets the horizon, so nothing ends on a hard line.
   function drawFog(ctx, view) {
     if (!fogGrad) {
       var top = HORIZON_Y - 20;
-      var farY = HORIZON_Y + K / (CAM_BACK + LOOKAHEAD);   // where the road stops
-      var span = (farY - top) + 210;
-      var atFar = (farY - top) / span;
-      fogGrad = ctx.createLinearGradient(0, top, 0, top + span);
+      fogGrad = ctx.createLinearGradient(0, top, 0, top + 300);
       fogGrad.addColorStop(0.00, 'rgba(104,34,92,1)');
-      fogGrad.addColorStop(atFar, 'rgba(74,24,78,0.92)');  // road end, all but gone
+      fogGrad.addColorStop(0.34, 'rgba(74,24,78,0.86)');
       fogGrad.addColorStop(1.00, 'rgba(34,14,48,0)');
-      fogGrad.__span = span;
     }
     ctx.fillStyle = fogGrad;
-    ctx.fillRect(-60, HORIZON_Y - 20, view.W + 120, fogGrad.__span);
+    ctx.fillRect(-60, HORIZON_Y - 20, view.W + 120, 300);
   }
 
   DR.Road = {
-    HALF_W: HALF_W,
-    STEP: STEP,
-    HORIZON_Y: HORIZON_Y,
-    CAR_Y: CAR_Y,
-    CAM_BACK: CAM_BACK,
-    LOOKAHEAD: LOOKAHEAD,
-    SC_CAR: SC_CAR,
-    reset: reset,
-    ensure: ensure,
-    trim: trim,
-    centerAt: centerAt,
-    dirAt: dirAt,
-    isHairpin: isHairpin,
-    project: project,
-    nearS: nearS,
-    buildRibbon: buildRibbon,
-    edgeStrip: edgeStrip,
-    drawBackground: drawBackground,
-    draw: draw,
-    drawChevrons: drawChevrons,
-    drawFog: drawFog
+    HALF_W: HALF_W, SAMPLE: SAMPLE,
+    HORIZON_Y: HORIZON_Y, CAR_Y: CAR_Y, CAM_BACK: CAM_BACK,
+    FOCAL: FOCAL, LOOKAHEAD: LOOKAHEAD, SC_CAR: SC_CAR, NEAR: NEAR,
+    reset: reset, ensure: ensure, trim: trim,
+    centreAt: centreAt, locate: locate, indexAt: indexAt,
+    dirAt: dirAt, isHairpin: isHairpin, radiusAt: radiusAt,
+    lengthGenerated: lengthGenerated,
+    project: project, buildRibbon: buildRibbon, quads: quads,
+    drawBackground: drawBackground, draw: draw,
+    drawChevrons: drawChevrons, drawFog: drawFog
   };
 })(window.DR = window.DR || {});
