@@ -24,10 +24,10 @@
   // Useful identity: the car sits FOCAL x tan(tilt) below the horizon. So at a
   // fixed low tilt, a longer FOCAL buys back sky, a bigger car and a wider
   // road all at once — it only costs field of view to the sides.
-  var HORIZON_Y = 633;       // 32 degree tilt now — lower still
+  var HORIZON_Y = 574;       // 32 degree tilt, zoomed right in
   var CAR_Y     = 880;
-  var CAM_BACK  = 300;       // right up behind the car
-  var FOCAL     = 395;
+  var CAM_BACK  = 280;       // right up behind the car
+  var FOCAL     = 489;
   var NEAR      = 70;        // nothing closer than this can be drawn
   var LOOKAHEAD = 2600;      // world units of road drawn ahead of the car
   var K         = (CAR_Y - HORIZON_Y) * CAM_BACK;
@@ -345,8 +345,14 @@
 
   // --------------------------------------------------------------- projection
 
+  var CAM_LIFT = K / FOCAL;      // how high the camera rides above the tarmac
+
   var _p = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
-  function project(wx, wy, view, out) {
+  function project(wx, wy, view, out) { return project3(wx, wy, 0, view, out); }
+
+  // Same projection, but a point may now be ABOVE the ground. Everything the
+  // camera sees is this far below it: (CAM_LIFT - height).
+  function project3(wx, wy, wz, view, out) {
     out = out || _p;
     var dx = wx - view.camX, dy = wy - view.camY;
     var rz = dx * view.camSin + dy * view.camCos;
@@ -355,7 +361,7 @@
     var sc = FOCAL / rz;
     out.sc = sc;
     out.x = view.W * 0.5 + (dx * view.camCos - dy * view.camSin) * sc;
-    out.y = HORIZON_Y + K / rz;
+    out.y = HORIZON_Y + (CAM_LIFT - wz) * sc;
     out.vis = true;
     return out;
   }
@@ -561,10 +567,14 @@
   // (k, c): k is -1 at the left edge, 0 at the centre, +1 at the right edge,
   // and c is a fixed offset in world units on top of that. So the white line
   // is (-1, -3) to (-1, +3): three units either side of the left edge, always.
-  function quads(ctx, rib, kA, cA, kB, cB) {
+  function quads(ctx, rib, kA, cA, kB, cB, maxSc) {
     for (var i = 0; i < rib.count - 1; i++) {
       var a = rib[i], b = rib[i + 1];
       if (!a.ok || !b.ok) continue;
+      // Right under the camera the road is magnified enormously, so anything
+      // drawn as an overlay there swamps the screen. Callers that only want
+      // the readable part pass a scale ceiling.
+      if (maxSc && a.sc > maxSc) continue;
       var ah = 2 * a.hw, bh = 2 * b.hw;
       var fa1 = 0.5 + (kA * a.hw + cA) / ah, fa2 = 0.5 + (kB * a.hw + cB) / ah;
       var fb1 = 0.5 + (kA * b.hw + cA) / bh, fb2 = 0.5 + (kB * b.hw + cB) / bh;
@@ -710,7 +720,8 @@
     dirAt: dirAt, isHairpin: isHairpin, radiusAt: radiusAt,
     lengthGenerated: lengthGenerated,
     lapLength: lapLength, INTRO_LEN: INTRO_LEN, lapOutline: lapOutline,
-    project: project, buildRibbon: buildRibbon, quads: quads,
+    project: project, project3: project3, CAM_LIFT: CAM_LIFT,
+    buildRibbon: buildRibbon, quads: quads,
     drawBackground: drawBackground, draw: draw,
     drawChevrons: drawChevrons, drawFog: drawFog
   };

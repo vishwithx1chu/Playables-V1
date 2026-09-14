@@ -19,7 +19,7 @@
      MIN_RADIUS in car.js), so boosting into a corner never makes it
      impossible — it just gives you less time to get it right. */
   var BASE_SPEED = 718;
-  var BOOST_MULT = 1.25;     // 25% faster while boosting, applied instantly
+  var BOOST_MULT = 1.35;     // 35% faster while boosting, applied instantly
   var BOOST_HOLD = 1.5;      // seconds at full boost
   var BOOST_FADE = 3.0;      // seconds easing back to normal
 

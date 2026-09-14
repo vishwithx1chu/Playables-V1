@@ -126,199 +126,256 @@
       return out;
     },
 
-    draw: function (ctx, view) {
-      var p = DR.Road.project(this.x, this.y, view);
-      if (!p.vis) return;
-      var lean = Math.min(1, Math.abs(this.slip) / SLIP_AT_LIMIT);
-      // Opposite lock: in a drift the front wheels point AWAY from the turn,
-      // which is one of the most recognisable things about the real thing.
-      var steer = -Math.max(-1, Math.min(1, this.slip / SLIP_AT_LIMIT));
-
-      ctx.save();
-      ctx.translate(p.x, p.y);
-
-      // Neon spill on the tarmac underneath, brighter the harder it slides.
-      if (!glowGrad) {
-        glowGrad = ctx.createRadialGradient(0, 0, 4, 0, 0, 104);
-        glowGrad.addColorStop(0.00, 'rgba(255,74,206,0.44)');
-        glowGrad.addColorStop(0.45, 'rgba(140,60,255,0.17)');
-        glowGrad.addColorStop(1.00, 'rgba(0,0,0,0)');
-      }
-      ctx.globalAlpha = 0.65 + lean * 0.35;
-      ctx.fillStyle = glowGrad;
-      ctx.fillRect(-104, -104, 208, 208);
-      ctx.globalAlpha = 1;
-
-      ctx.rotate(this.bodyYaw - view.camAngle);
-
-      // Headlight wash thrown up the road.
-      ctx.beginPath();
-      ctx.moveTo(-18, -44); ctx.lineTo(18, -44);
-      ctx.lineTo(110, -360); ctx.lineTo(-110, -360);
-      ctx.closePath();
-      ctx.fillStyle = 'rgba(150,240,255,0.05)';
-      ctx.fill();
-
-      // Shadow on the ground.
-      ctx.beginPath();
-      ctx.ellipse(0, 6, 34, 50, 0, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(0,0,0,0.42)';
-      ctx.fill();
-
-      drawBoostFlame(ctx, view.boost || 0);
-      drawWheels(ctx, steer);
-      drawBody(ctx);
-
-      ctx.restore();
-    }
+    draw: function (ctx, view) { drawCar(ctx, view, this); }
   };
 
-  // Four wheels sitting on the tarmac. The fronts turn with the drift, which
-  // is a small thing that does a lot of work at this camera angle.
-  function drawWheels(ctx, steer) {
-    var fx = 27, rx = 29, fy = -25, ry = 27;
-    var wheels = [
-      [-fx, fy, steer * 0.55], [fx, fy, steer * 0.55],
-      [-rx, ry, 0], [rx, ry, 0]
-    ];
-    for (var i = 0; i < 4; i++) {
-      var w = wheels[i];
-      ctx.save();
-      ctx.translate(w[0], w[1]);
-      ctx.rotate(w[2]);
-      ctx.fillStyle = '#08060f';
-      ctx.fillRect(-6, -13, 12, 26);
-      ctx.fillStyle = 'rgba(120,160,200,0.30)';   // rim catching the light
-      ctx.fillRect(-6, -4, 12, 3);
-      ctx.fillStyle = 'rgba(255,74,206,0.22)';    // neon bleeding onto rubber
-      ctx.fillRect(-6, 10, 12, 3);
-      ctx.restore();
+  /* ======================= THE CAR, IN ACTUAL 3D =======================
+     Not a flat shape with a copy pasted above it — real geometry. Points in
+     the car's own space (x across, y forward, z up), turned into the world,
+     run through the same camera as the road, then every face sorted back to
+     front and shaded off its own angle to the light. That is why the roof
+     now reads as a roof and the flanks catch light as it turns.
+     ===================================================================== */
+
+  var VX = [], FACES = [];
+
+  function ring(y, hw, zb, zt) {
+    var i = VX.length;
+    VX.push([-hw, y, zb], [hw, y, zb], [hw, y, zt], [-hw, y, zt]);
+    return i;                                   // bl, br, tr, tl
+  }
+  function band(a, b, side, top, bottom) {
+    if (bottom) FACES.push({ v: [a, a + 1, b + 1, b], m: bottom });
+    FACES.push({ v: [a + 1, a + 2, b + 2, b + 1], m: side });
+    if (top) FACES.push({ v: [a + 2, a + 3, b + 3, b + 2], m: top });
+    FACES.push({ v: [a + 3, a, b, b + 3], m: side });
+  }
+  function quad(i, m) { FACES.push({ v: i, m: m }); }
+
+  (function buildMesh() {
+    // Lower body: six cross-sections from nose to tail.
+    // Long, low and wide. Height had been nearly a third of the length, which
+    // is a van; a sports car is closer to a fifth.
+    var r0 = ring( 48, 13,  4, 10);
+    var r1 = ring( 34, 24,  3, 14);
+    var r2 = ring( 14, 27,  3, 17);
+    var r3 = ring( -8, 27,  3, 17);
+    var r4 = ring(-30, 27,  4, 16);
+    var r5 = ring(-46, 22,  5, 13);
+    band(r0, r1, 'body', 'hood', 'under');
+    band(r1, r2, 'body', 'hood', 'under');
+    band(r2, r3, 'body', 'deck', 'under');
+    band(r3, r4, 'body', 'deck', 'under');
+    band(r4, r5, 'body', 'deck', 'under');
+    quad([r0, r0 + 1, r0 + 2, r0 + 3], 'body');       // nose
+    quad([r5 + 3, r5 + 2, r5 + 1, r5], 'tailpanel');  // tail
+
+    // Greenhouse, sitting on top. No floor: it would fight the deck.
+    var c0 = ring( 13, 18, 17, 18);   // windscreen base, well forward
+    var c1 = ring( -4, 16, 17, 28);   // steeply raked up to the roof
+    var c2 = ring(-19, 16, 17, 27);
+    var c3 = ring(-30, 18, 17, 19);
+    band(c0, c1, 'glass', 'roof', null);
+    band(c1, c2, 'glass', 'roof', null);
+    band(c2, c3, 'glass', 'roof', null);
+    quad([c0, c0 + 1, c0 + 2, c0 + 3], 'glass');      // windscreen
+    quad([c3 + 3, c3 + 2, c3 + 1, c3], 'glass');      // rear screen
+
+    // Lights, sitting just proud of the panels so they never z-fight.
+    function lamp(x0, x1, y, z0, z1, m) {
+      var i = VX.length;
+      VX.push([x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1]);
+      quad([i, i + 1, i + 2, i + 3], m);
     }
+    lamp(-18, -8, -47.0,  8, 12, 'tail');
+    lamp(  8,  18, -47.0,  8, 12, 'tail');
+    lamp(-12,  -4,  48.4,  6,  9, 'head');
+    lamp(  4,  12,  48.4,  6,  9, 'head');
+  })();
+
+  var MAT = {
+    body:      [206,  26,  34],
+    hood:      [228,  38,  42],
+    deck:      [186,  20,  30],
+    roof:      [214,  30,  38],
+    tailpanel: [120,  14,  22],
+    under:     [ 28,  10,  16],
+    glass:     [ 16,  16,  34],
+    tyre:      [ 16,  15,  20],
+    rim:       [130, 140, 162]
+  };
+  var EMISSIVE = { tail: '#ff4436', head: '#eaffff' };
+
+  // Light from above, ahead and to the left.
+  var LX = -0.40, LY = 0.35, LZ = 0.85;
+  (function () { var n = Math.hypot(LX, LY, LZ); LX /= n; LY /= n; LZ /= n; })();
+
+  // Pooled so a frame allocates nothing.
+  var wx = [], wy = [], wz = [], px = [], py = [], pv = [], pz = [];
+  var poly = [], polyN = 0;
+  function emit(vlist, mat, n) {
+    var e = poly[polyN];
+    if (!e) e = poly[polyN] = { v: null, m: '', d: 0 };
+    // These are pooled across frames, so anything a wheel left behind last
+    // frame has to be cleared or a body panel inherits it.
+    e.v = vlist; e.m = mat; e.d = n; e.src = null; e.nd = undefined;
+    polyN++;
   }
 
-  // The body is drawn as a footprint on the ground plus the same shape lifted
-  // by RIDE, with the gap between them filled in. That gap is what reads as
-  // the car having height, which matters now the camera sits low.
-  var RIDE = 26;
-  var FOOT = [
-    [0, -50], [13, -46], [21, -31], [23, -9], [28, 10], [28, 31], [23, 45],
-    [-23, 45], [-28, 31], [-28, 10], [-23, -9], [-21, -31], [-13, -46]
-  ];
-  var TOP = FOOT.map(function (q) { return [q[0] * 0.80, q[1] * 0.90 - RIDE]; });
-
-  function path(ctx, pts) {
-    ctx.beginPath();
-    ctx.moveTo(pts[0][0], pts[0][1]);
-    for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-    ctx.closePath();
+  function shade(rgb, nd) {
+    var k = 0.32 + 0.68 * nd;
+    return 'rgb(' + ((rgb[0] * k) | 0) + ',' + ((rgb[1] * k) | 0) + ',' + ((rgb[2] * k) | 0) + ')';
   }
 
-  function drawBody(ctx) {
-    var i, n = FOOT.length;
+  var wheelBuf = [];
+  function drawCar(ctx, view, car) {
+    var i, j, f, n;
+    var b = car.bodyYaw, cb = Math.cos(b), sb = Math.sin(b);
+    var lean = Math.min(1, Math.abs(car.slip) / SLIP_AT_LIMIT);
 
-    // Flanks. At this camera height the rear one is a big part of what you
-    // see, so it gets its own treatment below.
+    // Ground glow and shadow first, flat on the tarmac.
+    var g = DR.Road.project(car.x, car.y, view);
+    if (!g.vis) return;
+    var gs = g.sc / DR.Road.SC_CAR;
+    ctx.save();
+    ctx.translate(g.x, g.y);
+    if (!glowGrad) {
+      glowGrad = ctx.createRadialGradient(0, 0, 4, 0, 0, 104);
+      glowGrad.addColorStop(0.00, 'rgba(255,74,206,0.40)');
+      glowGrad.addColorStop(0.45, 'rgba(140,60,255,0.15)');
+      glowGrad.addColorStop(1.00, 'rgba(0,0,0,0)');
+    }
+    ctx.scale(gs, gs);
+    ctx.globalAlpha = 0.6 + lean * 0.4;
+    ctx.fillStyle = glowGrad;
+    ctx.fillRect(-104, -104, 208, 208);
+    ctx.globalAlpha = 1;
+    ctx.rotate(car.bodyYaw - view.camAngle);
     ctx.beginPath();
-    for (i = 0; i < n; i++) {
-      var a = FOOT[i], b = FOOT[(i + 1) % n];
-      var c = TOP[(i + 1) % n], d = TOP[i];
-      ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
-      ctx.lineTo(c[0], c[1]); ctx.lineTo(d[0], d[1]);
+    ctx.ellipse(0, 0, 32, 52, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fill();
+    drawBoostFlame(ctx, view.boost || 0);
+    ctx.restore();
+
+    // --- every vertex into the world, then onto the screen ---
+    for (i = 0; i < VX.length; i++) {
+      var L = VX[i];
+      wx[i] = car.x + L[0] * cb + L[1] * sb;
+      wy[i] = car.y - L[0] * sb + L[1] * cb;
+      wz[i] = L[2];
+      var q = DR.Road.project3(wx[i], wy[i], wz[i], view, {});
+      px[i] = q.x; py[i] = q.y; pv[i] = q.vis; pz[i] = q.rz;
+    }
+
+    polyN = 0;
+    for (i = 0; i < FACES.length; i++) {
+      f = FACES[i];
+      var v = f.v, ok = true, depth = 0;
+      for (j = 0; j < v.length; j++) { if (!pv[v[j]]) { ok = false; break; } depth += pz[v[j]]; }
+      if (!ok) continue;
+      emit(v, f.m, depth / v.length);
+    }
+
+    // --- wheels, built fresh because the fronts steer ---
+    var steerAng = -Math.max(-1, Math.min(1, car.slip / SLIP_AT_LIMIT)) * 0.42;
+    buildWheel(view, car, cb, sb,  29,  31, 11, steerAng);
+    buildWheel(view, car, cb, sb, -29,  31, 11, steerAng);
+    buildWheel(view, car, cb, sb,  30, -29, 12, 0);
+    buildWheel(view, car, cb, sb, -30, -29, 12, 0);
+
+    // --- furthest first, so nearer panels cover the ones behind ---
+    var order = [];
+    for (i = 0; i < polyN; i++) order.push(i);
+    order.sort(function (a, c) { return poly[c].d - poly[a].d; });
+
+    for (i = 0; i < order.length; i++) {
+      var e = poly[order[i]];
+      var pts = e.v, src = e.src || null;
+      ctx.beginPath();
+      if (src) {
+        ctx.moveTo(src[0], src[1]);
+        for (j = 2; j < src.length; j += 2) ctx.lineTo(src[j], src[j + 1]);
+      } else {
+        ctx.moveTo(px[pts[0]], py[pts[0]]);
+        for (j = 1; j < pts.length; j++) ctx.lineTo(px[pts[j]], py[pts[j]]);
+      }
       ctx.closePath();
+
+      if (EMISSIVE[e.m]) {
+        ctx.fillStyle = EMISSIVE[e.m];
+        ctx.shadowColor = EMISSIVE[e.m];
+        ctx.shadowBlur = e.m === 'tail' ? 16 : 9;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      } else {
+        ctx.fillStyle = shade(MAT[e.m] || MAT.body, e.nd !== undefined ? e.nd : faceLight(e, pts));
+        ctx.fill();
+        if (e.m === 'glass') {
+          ctx.strokeStyle = 'rgba(150,210,255,0.22)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+      }
     }
-    ctx.fillStyle = '#7d0f18';
-    ctx.fill();
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = 'rgba(255,140,140,0.28)';
-    ctx.stroke();
+  }
 
-    // The rear face, square on to the camera.
-    ctx.beginPath();
-    ctx.moveTo(FOOT[6][0], FOOT[6][1]); ctx.lineTo(FOOT[7][0], FOOT[7][1]);
-    ctx.lineTo(TOP[7][0], TOP[7][1]);   ctx.lineTo(TOP[6][0], TOP[6][1]);
-    ctx.closePath();
-    ctx.fillStyle = '#9c1420';
-    ctx.fill();
+  // How square-on to the light a face sits, from its world-space normal.
+  function faceLight(e, pts) {
+    var a = pts[0], b2 = pts[1], c = pts[2];
+    var ux = wx[b2] - wx[a], uy = wy[b2] - wy[a], uz = wz[b2] - wz[a];
+    var vx2 = wx[c] - wx[a], vy2 = wy[c] - wy[a], vz2 = wz[c] - wz[a];
+    var nx = uy * vz2 - uz * vy2, ny = uz * vx2 - ux * vz2, nz = ux * vy2 - uy * vx2;
+    var len = Math.hypot(nx, ny, nz) || 1;
+    var d = Math.abs((nx * LX + ny * LY + nz * LZ) / len);
+    return d;
+  }
 
-    // Upper body.
-    if (!bodyGrad) {
-      bodyGrad = ctx.createLinearGradient(0, -50, 0, 45);
-      bodyGrad.addColorStop(0.00, '#ff6a5c');
-      bodyGrad.addColorStop(0.30, '#f0231f');
-      bodyGrad.addColorStop(0.72, '#c9101c');
-      bodyGrad.addColorStop(1.00, '#8e0c18');
+  // A wheel is a short cylinder: the face you can see, plus the tread round it.
+  var WN = 9;
+  function buildWheel(view, car, cb, sb, ox, oy, r, steerAng) {
+    var cz = r;                                  // a wheel touches the tarmac
+    var halfW = 6, k, a;
+    var cs = Math.cos(steerAng), sn = Math.sin(steerAng);
+    var outX = [], outY = [], inX = [], inY = [], depth = 0, ok = true;
+    var sideSign = ox > 0 ? 1 : -1;
+
+    for (k = 0; k < WN; k++) {
+      a = k / WN * Math.PI * 2;
+      var ly = r * Math.sin(a), lz = cz + r * Math.cos(a);
+      for (var e = 0; e < 2; e++) {
+        var lxw = (e === 0 ? halfW : -halfW) * sideSign;
+        // steering swings the wheel about its own upright
+        var rx = lxw * cs - ly * sn, ry = lxw * sn + ly * cs;
+        var LXc = ox + rx, LYc = oy + ry;
+        var WXp = car.x + LXc * cb + LYc * sb;
+        var WYp = car.y - LXc * sb + LYc * cb;
+        var q = DR.Road.project3(WXp, WYp, lz, view, {});
+        if (!q.vis) { ok = false; break; }
+        if (e === 0) { outX.push(q.x); outY.push(q.y); depth += q.rz; }
+        else { inX.push(q.x); inY.push(q.y); }
+      }
+      if (!ok) return;
     }
-    path(ctx, TOP);
-    ctx.fillStyle = bodyGrad;
-    ctx.fill();
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = 'rgba(255,190,180,0.75)';
-    ctx.stroke();
+    depth /= WN;
 
-    // Highlight down the shoulder line.
-    ctx.beginPath();
-    ctx.moveTo(-14, -30 - RIDE); ctx.lineTo(-16, 24 - RIDE);
-    ctx.moveTo(14, -30 - RIDE);  ctx.lineTo(16, 24 - RIDE);
-    ctx.lineWidth = 1.4;
-    ctx.strokeStyle = 'rgba(255,225,215,0.28)';
-    ctx.stroke();
-
-    // Side intakes, which is most of what says "mid-engine".
-    ctx.fillStyle = 'rgba(20,6,10,0.75)';
-    ctx.fillRect(-21, 2 - RIDE, 5, 14);
-    ctx.fillRect(16, 2 - RIDE, 5, 14);
-
-    // Glass.
-    ctx.beginPath();
-    ctx.moveTo(-10, -24 - RIDE); ctx.lineTo(10, -24 - RIDE);
-    ctx.lineTo(14, 4 - RIDE); ctx.lineTo(-14, 4 - RIDE);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(10,8,20,0.94)';
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(190,220,255,0.4)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(-9, -22 - RIDE); ctx.lineTo(2, -22 - RIDE); ctx.lineTo(-5, -10 - RIDE);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(200,235,255,0.16)';
-    ctx.fill();
-
-    // Engine deck slats behind the cabin.
-    ctx.strokeStyle = 'rgba(30,8,12,0.7)';
-    ctx.lineWidth = 1.6;
-    for (i = 0; i < 4; i++) {
-      var yy = 12 - RIDE + i * 5;
-      ctx.beginPath(); ctx.moveTo(-13, yy); ctx.lineTo(13, yy); ctx.stroke();
+    // tread
+    for (k = 0; k < WN; k++) {
+      var n2 = (k + 1) % WN;
+      var e2 = poly[polyN];
+      if (!e2) e2 = poly[polyN] = { v: null, m: '', d: 0 };
+      e2.v = null; e2.m = 'tyre'; e2.d = depth - 1;
+      e2.src = [outX[k], outY[k], outX[n2], outY[n2], inX[n2], inY[n2], inX[k], inY[k]];
+      e2.nd = 0.30;
+      polyN++;
     }
-
-    // Ducktail spoiler.
-    ctx.fillStyle = '#5e0b13';
-    ctx.fillRect(-21, 34 - RIDE, 42, 5);
-    ctx.fillStyle = 'rgba(255,170,160,0.35)';
-    ctx.fillRect(-21, 34 - RIDE, 42, 1.6);
-
-    // Twin round tail lights, on the rear face.
-    var ty = (FOOT[6][1] + TOP[6][1]) * 0.5;
-    ctx.shadowColor = '#ff2a1a'; ctx.shadowBlur = 16;
-    ctx.fillStyle = '#ff5638';
-    for (i = 0; i < 4; i++) {
-      var tx = [-18, -9.5, 9.5, 18][i];
-      ctx.beginPath(); ctx.arc(tx, ty, 3.4, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.shadowBlur = 0;
-
-    // Quad exhausts.
-    ctx.fillStyle = '#2a2028';
-    ctx.fillRect(-8, 42 - RIDE * 0.4, 6, 4);
-    ctx.fillRect(2, 42 - RIDE * 0.4, 6, 4);
-
-    // Headlights.
-    ctx.shadowColor = '#dff4ff'; ctx.shadowBlur = 9;
-    ctx.fillStyle = '#f2ffff';
-    ctx.fillRect(-15, -40 - RIDE, 8, 3.5);
-    ctx.fillRect(7, -40 - RIDE, 8, 3.5);
-    ctx.shadowBlur = 0;
+    // the face of the wheel
+    var e3 = poly[polyN];
+    if (!e3) e3 = poly[polyN] = { v: null, m: '', d: 0 };
+    var src = [];
+    for (k = 0; k < WN; k++) { src.push(outX[k], outY[k]); }
+    e3.v = null; e3.m = 'rim'; e3.d = depth; e3.src = src; e3.nd = 0.42;
+    polyN++;
   }
 
   // Exhaust flare while boosting.

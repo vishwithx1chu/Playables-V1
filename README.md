@@ -32,7 +32,7 @@ touchscreen.
 
 ---
 
-## Current state: Milestone 1.8
+## Current state: Milestone 1.9
 
 Milestone 1 answers one question and nothing else: **does the drift feel
 good?** There is deliberately no score, no grading, no damage, no timer, no
@@ -61,17 +61,17 @@ What is in:
   turned you around.
 - **Minimap** top right, showing the lap's shape and where you are on it.
 - Hitting a wall costs **10% of your speed**, won back over one second.
-- **Boost**: one press gives 25% more speed instantly — full on the very next
+- **Boost**: one press gives 35% more speed instantly — full on the very next
   frame — held for one and a half seconds, then eased back over three. Unlimited presses.
   Bottom-centre button on touch and mouse, Space / Up / W on the keyboard.
 - **Lap timer**: running time for the lap you are on, plus the last three
   completed laps with the quickest of them called out.
 - **Lap counter** with a progress bar. One lap is the whole corner sequence
   once, about 35 seconds of driving.
-- The car is an original low, wide, red mid-engine shape drawn in code:
-  footprint on the tarmac, raised body over it, four wheels that steer with
-  the drift, glass, side intakes, engine slats, quad tail lights and exhaust
-  flare while boosting.
+- The car is **real 3D geometry**, not a flat shape: cross-sections from nose
+  to tail plus a greenhouse on top, four cylindrical wheels that sit on the
+  tarmac and steer with the drift, every face depth-sorted and lit from its
+  own angle to the light.
 - Chevrons ahead of every corner; doubled red-orange ones for the hairpins.
 - Edge contact detected, with screen shake, an edge flash and a word telling
   you which mistake you made — but no health lost and the run never ends.
@@ -247,14 +247,27 @@ The block marked `THE CAMERA` at the top of [`src/road.js`](src/road.js).
 is how high the horizon sits on screen, which is really the camera's tilt:
 a bigger number means a lower, more level camera and more sky.
 
-## A note on car artwork
+## The car is a real 3D model
 
-Everything in the game is drawn in code, including the car. That is not only
-the rights rule in CLAUDE.md — downloaded artwork physically cannot work
-here. The published page blocks all external images, and the Playables rules
-forbid external assets and network calls, so a fetched image would simply
-fail to load in the thing you are actually playing. If we ever want richer
-artwork, the route is a hand-drawn vector car in code, not a downloaded one.
+It used to be a cheat: a flat outline with a copy of itself shifted upward and
+the gap filled in. That is why it looked like cardboard once the camera came
+down — it never foreshortened, and the "roof" was just the floor plan moved up
+the screen.
+
+It is now genuine 3D. Points are defined in the car's own space (x across,
+y forward, z up), turned into the world by the body's heading, and run through
+the same camera as the road — which now understands height, not just ground.
+Every face is sorted back to front so nearer panels cover further ones, and
+shaded by the angle between its own normal and the light.
+
+The model itself is a set of cross-sections from nose to tail, a greenhouse on
+top with a raked screen, and four wheels built as short cylinders that sit on
+the road and steer with the drift.
+
+It is authored rather than downloaded, and that is not a compromise we chose:
+the published page blocks all external files and the Playables rules forbid
+external assets, so a downloaded model could not load in the thing you are
+actually playing. Geometry in code is the only kind of 3D that ships here.
 
 ## Files
 

@@ -187,18 +187,18 @@
     if (rib) {
       var sd = flash.side;
       ctx.beginPath();
-      DR.Road.quads(ctx, rib, sd, -26, sd, 26);
+      DR.Road.quads(ctx, rib, sd, -26, sd, 26, 2.2);
       ctx.globalAlpha = 0.85 * k * flash.strength;
       ctx.fillStyle = flash.color;
       ctx.fill();
       ctx.beginPath();
-      DR.Road.quads(ctx, rib, sd, -52, sd, 52);
+      DR.Road.quads(ctx, rib, sd, -52, sd, 52, 2.2);
       ctx.globalAlpha = 0.30 * k * flash.strength;
       ctx.fill();
     }
 
     // Soft border wash: one smooth fade, low peak, never a strobe.
-    var a = 0.30 * k * flash.strength;
+    var a = 0.22 * k * flash.strength;
     ctx.strokeStyle = flash.color;
     ctx.globalAlpha = a;        ctx.lineWidth = 12; ctx.strokeRect(6, 6, W - 12, H - 12);
     ctx.globalAlpha = a * 0.55; ctx.lineWidth = 24; ctx.strokeRect(24, 24, W - 48, H - 48);
@@ -214,11 +214,11 @@
     if (!lineSeed) {
       lineSeed = [];
       var sd = 7717;
-      for (var i = 0; i < 26; i++) {
+      for (var i = 0; i < 44; i++) {
         sd = (sd * 1103515245 + 12345) & 0x7fffffff;
         var a = (sd / 0x7fffffff) * Math.PI * 2;
         sd = (sd * 1103515245 + 12345) & 0x7fffffff;
-        lineSeed.push({ a: a, r: 0.42 + (sd / 0x7fffffff) * 0.55 });
+        lineSeed.push({ a: a, r: 0.30 + (sd / 0x7fffffff) * 0.68 });
       }
     }
     var cx = view.W * 0.5, cy = DR.Road.HORIZON_Y + 120;
@@ -226,10 +226,10 @@
     ctx.lineCap = 'round';
     for (var i = 0; i < lineSeed.length; i++) {
       var L = lineSeed[i];
-      var d0 = L.r * R, d1 = d0 + (70 + 150 * amount);
+      var d0 = L.r * R, d1 = d0 + (110 + 330 * amount);
       var sn = Math.sin(L.a), cs = Math.cos(L.a);
-      ctx.globalAlpha = 0.30 * amount * L.r;
-      ctx.lineWidth = 2 + 2 * amount;
+      ctx.globalAlpha = 0.52 * amount * L.r;
+      ctx.lineWidth = 2 + 4 * amount;
       ctx.strokeStyle = '#dff3ff';
       ctx.beginPath();
       ctx.moveTo(cx + cs * d0, cy + sn * d0);
