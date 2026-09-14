@@ -132,8 +132,17 @@
     camY = DR.Car.y - cs * DR.Road.CAM_BACK - sn * lean;
   }
 
-  // Contact with an edge: shake, flash, and the car is held on the road.
-  // No health, no score, no run ending — that is a later milestone.
+  /* Hitting the barrier. The car is still held on the road — nothing ends a
+     run yet — but it is no longer a silent clamp: the wall lights up where
+     you struck it, sparks come off the contact point and stay lying on the
+     tarmac behind you, the body rocks on its springs, and the car is pushed
+     back off the wall over about a fifth of a second instead of being
+     teleported clear. All of that is so the crash and the recovery are things
+     you watch happen, not things you infer from the speed dropping. */
+  var rebound = 0, rbNX = 0, rbNY = 0;   // push off the wall, world units/sec
+  var REBOUND_TAU = 0.16;
+  var scrapeT = 0;
+
   function checkEdges(dt) {
     hitCool = Math.max(0, hitCool - dt);
 
@@ -142,7 +151,7 @@
     DR.Car.dev = loc.dev;
 
     var limit = loc.hw - DR.Car.halfWidth();
-    if (Math.abs(loc.dev) <= limit) return;
+    if (Math.abs(loc.dev) <= limit) { scrapeT = 0; return; }
 
     var side = loc.dev > 0 ? 1 : -1;
     var excess = Math.abs(loc.dev) - limit;
@@ -151,15 +160,42 @@
     DR.Car.y -= loc.ny * side * excess;
     DR.Car.dev = side * limit;
 
+    // Where the car is touching the barrier, and which way the debris flies:
+    // back along the car, and in off the wall.
+    var wallOff = loc.hw + DR.Road.WALL_OFF;
+    var wxp = loc.px + loc.nx * side * wallOff;
+    var wyp = loc.py + loc.ny * side * wallOff;
+    var dx = -Math.sin(DR.Car.h) * 0.75 - loc.nx * side * 0.65;
+    var dy = -Math.cos(DR.Car.h) * 0.75 - loc.ny * side * 0.65;
+    var dn = Math.sqrt(dx * dx + dy * dy) || 1;
+    dx /= dn; dy /= dn;
+
+    // Grinding along the wall throws a thin, continuous shower, so a long
+    // scrape looks different from a single knock.
+    scrapeT += dt;
+    if (scrapeT >= 0.03) {
+      scrapeT = 0;
+      DR.FX.wallSparks(wxp, wyp, dx, dy, 3, 0.5);
+    }
+
     if (hitCool > 0) return;
 
     // Which mistake was it? The inside of a bend is the side it turns toward,
     // so hitting that edge means you cut in and the other means you ran wide.
     var dir = DR.Road.dirAt(loc.s);
     var kind = dir === 0 ? 'OFFLINE' : (side === dir ? 'INNER' : 'OUTER');
-    var severity = Math.min(1, Math.abs(Math.sin(DR.Car.slip)) * BASE_SPEED / 320);
+    // How hard: the worse of how sideways the car was and how fast it was
+    // actually closing on the wall, so a straight-on shunt registers too.
+    var approach = excess / Math.max(dt, 1e-4);
+    var severity = Math.min(1, Math.max(Math.abs(Math.sin(DR.Car.slip)) * BASE_SPEED / 320,
+                                        approach / 420));
 
     DR.FX.hit(kind, Math.max(0.35, severity), side, DR.Car);
+    DR.FX.wallHit(loc.s, side);
+    DR.FX.wallSparks(wxp, wyp, dx, dy, 16 + Math.round(severity * 16), 0.9 + severity * 0.6);
+    DR.Car.jolt(-side * (2.4 + severity * 3.4));
+    rebound = 130 + severity * 220;
+    rbNX = -loc.nx * side; rbNY = -loc.ny * side;
     hitCool = 0.45;
 
     // A crash should push you toward the correction you actually needed.
@@ -209,6 +245,15 @@
     if (hitPenalty < 1) hitPenalty = Math.min(1, hitPenalty + HIT_RECOVER_PER_SEC * dt);
     var speed = currentSpeed();
     DR.Car.update(dt, steer, speed);
+
+    // The push off the barrier, spent over a fifth of a second rather than
+    // all at once, so you can see the car come back off the wall.
+    if (rebound > 0.5) {
+      DR.Car.x += rbNX * rebound * dt;
+      DR.Car.y += rbNY * rebound * dt;
+      rebound *= Math.exp(-dt / REBOUND_TAU);
+    } else rebound = 0;
+
     checkEdges(dt);
     updateCamera(dt);
 
@@ -476,13 +521,19 @@
       drawOutline(ctx2, { x: b.x + 14, y: b.y + 14, w: 240, h: 240 }, i, null, 2.5);
 
       ctx2.textAlign = 'left';
-      ctx2.font = '800 36px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.font = '800 33px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
       ctx2.fillStyle = on ? '#eaf6ff' : 'rgba(226,240,250,0.8)';
       ctx2.fillText(tracks[i].name, b.x + 274, b.y + 74);
 
       ctx2.font = '700 20px ' + MONO;
       ctx2.fillStyle = on ? '#7dffb0' : 'rgba(125,255,176,0.6)';
       ctx2.fillText(tracks[i].tag, b.x + 274, b.y + 114);
+
+      // What a clean lap here is worth, so the three circuits read as three
+      // different lengths rather than three different shapes.
+      ctx2.font = '700 20px ' + MONO;
+      ctx2.fillStyle = on ? 'rgba(255,215,106,0.9)' : 'rgba(190,214,235,0.5)';
+      ctx2.fillText('TARGET LAP  ' + tracks[i].targetSecs + 's', b.x + 402, b.y + 114);
 
       ctx2.font = '500 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
       ctx2.fillStyle = 'rgba(180,206,226,0.85)';
@@ -568,6 +619,7 @@
     lap = 1; lapFlash = 0; boostT = 1e9;
     lapTimer = 0; timing = false; lapTimes.length = 0;
     hitPenalty = 1; meter = 0.55; driftTime = 0; pickPop = 0; boostDenied = 0;
+    rebound = 0; scrapeT = 0;
     raceTotal = 0; hintAlpha = 1;
     phase = 'racing';
   }
@@ -680,6 +732,7 @@
     DR.Road.drawPicks(ctx, v, clock);
     DR.FX.drawSmoke(ctx, v);
     DR.Car.draw(ctx, v);
+    DR.FX.drawSparks(ctx, v);
     DR.FX.drawSpeedLines(ctx, v);
     DR.FX.drawBurst(ctx, v);
     DR.FX.drawBoostFx(ctx, v);

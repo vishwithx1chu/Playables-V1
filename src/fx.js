@@ -16,6 +16,10 @@
   var flash = null;
   var kick = 1e9;          // seconds since boost fired
   var burst = [];          // sparks thrown off a collected pickup
+  var sparks = [];         // real sparks off the barrier, with height
+  var wallHitList = [];    // recent impacts, so the barrier can glow where you hit it
+  var MAX_SPARKS = 220;
+  var SPARK_G = 900;       // gravity on a spark, world units per second squared
 
   var tmp = { x: 0, y: 0 };
   var puff = null;
@@ -55,8 +59,41 @@
   function reset() {
     kick = 1e9; burst.length = 0;
     skids.length = 0; smoke.length = 0; labels.length = 0;
+    sparks.length = 0; wallHitList.length = 0;
     shake.mag = 0; shake.t = shake.dur; flash = null;
   }
+
+  /* Barrier sparks. Stored in world coordinates WITH a height, so they arc up
+     off the wall, fall, and stay put on the tarmac as you drive past them —
+     which is what sells the crash as something that happened in the world
+     rather than a flash over the screen.
+     (dx, dy) is roughly which way the spray is thrown: back along the car and
+     in off the wall. */
+  function wallSparks(x, y, dx, dy, n, power) {
+    for (var i = 0; i < n; i++) {
+      var spread = (Math.random() - 0.5) * 1.5;
+      var cs = Math.cos(spread), sn = Math.sin(spread);
+      var sp = (90 + Math.random() * 320) * power;
+      sparks.push({
+        x: x + (Math.random() - 0.5) * 12,
+        y: y + (Math.random() - 0.5) * 12,
+        z: 8 + Math.random() * 16,
+        vx: (dx * cs - dy * sn) * sp,
+        vy: (dx * sn + dy * cs) * sp,
+        vz: (70 + Math.random() * 250) * power,
+        life: 0, max: 0.35 + Math.random() * 0.6,
+        hot: Math.random()
+      });
+    }
+    if (sparks.length > MAX_SPARKS) sparks.splice(0, sparks.length - MAX_SPARKS);
+  }
+
+  // Lights up the stretch of barrier that was struck. road.js reads this.
+  function wallHit(s, side) {
+    wallHitList.push({ s: s, side: side, t: 0, dur: 0.75 });
+    if (wallHitList.length > 6) wallHitList.shift();
+  }
+  function wallHits() { return wallHitList; }
 
   function emit(car, speed, dt) {
     var mag = Math.abs(car.slip);
@@ -119,6 +156,23 @@
     }
 
     if (flash) { flash.t += dt; if (flash.t >= flash.dur) flash = null; }
+
+    for (i = wallHitList.length - 1; i >= 0; i--) {
+      wallHitList[i].t += dt;
+      if (wallHitList[i].t >= wallHitList[i].dur) wallHitList.splice(i, 1);
+    }
+
+    for (i = sparks.length - 1; i >= 0; i--) {
+      var sp = sparks[i];
+      sp.life += dt;
+      sp.x += sp.vx * dt; sp.y += sp.vy * dt; sp.z += sp.vz * dt;
+      sp.vz -= SPARK_G * dt;
+      sp.vx *= 0.97; sp.vy *= 0.97;
+      // Skitters along the tarmac instead of sinking through it.
+      if (sp.z < 1.5) { sp.z = 1.5; sp.vz = Math.abs(sp.vz) * 0.34; sp.vx *= 0.7; sp.vy *= 0.7; }
+      dx = sp.x - carX; dy = sp.y - carY;
+      if (sp.life >= sp.max || dx * dx + dy * dy > CULL * CULL) sparks.splice(i, 1);
+    }
 
     for (i = labels.length - 1; i >= 0; i--) {
       labels[i].t += dt;
@@ -301,6 +355,31 @@
     ctx.globalAlpha = 1;
   }
 
+  // Streaks rather than dots: each spark is drawn from where it was a moment
+  // ago to where it is now, so a fast one reads as a line of light.
+  var _s1 = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+  var _s2 = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+  function drawSparks(ctx, view) {
+    if (!sparks.length) return;
+    ctx.lineCap = 'round';
+    for (var i = 0; i < sparks.length; i++) {
+      var p = sparks[i], k = 1 - p.life / p.max;
+      DR.Road.project3(p.x, p.y, p.z, view, _s1);
+      if (!_s1.vis) continue;
+      DR.Road.project3(p.x - p.vx * 0.022, p.y - p.vy * 0.022,
+                       Math.max(0, p.z - p.vz * 0.022), view, _s2);
+      var w = Math.max(1, 3.4 * _s1.sc / DR.Road.SC_CAR);
+      ctx.globalAlpha = Math.min(1, k * 1.6);
+      ctx.strokeStyle = p.hot > 0.55 ? '#fff6d8' : (p.hot > 0.22 ? '#ffc247' : '#ff7a3d');
+      ctx.lineWidth = w;
+      ctx.beginPath();
+      ctx.moveTo(_s2.vis ? _s2.x : _s1.x, _s2.vis ? _s2.y : _s1.y);
+      ctx.lineTo(_s1.x, _s1.y);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
   // The words matter: colour alone must never be the only way to tell the two
   // mistakes apart.
   function drawLabels(ctx, view) {
@@ -332,7 +411,8 @@
     shakeOffset: shakeOffset,
     drawSkids: drawSkids, drawSmoke: drawSmoke,
     drawFlash: drawFlash, drawLabels: drawLabels, drawSpeedLines: drawSpeedLines,
-    drawBoostFx: drawBoostFx, drawBurst: drawBurst,
+    drawBoostFx: drawBoostFx, drawBurst: drawBurst, drawSparks: drawSparks,
+    wallSparks: wallSparks, wallHit: wallHit, wallHits: wallHits,
     boostKick: boostKick, pickupBurst: pickupBurst
   };
 })(window.DR = window.DR || {});

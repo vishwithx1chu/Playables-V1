@@ -32,32 +32,34 @@ touchscreen.
 
 ---
 
-## Current state: Milestone 2.1
+## Current state: Milestone 2.2
 
-Milestone 1 answers one question and nothing else: **does the drift feel
-good?** There is deliberately no score, no grading, no damage, no timer, no
-menu and no results screen — those are later milestones.
+There is still no score, no grading and no damage — a run never ends, and
+those are later milestones. What is in:
 
-What is in:
-
-- **Three circuits to choose from**, then a **three lap race** with a results
-  screen: total, each lap, and the quickest of them called out.
+- **Three circuits to choose from**, each built to a stated lap time: a clean
+  lap is **25 seconds** on Velocity Ring, **32** on Harbour Maze and **40** on
+  Grand Circuit. Then a **three lap race** with a results screen: total, each
+  lap, and the quickest of them called out.
 - Every circuit is a genuine closed loop — it comes back to its own starting
   point, not just its starting heading.
-
+- **Barriers you can see and hit.** A solid wall stands along both edges of
+  the road, and a crash now lights the wall up where you struck it, throws
+  real sparks that fall and lie on the tarmac behind you, rocks the car on its
+  springs and shoves it back off the wall over about a fifth of a second.
 - A real **circuit**, not a scrolling strip. The track is a line that genuinely
   turns through the world, so a corner is a corner: it has a radius, and you
   come out of it pointing somewhere new.
-- **Two full 180-degree hairpins per lap**, turning opposite ways, driven as
-  one continuous held drift all the way round.
-- **Four back-to-back esses** with no straight between them: three direction
-  changes in a row, flicking the car from one side to the other.
-- 85% of the lap is spent in a corner. The longest straight is 520 units.
-- The road is **380 units wide on the straights and up to 460 through the
+- **A full 180-degree hairpin on every lap**, driven as one continuous held
+  drift all the way round.
+- **Back-to-back corner changes** with no straight between them, flicking the
+  car from one side to the other.
+- Between 45% and 73% of a lap is spent in a corner, depending on the circuit.
+- The road is **452 units wide on the straights and up to 553 through the
   corners** — the tighter the corner, the more tarmac it gets, opening and
   closing smoothly, and staying open across a direction change instead of
   nipping in between two corners that meet.
-- Hitting a wall now helps you recover instead of trapping you. See below.
+- Hitting a wall helps you recover instead of trapping you. See below.
 - The lap returns to exactly the heading it started on, so it drives like a
   circuit rather than a spiral.
 - Low, close chase camera turning to follow the car, over a world-anchored
@@ -69,8 +71,9 @@ What is in:
 - **Boost is earned, not free.** A meter round the boost button; a press
   spends about a third of it. It fills two ways: by drifting, where an
   unbroken slide pays better the longer you hold it, and by collecting the
-  pickups scattered down the road. Their positions come from a running index,
-  so no two laps have them in the same places.
+  pickups on the road. Each circuit has a **fixed, hand-placed set** — four
+  plus one big one on the Ring, five plus one on the Maze, six plus one on the
+  Grand — and the same set comes round every lap, from lap one.
 - **A big slide costs speed.** Being sideways scrubs up to about 13% off, so
   drifting hard for fuel is a real trade against a clean quick line.
 - **Boost**: one press gives 35% more speed instantly — full on the very next
@@ -79,14 +82,15 @@ What is in:
 - **Lap timer**: running time for the lap you are on, plus the last three
   completed laps with the quickest of them called out.
 - **Lap counter** with a progress bar. One lap is the whole corner sequence
-  once, about 35 seconds of driving.
+  once: 25, 32 or 40 seconds of driving depending on which circuit you picked.
 - The car is **real 3D geometry**, not a flat shape: cross-sections from nose
   to tail plus a greenhouse on top, four cylindrical wheels that sit on the
   tarmac and steer with the drift, every face depth-sorted and lit from its
   own angle to the light.
 - Chevrons ahead of every corner; doubled red-orange ones for the hairpins.
-- Edge contact detected, with screen shake, an edge flash and a word telling
-  you which mistake you made — but no health lost and the run never ends.
+- Edge contact, with screen shake, sparks, a glowing patch of barrier, an edge
+  flash and a word telling you which mistake you made — but no health lost and
+  the run never ends.
 - Tire smoke while drifting, and skid marks that stay on the tarmac.
 - Constant speed.
 - Same amount of road visible on every screen shape, from 9:32 to 32:9.
@@ -102,9 +106,9 @@ The point of this milestone is feel, so drive it and answer these:
 3. **Do you get enough warning?** A crash should always feel like your fault.
 4. **Are the two mistakes clear?** Run wide and you hit the outer edge
    (amber, "RAN WIDE"); cut in and you hit the inner edge (violet, "CUT IN").
-5. **The hairpins.** Two a lap, opposite ways, signed with doubled red-orange
-   chevrons. Hold the whole way round — do not let go in the middle.
-6. **The esses.** Four corners with nothing between them. This is where the
+5. **The hairpin.** One a lap, signed with doubled red-orange chevrons bolted
+   to the barrier. Hold the whole way round — do not let go in the middle.
+6. **The esses.** Corners with nothing between them. This is where the
    0.42-second flick time bites; if they feel impossible rather than hard,
    that is the number to change.
 7. **Look further ahead than feels natural.** Testing showed the same driver
@@ -152,7 +156,7 @@ Top of [`src/car.js`](src/car.js):
 
 ```js
 var MIN_RADIUS    = 504;   // tightest circle the car can carve, at any speed
-var SLIP_AT_LIMIT = 58;    // degrees sideways at full lock — the drift dial
+var SLIP_AT_LIMIT = 52;    // degrees sideways at full lock — the drift dial
 var BUILD_TAU     = 0.34;  // seconds to swing the body out
 var DECAY_TAU     = 0.55;  // seconds for it to square itself up
 var REVERSE_TAU   = 0.42;  // seconds to flick the other way
@@ -176,8 +180,8 @@ you have to be wrong in without touching a single corner. Three numbers at the
 top of [`src/road.js`](src/road.js) control it:
 
 ```js
-var BASE_HW      = 190;      // half width on a straight
-var CORNER_EXTRA = 40;       // how much wider the tightest corner gets
+var BASE_HW      = 226;      // half width on a straight
+var CORNER_EXTRA = 52;       // how much wider the tightest corner gets
 var TIGHTEST_K   = 1 / 600;  // what counts as "tightest"
 ```
 
@@ -209,6 +213,33 @@ Two more things worth knowing:
 - The lap's left and right degrees are made to cancel out, so the track comes
   back to the heading it started on.
 
+## How a circuit gets its lap time
+
+Each circuit is written as a list of straights and corners, the way a track
+map reads. On its own that list does not close: walk it and you come back to
+the heading you started on but a long way from the starting point, which is
+why early maps looked like rally stages rather than circuits. Two things fix
+that, both in `closedLap` in [`src/road.js`](src/road.js).
+
+**Closing it.** Stretching and shrinking the straights can move the finish
+point anywhere in the plane — two unknowns, two equations. Rather than loading
+the whole correction onto two straights, it is spread across every straight in
+the smallest total change that shuts the loop, so the layout keeps its
+character.
+
+**Making it take the right number of seconds.** The same pass also aims at a
+target length. The length pull is strong in the early passes and fades out, so
+the last passes are free to concentrate on closing. Then one uniform scale
+lands it exactly on the target — and scaling a closed loop leaves it closed, so
+that final step costs nothing. It scales the corner radii too, which is why a
+test checks every circuit against the tightest circle the car can carve.
+
+The target itself comes from `targetSecs x pace` on each track. `pace` is how
+many world units a clean lap actually covers per second, **measured from a
+driven lap rather than guessed** — 856, 852 and 860 for the three circuits.
+Driven cleanly with no wall contact the three now come out at 24.9, 32.1 and
+40.0 seconds.
+
 ## Where lap-to-lap variety comes from
 
 The complaint was that once you know the track every lap comes out the same.
@@ -218,8 +249,12 @@ the time:
 1. **Drifting earns boost but costs speed.** Lean on it for fuel and you are
    slower through the corner; drive the tight line and you arrive with an
    empty meter.
-2. **Pickups move every lap**, and roughly one in six is worth four times the
-   others but sits far enough off the line that taking it costs you the corner.
+2. **The pickups make you choose a line.** They alternate sides, so collecting
+   the lot means weaving across the road; the big one sits on the inside of the
+   hairpin exit, where the car is still sliding wide, so taking it means giving
+   up the easy line out of the slowest corner on the track. They are fixed per
+   circuit and identical every lap, so which ones are worth the detour is
+   something you learn rather than something that happens to you.
 3. **Boost is finite**, so when you spend it matters.
 
 Measured over four laps by the same test driver, the spread went from 2.9% to
@@ -230,7 +265,8 @@ Measured over four laps by the same test driver, the spread went from 2.9% to
 `BASE_SPEED`, and the four boost numbers, are at the top of
 [`src/game.js`](src/game.js).
 
-Cruising speed is 624 and boost takes it to 718.
+Cruising speed is 808 and boost takes it to 1091 — 35% more, from the very
+next frame.
 
 The important part is not the boost itself, it is what had to change to make
 it safe. The car's turn rate is worked out from whatever the speed currently
@@ -250,10 +286,57 @@ much, `CORNER_EXTRA` in [`src/road.js`](src/road.js) is the offset: it hands
 back margin in exactly the corners where speed costs it, without touching the
 corners themselves or the speed.
 
+## The barriers
+
+There is a solid wall down both edges now — 66 units tall, sitting 6 units
+outside the painted line, so the car's outer edge stops a hair short of the
+wall face. It is built from the same ribbon of road the tarmac is drawn from:
+each panel is a vertical quad standing on the road edge. Raising a point does
+not move it sideways on screen under this projection, so a panel's top edge is
+just its foot's x with the y lifted by the wall height times the scale — no
+second projection needed, which is why a wall on both sides of the road costs
+almost nothing.
+
+Walls are painted **before** the road surface. Where the circuit folds back
+over itself in a hairpin, that makes the near tarmac cover the distant
+barrier, instead of a barrier hanging in mid-air over the road in front of you.
+
+The warning chevrons are now bolted to the barrier face rather than lying flat
+on the ground beside it, the way real circuit signage is — flat on the ground
+they would simply be hidden behind the wall.
+
+### Two things the walls broke, and the fixes
+
+**A wedge torn out of the road.** Sideways-on next to an edge, the road beside
+the camera is wider than the near plane is deep, so one edge of a slice can
+fall behind the near plane with the other still well in front. Throwing the
+whole slice away — which is what the code did — tore a wedge out of the road
+and the barrier right next to you, every single time you got properly
+sideways. The offending edge is now slid along the cross-section to the near
+plane instead, and the slice remembers where its edge points ended up so the
+lane markings still land in the right place.
+
+**Half the screen going cyan.** Road markings are a fixed width in *world*
+units, so a metre of neon a few metres from the lens is hundreds of pixels
+across. Fine head-on, where it is off the side of the screen; not fine
+sideways-on, where the edge line swings across the view. Past a scale ceiling
+a marking's world width is now wound down in step with the magnification, so
+it holds a steady width on screen. Because the scaling starts at exactly 1 at
+the ceiling there is no visible seam.
+
 ## What happens when you hit a wall
 
-A crash nudges you toward the correction you actually needed, which is not
-the same in both directions:
+You can now see it happen. The stretch of barrier you struck glows for
+three quarters of a second, sparks come off the contact point — thrown back
+along the car and in off the wall, with real height, so they arc up, fall,
+skitter and stay lying on the tarmac as you drive past them — the body rocks
+on its springs and settles over about half a second, and the car is pushed
+back off the wall over roughly a fifth of a second rather than being teleported
+clear. Grinding along a wall throws a thin continuous shower for as long as you
+stay on it, so a long scrape looks different from a single knock.
+
+Underneath, a crash nudges you toward the correction you actually needed, which
+is not the same in both directions:
 
 - **Ran wide** (hit the outer edge) means you were not turning *enough*. The
   crash now turns the car a little further into the corner, starting from
@@ -305,7 +388,7 @@ style.css       stops the page scrolling, zooming or selecting text
 src/input.js    touch, mouse and keyboard  ->  one number: -1, 0 or +1
 src/road.js     the track, and how the road is drawn
 src/car.js      the drift physics and the car
-src/fx.js       smoke, skid marks, screen shake, edge flash
+src/fx.js       smoke, skid marks, screen shake, edge flash, crash sparks
 src/game.js     the loop, and the responsive fairness rule
 ```
 
@@ -329,7 +412,7 @@ drift was kept, but the thing being steered is different underneath.
 
 **Responsive fairness.** The game is always drawn into a fixed 720 × 1280
 rectangle that is scaled to fit and centred, so every player sees exactly
-4800 world units of road ahead no matter what they are playing on. Spare
+2600 world units of road ahead no matter what they are playing on. Spare
 screen becomes black bars, never extra road. A tall phone must not be able
 to see further ahead than a wide monitor.
 

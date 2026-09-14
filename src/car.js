@@ -51,10 +51,13 @@
     gripSlip: 0,     // how far round the tyres have actually taken hold
     slip: 0,         // what you see: the same as cmdSlip
     yawRate: 0,
+    roll: 0,         // how far the body is rocked over — a crash, not a bank
+    rollV: 0,
 
     reset: function () {
       this.x = 0; this.y = 0; this.h = 0;
       this.bodyYaw = 0; this.cmdSlip = 0; this.gripSlip = 0; this.slip = 0; this.yawRate = 0;
+      this.roll = 0; this.rollV = 0;
       this.roadS = 0; this.dev = 0;
     },
 
@@ -89,6 +92,19 @@
 
       this.x += Math.sin(this.h) * speed * dt;
       this.y += Math.cos(this.h) * speed * dt;
+
+      // The body rocks on its springs after a knock and settles in about half
+      // a second — a damped spring, so it overshoots once instead of snapping
+      // back, which is what makes an impact look like it had weight.
+      this.rollV += (-ROLL_K * this.roll - ROLL_C * this.rollV) * dt;
+      this.roll += this.rollV * dt;
+      if (this.roll > 0.22) { this.roll = 0.22; this.rollV = 0; }
+      if (this.roll < -0.22) { this.roll = -0.22; this.rollV = 0; }
+    },
+
+    // A knock from the side: the barrier hitting the car, seen on the car.
+    jolt: function (amount) {
+      this.rollV += amount;
     },
 
     // Shove the body round — used by a crash to help you recover, since slip
@@ -228,6 +244,9 @@
   }
 
   var wheelBuf = [];
+  var ROLL_K = 260;   // spring, about two and a half rocks a second
+  var ROLL_C = 9;     // damping, so it settles rather than wobbles on
+
   function drawCar(ctx, view, car) {
     var i, j, f, n;
     var b = car.bodyYaw, cb = Math.cos(b), sb = Math.sin(b);
@@ -259,11 +278,17 @@
     ctx.restore();
 
     // --- every vertex into the world, then onto the screen ---
+    var cr = Math.cos(car.roll), sr = Math.sin(car.roll);
+    var lift = Math.abs(car.roll) * 26;   // keeps the low corner out of the tarmac
     for (i = 0; i < VX.length; i++) {
       var L = VX[i];
-      wx[i] = car.x + L[0] * cb + L[1] * sb;
-      wy[i] = car.y - L[0] * sb + L[1] * cb;
-      wz[i] = L[2];
+      // Rocked over about the car's own nose-to-tail axis before it goes
+      // anywhere near the world, so the roll rides along with the heading.
+      var rx = L[0] * cr - L[2] * sr;
+      var rz2 = L[0] * sr + L[2] * cr + lift;
+      wx[i] = car.x + rx * cb + L[1] * sb;
+      wy[i] = car.y - rx * sb + L[1] * cb;
+      wz[i] = rz2;
       var q = DR.Road.project3(wx[i], wy[i], wz[i], view, {});
       px[i] = q.x; py[i] = q.y; pv[i] = q.vis; pz[i] = q.rz;
     }
