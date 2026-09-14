@@ -14,6 +14,8 @@
   var skids = [], smoke = [], labels = [];
   var shake = { mag: 0, t: 0, dur: 0.001 };
   var flash = null;
+  var kick = 1e9;          // seconds since boost fired
+  var burst = [];          // sparks thrown off a collected pickup
 
   var tmp = { x: 0, y: 0 };
   var puff = null;
@@ -40,7 +42,18 @@
     puff = c; return c;
   }
 
+  function boostKick() { kick = 0; }
+
+  function pickupBurst() {
+    for (var i = 0; i < 16; i++) {
+      var a = Math.random() * Math.PI * 2, sp = 120 + Math.random() * 260;
+      burst.push({ a: a, r: 10, v: sp, life: 0, max: 0.45 + Math.random() * 0.25 });
+    }
+    if (burst.length > 64) burst.splice(0, burst.length - 64);
+  }
+
   function reset() {
+    kick = 1e9; burst.length = 0;
     skids.length = 0; smoke.length = 0; labels.length = 0;
     shake.mag = 0; shake.t = shake.dur; flash = null;
   }
@@ -97,6 +110,13 @@
   function update(dt, carX, carY) {
     var i, p, dx, dy;
     shake.t += dt;
+    if (kick < 1e9) kick += dt;
+    for (i = burst.length - 1; i >= 0; i--) {
+      burst[i].life += dt;
+      burst[i].r += burst[i].v * dt;
+      burst[i].v *= 0.93;
+      if (burst[i].life >= burst[i].max) burst.splice(i, 1);
+    }
 
     if (flash) { flash.t += dt; if (flash.t >= flash.dur) flash = null; }
 
@@ -209,8 +229,9 @@
   // Speed lines while boosting: streaks pulled out from the vanishing point,
   // strongest at the edges of the frame where peripheral motion reads.
   var lineSeed = null;
-  function drawSpeedLines(ctx, view, amount) {
-    if (amount <= 0.02) return;
+  function drawSpeedLines(ctx, view) {
+    // Always a little, because the car is never slow; a lot while boosting.
+    var amount = 0.20 + 0.80 * (view.boost || 0);
     if (!lineSeed) {
       lineSeed = [];
       var sd = 7717;
@@ -221,11 +242,11 @@
         lineSeed.push({ a: a, r: 0.30 + (sd / 0x7fffffff) * 0.68 });
       }
     }
-    var cx = view.W * 0.5, cy = DR.Road.HORIZON_Y + 120;
+    var cx = view.W * 0.5, cy = DR.Road.HORIZON_Y + 150;
     var R = Math.max(view.W, view.H);
     ctx.lineCap = 'round';
-    for (var i = 0; i < lineSeed.length; i++) {
-      var L = lineSeed[i];
+    for (var j = 0; j < lineSeed.length; j++) {
+      var L = lineSeed[j];
       var d0 = L.r * R, d1 = d0 + (110 + 330 * amount);
       var sn = Math.sin(L.a), cs = Math.cos(L.a);
       ctx.globalAlpha = 0.52 * amount * L.r;
@@ -235,6 +256,47 @@
       ctx.moveTo(cx + cs * d0, cy + sn * d0);
       ctx.lineTo(cx + cs * d1, cy + sn * d1);
       ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // The shove when boost fires, and the tunnel-vision while it lasts.
+  function drawBoostFx(ctx, view) {
+    var W = view.W, H = view.H, b = view.boost || 0;
+
+    if (b > 0.01) {
+      // Corners darken, which reads as the world narrowing around you.
+      var vg = ctx.createRadialGradient(W * 0.5, H * 0.55, H * 0.22, W * 0.5, H * 0.55, H * 0.78);
+      vg.addColorStop(0, 'rgba(0,0,0,0)');
+      vg.addColorStop(1, 'rgba(6,2,14,' + (0.52 * b) + ')');
+      ctx.fillStyle = vg;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    if (kick < 0.45) {
+      var k = 1 - kick / 0.45;
+      var rad = 60 + (1 - k) * H * 0.95;
+      ctx.globalAlpha = k * k * 0.55;
+      ctx.lineWidth = 6 + 26 * k;
+      ctx.strokeStyle = '#ffd9a0';
+      ctx.beginPath();
+      ctx.arc(W * 0.5, DR.Road.CAR_Y, rad, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // Sparks off a pickup, thrown from where the car is.
+  function drawBurst(ctx, view) {
+    if (!burst.length) return;
+    var cx = view.W * 0.5, cy = DR.Road.CAR_Y;
+    for (var i = 0; i < burst.length; i++) {
+      var p = burst[i], k = 1 - p.life / p.max;
+      ctx.globalAlpha = k;
+      ctx.fillStyle = i % 3 === 0 ? '#fff3cf' : '#ffb24d';
+      var x = cx + Math.cos(p.a) * p.r, y = cy + Math.sin(p.a) * p.r * 0.55;
+      var sz = 2 + 4 * k;
+      ctx.fillRect(x - sz * 0.5, y - sz * 0.5, sz, sz);
     }
     ctx.globalAlpha = 1;
   }
@@ -269,6 +331,8 @@
     reset: reset, emit: emit, hit: hit, update: update,
     shakeOffset: shakeOffset,
     drawSkids: drawSkids, drawSmoke: drawSmoke,
-    drawFlash: drawFlash, drawLabels: drawLabels, drawSpeedLines: drawSpeedLines
+    drawFlash: drawFlash, drawLabels: drawLabels, drawSpeedLines: drawSpeedLines,
+    drawBoostFx: drawBoostFx, drawBurst: drawBurst,
+    boostKick: boostKick, pickupBurst: pickupBurst
   };
 })(window.DR = window.DR || {});

@@ -18,10 +18,30 @@
      The car's grip is derived from whatever the speed currently is (see
      MIN_RADIUS in car.js), so boosting into a corner never makes it
      impossible — it just gives you less time to get it right. */
-  var BASE_SPEED = 718;
+  var BASE_SPEED = 898;      // was 718, up 25%
   var BOOST_MULT = 1.35;     // 35% faster while boosting, applied instantly
   var BOOST_HOLD = 1.5;      // seconds at full boost
   var BOOST_FADE = 3.0;      // seconds easing back to normal
+
+  /* ------------------------------ BOOST FUEL ----------------------------
+     Boost is no longer free. The meter fills two ways: by drifting, where a
+     longer unbroken slide pays better and better, and by running over the
+     pickups scattered down the road. Their positions change every lap, so
+     the fastest line changes with them. */
+  var BOOST_COST      = 0.34;   // a full meter is just under three boosts
+  var FILL_BASE       = 0.070;  // per second at full slip, right after turn-in
+  var FILL_RAMP       = 0.055;  // extra per second of unbroken drift...
+  var FILL_RAMP_CAP   = 3.0;    // ...up to this many seconds
+  var FILL_PICKUP     = 0.18;
+  var DRIFT_MIN       = 0.18;   // radians of slip before it counts as drifting
+  /* --------------------------------------------------------------------- */
+
+  /* Sideways costs you. Without this, drifting is free and the fuel meter has
+     no decision in it: you would simply drift everywhere. Now a big slide
+     earns boost faster but bleeds speed while it lasts, so how hard to lean on
+     it is a real choice — and two laps driven differently take different
+     times. */
+  var SLIP_DRAG = 0.185;
 
   // Every wall costs 10% of your speed, and it takes a second to win back.
   var HIT_LOSS = 0.10;
@@ -47,6 +67,11 @@
   var timing = false;        // false until the start line is crossed
   var lapTimes = [];         // completed laps, newest last
   var hitPenalty = 1;        // speed multiplier lost to walls, climbing back to 1
+  var meter = 0.55;          // boost in the tank, 0..1
+  var driftTime = 0;         // how long the current unbroken drift has run
+  var clock = 0;             // running seconds, for animating pickups
+  var pickPop = 0;           // brief swell when one is collected
+  var boostDenied = 0;       // flashes the meter when you press with none left
 
   function resize() {
     var vw = Math.max(1, window.innerWidth);
@@ -70,7 +95,12 @@
 
   function boostAmount() { return (boostMult() - 1) / (BOOST_MULT - 1); }
 
-  function currentSpeed() { return BASE_SPEED * boostMult() * hitPenalty; }
+  function slipDrag() {
+    var sn = Math.sin(DR.Car.slip);
+    return 1 - SLIP_DRAG * sn * sn;
+  }
+
+  function currentSpeed() { return BASE_SPEED * boostMult() * hitPenalty * slipDrag(); }
 
   function view() {
     return {
@@ -147,8 +177,27 @@
     var steer = DR.Input.steer();
     if (steer !== 0) hintAlpha = Math.max(0, hintAlpha - dt * 2.4);
 
-    if (DR.Input.takeBoost()) boostT = 0;
+    clock += dt;
+    if (pickPop > 0) pickPop = Math.max(0, pickPop - dt / 0.5);
+    if (boostDenied > 0) boostDenied = Math.max(0, boostDenied - dt / 0.6);
+
+    if (DR.Input.takeBoost()) {
+      if (meter >= BOOST_COST) { meter -= BOOST_COST; boostT = 0; DR.FX.boostKick(); }
+      else boostDenied = 1;
+    }
     if (boostT < 1e9) boostT += dt;
+
+    // Drifting earns boost, and the longer you hold a slide the better it pays.
+    var slipMag = Math.abs(DR.Car.slip);
+    if (slipMag > DRIFT_MIN) {
+      driftTime = Math.min(FILL_RAMP_CAP, driftTime + dt);
+      var slipFrac = Math.min(1, (slipMag - DRIFT_MIN) / (DR.Car.SLIP_AT_LIMIT - DRIFT_MIN));
+      meter = Math.min(1, meter + (FILL_BASE + FILL_RAMP * driftTime) * slipFrac * dt);
+    } else {
+      driftTime = 0;
+    }
+
+    collectPicks();
 
     if (hitPenalty < 1) hitPenalty = Math.min(1, hitPenalty + HIT_RECOVER_PER_SEC * dt);
     var speed = currentSpeed();
@@ -290,37 +339,65 @@
   function drawBoostButton(ctx2) {
     var b = BOOST_BTN, amt = boostAmount();
     var live = boostT < BOOST_HOLD + BOOST_FADE;
+    var ready = meter >= BOOST_COST;
+    var i;
 
     ctx2.beginPath();
     ctx2.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-    ctx2.fillStyle = live ? 'rgba(255,120,40,0.20)' : 'rgba(255,255,255,0.07)';
+    ctx2.fillStyle = live ? 'rgba(255,120,40,0.22)'
+                          : (ready ? 'rgba(60,220,255,0.10)' : 'rgba(255,255,255,0.05)');
     ctx2.fill();
     ctx2.lineWidth = 3;
-    ctx2.strokeStyle = live ? 'rgba(255,170,80,0.85)' : 'rgba(190,220,240,0.45)';
+    ctx2.strokeStyle = live ? 'rgba(255,170,80,0.9)'
+                            : (ready ? 'rgba(120,235,255,0.75)' : 'rgba(150,170,190,0.35)');
     ctx2.stroke();
 
+    // The ring IS the fuel gauge. Ticks mark each boost you can afford.
+    var rr = b.r - 9;
+    ctx2.beginPath();
+    ctx2.arc(b.x, b.y, rr, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * meter);
+    ctx2.lineWidth = 9;
+    ctx2.lineCap = 'butt';
+    ctx2.strokeStyle = boostDenied > 0
+      ? 'rgba(255,90,80,' + (0.55 + 0.45 * boostDenied) + ')'
+      : (ready ? '#41e0ff' : 'rgba(120,180,210,0.55)');
+    ctx2.stroke();
+
+    for (i = 1; i * BOOST_COST < 1.0; i++) {
+      var a = -Math.PI / 2 + Math.PI * 2 * (i * BOOST_COST);
+      ctx2.beginPath();
+      ctx2.moveTo(b.x + Math.cos(a) * (rr - 6), b.y + Math.sin(a) * (rr - 6));
+      ctx2.lineTo(b.x + Math.cos(a) * (rr + 6), b.y + Math.sin(a) * (rr + 6));
+      ctx2.lineWidth = 2.5;
+      ctx2.strokeStyle = 'rgba(6,10,20,0.85)';
+      ctx2.stroke();
+    }
+
+    // While boosting, a second arc drains through the two seconds of shove.
     if (amt > 0.001) {
       ctx2.beginPath();
-      ctx2.arc(b.x, b.y, b.r - 8, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * amt);
-      ctx2.lineWidth = 7;
+      ctx2.arc(b.x, b.y, b.r + 8, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * amt);
+      ctx2.lineWidth = 5;
       ctx2.strokeStyle = '#ffb24d';
       ctx2.stroke();
     }
 
-    // Chevron mark, pointing the way you go.
+    var pop = 1 + pickPop * 0.18;
+    ctx2.save();
+    ctx2.translate(b.x, b.y);
+    ctx2.scale(pop, pop);
     ctx2.beginPath();
-    ctx2.moveTo(b.x - 20, b.y + 12);
-    ctx2.lineTo(b.x, b.y - 14);
-    ctx2.lineTo(b.x + 20, b.y + 12);
+    ctx2.moveTo(-20, 12); ctx2.lineTo(0, -14); ctx2.lineTo(20, 12);
     ctx2.lineWidth = 6;
     ctx2.lineJoin = 'round';
     ctx2.lineCap = 'round';
-    ctx2.strokeStyle = live ? '#fff0d0' : 'rgba(220,240,255,0.75)';
+    ctx2.strokeStyle = live ? '#fff0d0' : (ready ? '#dff8ff' : 'rgba(190,210,225,0.5)');
     ctx2.stroke();
+    ctx2.restore();
 
     ctx2.textAlign = 'center';
     ctx2.font = '700 19px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = live ? 'rgba(255,220,170,0.95)' : 'rgba(190,220,240,0.7)';
+    ctx2.fillStyle = live ? 'rgba(255,220,170,0.95)' : (ready ? 'rgba(190,240,255,0.9)' : 'rgba(170,190,205,0.6)');
     ctx2.fillText('BOOST', b.x, b.y + 34);
     ctx2.textAlign = 'left';
   }
@@ -374,6 +451,24 @@
     ctx2.stroke();
   }
 
+  // Did we just run over a pickup?
+  function collectPicks() {
+    var list = DR.Road.picks();
+    DR.Road.ensurePicks(DR.Car.roadS + DR.Road.LOOKAHEAD);
+    DR.Road.trimPicks(DR.Car.roadS - 400);
+    for (var i = 0; i < list.length; i++) {
+      var k = list[i];
+      if (k.taken) continue;
+      if (Math.abs(k.s - DR.Car.roadS) > 70) continue;
+      var lateral = k.lat * DR.Road.halfWidthAt(k.s);
+      if (Math.abs(DR.Car.dev - lateral) > 86) continue;
+      k.taken = true;
+      meter = Math.min(1, meter + (k.val || FILL_PICKUP));
+      pickPop = 1;
+      DR.FX.pickupBurst();
+    }
+  }
+
   function drawHint(ctx2, v) {
     if (hintAlpha <= 0.01) return;
     ctx2.globalAlpha = hintAlpha;
@@ -414,9 +509,12 @@
     DR.FX.drawSkids(ctx, v);
     DR.Road.drawChevrons(ctx, v);
     DR.Road.drawFog(ctx, v);
+    DR.Road.drawPicks(ctx, v, clock);
     DR.FX.drawSmoke(ctx, v);
     DR.Car.draw(ctx, v);
-    DR.FX.drawSpeedLines(ctx, v, v.boost);
+    DR.FX.drawSpeedLines(ctx, v);
+    DR.FX.drawBurst(ctx, v);
+    DR.FX.drawBoostFx(ctx, v);
     DR.FX.drawFlash(ctx, v, rib);
     DR.FX.drawLabels(ctx, v);
     drawHud(ctx, v);
@@ -474,6 +572,9 @@
     speed: currentSpeed,
     hitPenalty: function () { return hitPenalty; },
     boostAmount: boostAmount,
+    meter: function () { return meter; },
+    setMeter: function (v) { meter = v; },
+    BOOST_COST: BOOST_COST,
     lapTimes: function () { return lapTimes.slice(); },
     lapTimer: function () { return lapTimer; },
     timing: function () { return timing; },
@@ -487,6 +588,7 @@
       DR.Road.reset(); DR.Car.reset(); DR.FX.reset();
       camReady = false; hitCool = 0; lap = 1; lapFlash = 0; boostT = 1e9;
       lapTimer = 0; timing = false; lapTimes.length = 0; hitPenalty = 1;
+      meter = 0.55; driftTime = 0; clock = 0; pickPop = 0; boostDenied = 0;
     }
   };
 

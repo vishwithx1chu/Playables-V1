@@ -32,7 +32,7 @@ touchscreen.
 
 ---
 
-## Current state: Milestone 1.9
+## Current state: Milestone 2.0
 
 Milestone 1 answers one question and nothing else: **does the drift feel
 good?** There is deliberately no score, no grading, no damage, no timer, no
@@ -61,6 +61,13 @@ What is in:
   turned you around.
 - **Minimap** top right, showing the lap's shape and where you are on it.
 - Hitting a wall costs **10% of your speed**, won back over one second.
+- **Boost is earned, not free.** A meter round the boost button; a press
+  spends about a third of it. It fills two ways: by drifting, where an
+  unbroken slide pays better the longer you hold it, and by collecting the
+  pickups scattered down the road. Their positions come from a running index,
+  so no two laps have them in the same places.
+- **A big slide costs speed.** Being sideways scrubs up to about 13% off, so
+  drifting hard for fuel is a real trade against a clean quick line.
 - **Boost**: one press gives 35% more speed instantly — full on the very next
   frame — held for one and a half seconds, then eased back over three. Unlimited presses.
   Bottom-centre button on touch and mouse, Space / Up / W on the keyboard.
@@ -196,6 +203,22 @@ Two more things worth knowing:
   easy; a 60-degree corner at radius 600 is hard.
 - The lap's left and right degrees are made to cancel out, so the track comes
   back to the heading it started on.
+
+## Where lap-to-lap variety comes from
+
+The complaint was that once you know the track every lap comes out the same.
+Three things now pull against each other, and the balance you strike changes
+the time:
+
+1. **Drifting earns boost but costs speed.** Lean on it for fuel and you are
+   slower through the corner; drive the tight line and you arrive with an
+   empty meter.
+2. **Pickups move every lap**, and roughly one in six is worth four times the
+   others but sits far enough off the line that taking it costs you the corner.
+3. **Boost is finite**, so when you spend it matters.
+
+Measured over four laps by the same test driver, the spread went from 2.9% to
+**8.6%** — laps between 22.4 and 28.1 seconds.
 
 ## Speed and boost
 

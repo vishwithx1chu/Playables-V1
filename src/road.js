@@ -6,8 +6,8 @@
 (function (DR) {
   'use strict';
 
-  var BASE_HW = 190;         // straights: road is 380 units wide
-  var CORNER_EXTRA = 65;     // corners widen by up to this much per side
+  var BASE_HW = 226;         // straights: road is 452 units wide
+  var CORNER_EXTRA = 52;     // corners widen by up to this much per side
   var TIGHTEST_K = 1 / 600;  // curvature of the tightest corner on the track
   var WIDEN_WIN = 30;        // smoothing window, in samples either side (240 units)
   var HALF_W = BASE_HW;      // kept for anything asking for the nominal width
@@ -48,25 +48,25 @@
   var LAP = [
     { kind: 'str',  len: 520 },
     { kind: 'turn', dir:  1, r: 820, deg:  95 },   // opening sweeper
-    { kind: 'str',  len: 140 },
+    { kind: 'str',  len: 300 },
     { kind: 'turn', dir: -1, r: 620, deg:  55 },   // chicane: nothing between
     { kind: 'turn', dir:  1, r: 620, deg:  55 },
     { kind: 'str',  len: 160 },
     { kind: 'turn', dir: -1, r: 600, deg: 180, hairpin: true },   // tightest corner
-    { kind: 'str',  len: 180 },
+    { kind: 'str',  len: 360 },
     { kind: 'turn', dir:  1, r: 700, deg:  70 },
     { kind: 'str',  len: 120 },
     { kind: 'turn', dir:  1, r: 640, deg:  60 },   // four esses back to back:
     { kind: 'turn', dir: -1, r: 640, deg:  60 },   // three full reversals with
     { kind: 'turn', dir:  1, r: 640, deg:  60 },   // no rest anywhere in them
     { kind: 'turn', dir: -1, r: 640, deg:  60 },
-    { kind: 'str',  len: 200 },
+    { kind: 'str',  len: 320 },
     { kind: 'turn', dir:  1, r: 900, deg: 100 },   // long committed right
-    { kind: 'str',  len: 140 },
+    { kind: 'str',  len: 260 },
     { kind: 'turn', dir: -1, r: 640, deg: 150 },   // almost a hairpin
     { kind: 'str',  len: 160 },
     { kind: 'turn', dir:  1, r: 620, deg: 180, hairpin: true },   // hairpin the other way
-    { kind: 'str',  len: 220 },
+    { kind: 'str',  len: 420 },
     { kind: 'turn', dir: -1, r: 760, deg: 115 },
     { kind: 'str',  len: 300 }
   ];
@@ -113,6 +113,101 @@
     }
     _outline = pts;
     return _outline;
+  }
+
+  /* Boost pickups. Their positions come from a hash of a running index, so
+     they are deterministic but never repeat: the index keeps climbing, so lap
+     two is not lap one. That is most of where lap-to-lap variety comes from. */
+  var PICK_MIN_GAP = 1200, PICK_VAR_GAP = 1600, PICK_LAT = 0.62;
+  var picks = [], pickGenS = 0, pickIdx = 0;
+
+  function hash1(n) {
+    var x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function ensurePicks(sMax) {
+    while (pickGenS < sMax) {
+      pickGenS += PICK_MIN_GAP + hash1(pickIdx * 2 + 1) * PICK_VAR_GAP;
+      var roll = hash1(pickIdx * 7 + 13);
+      var big = roll > 0.82;                    // roughly one in six
+      picks.push({
+        s: pickGenS,
+        // the big ones sit further out, so they cost you your line to take
+        lat: (hash1(pickIdx * 2 + 2) * 2 - 1) * (big ? 0.86 : PICK_LAT),
+        val: big ? 0.50 : 0.12 + roll * 0.22,
+        big: big,
+        taken: false,
+        id: pickIdx
+      });
+      pickIdx++;
+    }
+  }
+
+  function trimPicks(sMin) {
+    while (picks.length && picks[0].s < sMin) picks.shift();
+  }
+
+  function pickList() { return picks; }
+
+  function resetPicks() { picks = []; pickGenS = 900; pickIdx = 0; }
+
+  // A pickup floats above the tarmac, bobbing and turning.
+  function drawPicks(ctx, view, time) {
+    ensurePicks(view.carS + LOOKAHEAD);
+    var p = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+    for (var i = 0; i < picks.length; i++) {
+      var k = picks[i];
+      if (k.taken) continue;
+      if (k.s < view.carS - 200 || k.s > view.carS + LOOKAHEAD) continue;
+      var idx = indexAt(k.s);
+      var hh = ch[idx], nx = Math.cos(hh), ny = -Math.sin(hh);
+      var off = k.lat * widthAtIndex(idx);
+      var bob = 34 + Math.sin(time * 2.6 + k.id) * 9;
+      project3(cx[idx] + nx * off, cy[idx] + ny * off, bob, view, p);
+      if (!p.vis) continue;
+      var r = 34 * p.sc;
+      if (r < 2.5) continue;
+
+      // A beam up from the tarmac, so it is obvious from a long way back.
+      var gp = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+      project3(cx[idx] + nx * off, cy[idx] + ny * off, 0, view, gp);
+      if (gp.vis) {
+        var bw = Math.max(2, 15 * p.sc);
+        var bg = ctx.createLinearGradient(0, gp.y, 0, p.y - r);
+        bg.addColorStop(0, k.big ? 'rgba(255,123,224,0.00)' : 'rgba(255,178,77,0.00)');
+        bg.addColorStop(1, k.big ? 'rgba(255,168,238,0.40)' : 'rgba(255,215,106,0.38)');
+        ctx.fillStyle = bg;
+        ctx.fillRect(gp.x - bw * 0.5, p.y - r, bw, gp.y - (p.y - r));
+      }
+
+      var spin = time * 2.2 + k.id;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+
+      ctx.globalAlpha = k.big ? 0.42 : 0.30;
+      ctx.beginPath();
+      ctx.arc(0, 0, r * (k.big ? 2.0 : 1.5), 0, Math.PI * 2);
+      ctx.fillStyle = k.big ? '#ff7be0' : '#ffb24d';
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      if (k.big) { ctx.scale(1.35, 1.35); }
+
+      // A chevron that turns on the spot, squashed to fake the rotation.
+      ctx.scale(Math.max(0.22, Math.abs(Math.cos(spin))), 1);
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.62, r * 0.42);
+      ctx.lineTo(0, -r * 0.52);
+      ctx.lineTo(r * 0.62, r * 0.42);
+      ctx.lineTo(0, r * 0.06);
+      ctx.closePath();
+      ctx.fillStyle = k.big ? '#ffa8ee' : '#ffd76a';
+      ctx.strokeStyle = k.big ? '#ffe6fb' : '#fff3cf';
+      ctx.lineWidth = Math.max(1, r * 0.1);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   // Centreline, sampled every SAMPLE units. Uniform spacing means arc length
@@ -720,6 +815,7 @@
     dirAt: dirAt, isHairpin: isHairpin, radiusAt: radiusAt,
     lengthGenerated: lengthGenerated,
     lapLength: lapLength, INTRO_LEN: INTRO_LEN, lapOutline: lapOutline,
+    picks: pickList, ensurePicks: ensurePicks, trimPicks: trimPicks, drawPicks: drawPicks,
     project: project, project3: project3, CAM_LIFT: CAM_LIFT,
     buildRibbon: buildRibbon, quads: quads,
     drawBackground: drawBackground, draw: draw,
