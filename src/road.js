@@ -6,7 +6,7 @@
 (function (DR) {
   'use strict';
 
-  var HALF_W = 170;          // road is 340 units wide
+  var HALF_W = 190;          // road is 380 units wide
   var SAMPLE = 8;            // world units between stored centreline points
 
   /* ---------------------------- THE CAMERA ----------------------------

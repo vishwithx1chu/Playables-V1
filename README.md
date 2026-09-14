@@ -27,7 +27,7 @@ Let go to straighten out. That is every input the game has.
 
 ---
 
-## Current state: Milestone 1.2
+## Current state: Milestone 1.3
 
 Milestone 1 answers one question and nothing else: **does the drift feel
 good?** There is deliberately no score, no grading, no damage, no timer, no
@@ -43,6 +43,8 @@ What is in:
 - **Four back-to-back esses** with no straight between them: three direction
   changes in a row, flicking the car from one side to the other.
 - 85% of the lap is spent in a corner. The longest straight is 520 units.
+- The road is 380 units wide, which leaves about 150 units of room either side
+  of the centre line once the car's own width is taken off.
 - The lap returns to exactly the heading it started on, so it drives like a
   circuit rather than a spiral.
 - Chase camera behind and above the car, turning to follow it, with a
@@ -125,6 +127,12 @@ is checked against it.
 The lap is the `LAP` list near the top of [`src/road.js`](src/road.js), written
 the way a track map reads — a straight of so many units, then a corner of so
 many degrees at such a radius.
+
+Road width is `HALF_W` at the top of the same file, and it is the gentlest
+difficulty dial there is: it changes how much room you have to be wrong in
+without touching a single corner. Widening the road from 340 to 380 took a
+good driver from occasional contact to clean laps, while leaving a sloppy one
+just as punished.
 
 **The one rule: no corner's radius may go near 503.** A corner at exactly that
 radius needs 100% of the car's turning for its whole length, which leaves
