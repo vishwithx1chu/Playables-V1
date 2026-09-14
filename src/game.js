@@ -10,7 +10,22 @@
   var LOGICAL_W = 720;
   var LOGICAL_H = 1280;
 
-  var SPEED = 540;       // constant for now; the speed system is a later milestone
+  /* ------------------------------- SPEED -------------------------------
+     BASE_SPEED is the cruising speed. Boost multiplies it for BOOST_HOLD
+     seconds, then eases back over BOOST_FADE. Unlimited presses; pressing
+     again restarts the two seconds.
+
+     The car's grip is derived from whatever the speed currently is (see
+     MIN_RADIUS in car.js), so boosting into a corner never makes it
+     impossible — it just gives you less time to get it right. */
+  var BASE_SPEED = 567;      // was 540, up 5%
+  var BOOST_MULT = 1.10;     // 10% faster while boosting
+  var BOOST_HOLD = 2.0;      // seconds at full boost
+  var BOOST_FADE = 3.0;      // seconds easing back to normal
+  var BOOST_RISE = 0.12;     // brief ramp in, so it surges instead of snapping
+  /* --------------------------------------------------------------------- */
+
+  var BOOST_BTN = { x: 360, y: 1168, r: 72 };
   var FIXED = 1 / 60;    // physics rate, so the feel never changes with framerate
 
   var CAM_TAU  = 0.22;   // how lazily the camera swings round to follow you
@@ -23,6 +38,7 @@
   var hintAlpha = 1;
   var hitCool = 0;
   var lap = 1, lapFlash = 0;
+  var boostT = 1e9;          // seconds since the boost was pressed
 
   function resize() {
     var vw = Math.max(1, window.innerWidth);
@@ -38,6 +54,15 @@
     // Nothing about the run is touched here, so resizing mid-drift is safe.
   }
 
+  function boostMult() {
+    if (boostT >= BOOST_HOLD + BOOST_FADE) return 1;
+    if (boostT < BOOST_RISE) return 1 + (BOOST_MULT - 1) * (boostT / BOOST_RISE);
+    if (boostT < BOOST_HOLD) return BOOST_MULT;
+    return BOOST_MULT - (BOOST_MULT - 1) * ((boostT - BOOST_HOLD) / BOOST_FADE);
+  }
+
+  function boostAmount() { return (boostMult() - 1) / (BOOST_MULT - 1); }
+
   function view() {
     return {
       W: LOGICAL_W, H: LOGICAL_H,
@@ -45,7 +70,8 @@
       carS: DR.Car.roadS,
       camX: camX, camY: camY,
       camAngle: camAngle,
-      camSin: Math.sin(camAngle), camCos: Math.cos(camAngle)
+      camSin: Math.sin(camAngle), camCos: Math.cos(camAngle),
+      boost: boostAmount()
     };
   }
 
@@ -86,7 +112,7 @@
     // so hitting that edge means you cut in and the other means you ran wide.
     var dir = DR.Road.dirAt(loc.s);
     var kind = dir === 0 ? 'OFFLINE' : (side === dir ? 'INNER' : 'OUTER');
-    var severity = Math.min(1, Math.abs(Math.sin(DR.Car.drift)) * SPEED / 250);
+    var severity = Math.min(1, Math.abs(Math.sin(DR.Car.drift)) * BASE_SPEED / 250);
 
     DR.FX.hit(kind, Math.max(0.35, severity), side, DR.Car);
     hitCool = 0.45;
@@ -111,7 +137,11 @@
     var steer = DR.Input.steer();
     if (steer !== 0) hintAlpha = Math.max(0, hintAlpha - dt * 2.4);
 
-    DR.Car.update(dt, steer, SPEED);
+    if (DR.Input.takeBoost()) boostT = 0;
+    if (boostT < 1e9) boostT += dt;
+
+    var speed = BASE_SPEED * boostMult();
+    DR.Car.update(dt, steer, speed);
     checkEdges(dt);
     updateCamera(dt);
 
@@ -121,7 +151,7 @@
     if (done + 1 > lap) { lap = done + 1; lapFlash = 1; }
     if (lapFlash > 0) lapFlash = Math.max(0, lapFlash - dt / 1.6);
 
-    DR.FX.emit(DR.Car, SPEED, dt);
+    DR.FX.emit(DR.Car, speed, dt);
     DR.FX.update(dt, DR.Car.x, DR.Car.y);
     DR.Road.ensure(DR.Car.roadS + DR.Road.LOOKAHEAD + 400);
     DR.Road.trim(DR.Car.roadS - DR.Road.CAM_BACK - 900);
@@ -159,6 +189,8 @@
     ctx2.fillStyle = '#22e6ff';
     ctx2.fillRect(x, by, bw * lapProgress(), bh);
 
+    drawBoostButton(ctx2);
+
     // Crossing the line: one soft swell, no strobe.
     if (lapFlash > 0) {
       var k = Math.sin(Math.PI * Math.min(1, lapFlash));
@@ -175,6 +207,46 @@
     }
   }
 
+  // The button doubles as the boost read-out: the ring drains through the two
+  // seconds of boost and refills as the car eases back to normal.
+  function drawBoostButton(ctx2) {
+    var b = BOOST_BTN, amt = boostAmount();
+    var live = boostT < BOOST_HOLD + BOOST_FADE;
+
+    ctx2.beginPath();
+    ctx2.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx2.fillStyle = live ? 'rgba(255,120,40,0.20)' : 'rgba(255,255,255,0.07)';
+    ctx2.fill();
+    ctx2.lineWidth = 3;
+    ctx2.strokeStyle = live ? 'rgba(255,170,80,0.85)' : 'rgba(190,220,240,0.45)';
+    ctx2.stroke();
+
+    if (amt > 0.001) {
+      ctx2.beginPath();
+      ctx2.arc(b.x, b.y, b.r - 8, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * amt);
+      ctx2.lineWidth = 7;
+      ctx2.strokeStyle = '#ffb24d';
+      ctx2.stroke();
+    }
+
+    // Chevron mark, pointing the way you go.
+    ctx2.beginPath();
+    ctx2.moveTo(b.x - 20, b.y + 12);
+    ctx2.lineTo(b.x, b.y - 14);
+    ctx2.lineTo(b.x + 20, b.y + 12);
+    ctx2.lineWidth = 6;
+    ctx2.lineJoin = 'round';
+    ctx2.lineCap = 'round';
+    ctx2.strokeStyle = live ? '#fff0d0' : 'rgba(220,240,255,0.75)';
+    ctx2.stroke();
+
+    ctx2.textAlign = 'center';
+    ctx2.font = '700 19px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = live ? 'rgba(255,220,170,0.95)' : 'rgba(190,220,240,0.7)';
+    ctx2.fillText('BOOST', b.x, b.y + 34);
+    ctx2.textAlign = 'left';
+  }
+
   function drawHint(ctx2, v) {
     if (hintAlpha <= 0.01) return;
     ctx2.globalAlpha = hintAlpha;
@@ -183,13 +255,13 @@
     ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx2.lineWidth = 6;
     ctx2.strokeStyle = 'rgba(4,2,10,0.9)';
-    ctx2.strokeText('HOLD LEFT OR RIGHT SIDE', v.W * 0.5, v.H - 108);
+    ctx2.strokeText('HOLD LEFT OR RIGHT SIDE', v.W * 0.5, v.H - 1010);
     ctx2.fillStyle = '#dff6ff';
-    ctx2.fillText('HOLD LEFT OR RIGHT SIDE', v.W * 0.5, v.H - 108);
+    ctx2.fillText('HOLD LEFT OR RIGHT SIDE', v.W * 0.5, v.H - 1010);
     ctx2.font = '600 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.strokeText('hold all the way through a corner', v.W * 0.5, v.H - 70);
+    ctx2.strokeText('hold all the way through a corner', v.W * 0.5, v.H - 972);
     ctx2.fillStyle = 'rgba(190,214,235,0.9)';
-    ctx2.fillText('hold all the way through a corner', v.W * 0.5, v.H - 70);
+    ctx2.fillText('hold all the way through a corner', v.W * 0.5, v.H - 972);
     ctx2.globalAlpha = 1;
   }
 
@@ -217,6 +289,7 @@
     DR.Road.drawFog(ctx, v);
     DR.FX.drawSmoke(ctx, v);
     DR.Car.draw(ctx, v);
+    DR.FX.drawSpeedLines(ctx, v, v.boost);
     DR.FX.drawFlash(ctx, v, rib);
     DR.FX.drawLabels(ctx, v);
     drawHud(ctx, v);
@@ -248,6 +321,13 @@
     DR.Car.reset();
     DR.FX.reset();
     DR.Input.init(canvas);
+    // The button is positioned in playfield units, so the hit test has to undo
+    // the letterboxing to find out where a real finger landed.
+    DR.Input.setBoostHitTest(function (clientX, clientY) {
+      var lx = (clientX - offX) / scale, ly = (clientY - offY) / scale;
+      var dx = lx - BOOST_BTN.x, dy = ly - BOOST_BTN.y;
+      return dx * dx + dy * dy <= BOOST_BTN.r * BOOST_BTN.r;
+    });
     camReady = false;
 
     resize();
@@ -262,7 +342,11 @@
   // Exposed so the drift can be measured and tuned from outside the game.
   DR.Game = {
     view: view,
-    SPEED: SPEED,
+    SPEED: BASE_SPEED,
+    BASE_SPEED: BASE_SPEED,
+    speed: function () { return BASE_SPEED * boostMult(); },
+    boostAmount: boostAmount,
+    boostButton: BOOST_BTN,
     LOGICAL_W: LOGICAL_W,
     LOGICAL_H: LOGICAL_H,
     camAngle: function () { return camAngle; },
@@ -270,7 +354,7 @@
     lapProgress: lapProgress,
     restart: function () {
       DR.Road.reset(); DR.Car.reset(); DR.FX.reset();
-      camReady = false; hitCool = 0; lap = 1; lapFlash = 0;
+      camReady = false; hitCool = 0; lap = 1; lapFlash = 0; boostT = 1e9;
     }
   };
 

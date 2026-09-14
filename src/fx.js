@@ -204,6 +204,39 @@
     ctx.globalAlpha = 1;
   }
 
+  // Speed lines while boosting: streaks pulled out from the vanishing point,
+  // strongest at the edges of the frame where peripheral motion reads.
+  var lineSeed = null;
+  function drawSpeedLines(ctx, view, amount) {
+    if (amount <= 0.02) return;
+    if (!lineSeed) {
+      lineSeed = [];
+      var sd = 7717;
+      for (var i = 0; i < 26; i++) {
+        sd = (sd * 1103515245 + 12345) & 0x7fffffff;
+        var a = (sd / 0x7fffffff) * Math.PI * 2;
+        sd = (sd * 1103515245 + 12345) & 0x7fffffff;
+        lineSeed.push({ a: a, r: 0.42 + (sd / 0x7fffffff) * 0.55 });
+      }
+    }
+    var cx = view.W * 0.5, cy = DR.Road.HORIZON_Y + 120;
+    var R = Math.max(view.W, view.H);
+    ctx.lineCap = 'round';
+    for (var i = 0; i < lineSeed.length; i++) {
+      var L = lineSeed[i];
+      var d0 = L.r * R, d1 = d0 + (70 + 150 * amount);
+      var sn = Math.sin(L.a), cs = Math.cos(L.a);
+      ctx.globalAlpha = 0.30 * amount * L.r;
+      ctx.lineWidth = 2 + 2 * amount;
+      ctx.strokeStyle = '#dff3ff';
+      ctx.beginPath();
+      ctx.moveTo(cx + cs * d0, cy + sn * d0);
+      ctx.lineTo(cx + cs * d1, cy + sn * d1);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
   // The words matter: colour alone must never be the only way to tell the two
   // mistakes apart.
   function drawLabels(ctx, view) {
@@ -234,6 +267,6 @@
     reset: reset, emit: emit, hit: hit, update: update,
     shakeOffset: shakeOffset,
     drawSkids: drawSkids, drawSmoke: drawSmoke,
-    drawFlash: drawFlash, drawLabels: drawLabels
+    drawFlash: drawFlash, drawLabels: drawLabels, drawSpeedLines: drawSpeedLines
   };
 })(window.DR = window.DR || {});

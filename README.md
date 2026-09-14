@@ -21,13 +21,18 @@ server to start and it never touches the internet.
 |----------|------------------------------------------|
 | Phone    | Press and **hold** the left or right half of the screen |
 | Mouse    | Click and **hold** the left or right half |
-| Keyboard | Hold **←** or **→**                       |
+| Keyboard | Hold **←** or **→**, **Space** to boost   |
 
-Let go to straighten out. That is every input the game has.
+Let go to straighten out. Boost is the one extra input: the button at the
+bottom of the screen, or Space / Up / W.
+
+Note this is a deliberate departure from the original one-thumb rule in
+CLAUDE.md. Steering and boosting at the same time needs a second finger on a
+touchscreen.
 
 ---
 
-## Current state: Milestone 1.5
+## Current state: Milestone 1.6
 
 Milestone 1 answers one question and nothing else: **does the drift feel
 good?** There is deliberately no score, no grading, no damage, no timer, no
@@ -54,10 +59,15 @@ What is in:
   ground grid, under a sun and stars fixed in the world — all of which sweep
   across as you turn, which is what lets you feel that a hairpin really has
   turned you around.
+- **Boost**: one press gives 10% more speed for two seconds, then eases back
+  over three. Unlimited presses. Bottom-centre button on touch and mouse,
+  Space / Up / W on the keyboard.
 - **Lap counter** with a progress bar. One lap is the whole corner sequence
   once, about 35 seconds of driving.
-- The car is drawn with real volume: a footprint on the tarmac, a raised body
-  over it, four wheels that steer with the drift, glass, lights and a wing.
+- The car is an original low, wide, red mid-engine shape drawn in code:
+  footprint on the tarmac, raised body over it, four wheels that steer with
+  the drift, glass, side intakes, engine slats, quad tail lights and exhaust
+  flare while boosting.
 - Chevrons ahead of every corner; doubled red-orange ones for the hairpins.
 - Edge contact detected, with screen shake, an edge flash and a word telling
   you which mistake you made — but no health lost and the run never ends.
@@ -173,6 +183,21 @@ Two more things worth knowing:
   easy; a 60-degree corner at radius 600 is hard.
 - The lap's left and right degrees are made to cancel out, so the track comes
   back to the heading it started on.
+
+## Speed and boost
+
+`BASE_SPEED`, and the four boost numbers, are at the top of
+[`src/game.js`](src/game.js).
+
+The important part is not the boost itself, it is what had to change to make
+it safe. The car's turn rate is worked out from whatever the speed currently
+is, so that the tightest circle it can carve stays fixed at `MIN_RADIUS`
+however fast it is going. Without that, a 10% boost would push the tightest
+circle from 529 to 582 units against a 600-unit corner — 97% of it — and
+boosting into a hairpin would simply throw you off the road.
+
+With it, boost costs you **time** instead: same geometry, 10% less of it.
+That is the risk, and it is a fair one.
 
 ## What happens when you hit a wall
 

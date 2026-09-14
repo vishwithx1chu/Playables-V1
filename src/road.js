@@ -17,10 +17,17 @@
      Sits CAM_BACK behind the car, turned to face the way the car is going,
      high enough that the car lands on CAR_Y. Lower CAM_BACK for a more
      dramatic angle, raise it to flatten back toward top-down. */
-  var HORIZON_Y = 470;       // horizon sits higher in frame = camera is lower
-  var CAR_Y     = 950;
-  var CAM_BACK  = 420;       // how far behind the car the camera sits
-  var FOCAL     = 442;
+  // Tilt is really HORIZON_Y: the further down the screen the horizon sits,
+  // the more level — and so the lower — the camera is. About 38 degrees now,
+  // down from 47. Going much lower costs forward visibility fast, because a
+  // level camera squashes the road ahead into a thin band.
+  // Useful identity: the car sits FOCAL x tan(tilt) below the horizon. So at a
+  // fixed low tilt, a longer FOCAL buys back sky, a bigger car and a wider
+  // road all at once — it only costs field of view to the sides.
+  var HORIZON_Y = 547;       // 43% sky, at a 38 degree tilt
+  var CAR_Y     = 930;
+  var CAM_BACK  = 380;       // how far behind the car the camera sits
+  var FOCAL     = 490;
   var NEAR      = 70;        // nothing closer than this can be drawn
   var LOOKAHEAD = 2600;      // world units of road drawn ahead of the car
   var K         = (CAR_Y - HORIZON_Y) * CAM_BACK;
