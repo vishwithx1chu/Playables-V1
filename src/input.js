@@ -20,6 +20,7 @@
   var boostKeys = 0;
   var boostPointers = [];      // pointers that landed on the button, not the road
   var boostHitTest = null;     // set by the game, which knows the screen layout
+  var tap = null;              // last press, for menus; read once then cleared
 
   function sideFromClientX(clientX) {
     return clientX < window.innerWidth * 0.5 ? -1 : 1;
@@ -91,6 +92,7 @@
 
       target.addEventListener('pointerdown', function (e) {
         e.preventDefault();
+        tap = { x: e.clientX, y: e.clientY };
         // A finger on the boost button boosts; it must not also steer.
         if (boostHitTest && boostHitTest(e.clientX, e.clientY)) {
           boostPointers.push(e.pointerId);
@@ -129,6 +131,10 @@
     used: function () { return pressedOnce; },
 
     setBoostHitTest: function (fn) { boostHitTest = fn; },
+
+    // One press, read once. Menus use this; the road does not.
+    takeTap: function () { var t = tap; tap = null; return t; },
+    clearTap: function () { tap = null; },
 
     // True once per press, then cleared — so one press is one boost.
     takeBoost: function () {

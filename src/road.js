@@ -37,57 +37,177 @@
   var CHEVRON_LEAD = 1100;
   var HAIRPIN_LEAD = 1595;
 
-  /* ------------------------------ THE LAP ------------------------------
-     Radius is what makes a corner hard: the car's tightest possible circle
-     is speed / (TURN_GAIN * sin(MAX_DRIFT)), about 500 units. A 620 radius
-     corner therefore needs ~81% of everything the car has, held the whole
-     way round. Nothing here is below 620.
+  /* ----------------------------- THE TRACKS -----------------------------
+     Three layouts in the character of the real circuit archetypes: one fast
+     and flowing, one tight and technical, one balanced. Not traced from any
+     particular circuit — real ones are full of corners far tighter than this
+     car can physically carve, so a faithful copy would simply be undriveable.
 
-     Total heading change over one lap is exactly zero — every left is paid
-     back by a right — so it drives like a circuit rather than a spiral. */
-  var LAP = [
-    { kind: 'str',  len: 520 },
-    { kind: 'turn', dir:  1, r: 820, deg:  95 },   // opening sweeper
-    { kind: 'str',  len: 300 },
-    { kind: 'turn', dir: -1, r: 620, deg:  55 },   // chicane: nothing between
-    { kind: 'turn', dir:  1, r: 620, deg:  55 },
-    { kind: 'str',  len: 160 },
-    { kind: 'turn', dir: -1, r: 600, deg: 180, hairpin: true },   // tightest corner
-    { kind: 'str',  len: 360 },
-    { kind: 'turn', dir:  1, r: 700, deg:  70 },
-    { kind: 'str',  len: 120 },
-    { kind: 'turn', dir:  1, r: 640, deg:  60 },   // four esses back to back:
-    { kind: 'turn', dir: -1, r: 640, deg:  60 },   // three full reversals with
-    { kind: 'turn', dir:  1, r: 640, deg:  60 },   // no rest anywhere in them
-    { kind: 'turn', dir: -1, r: 640, deg:  60 },
-    { kind: 'str',  len: 320 },
-    { kind: 'turn', dir:  1, r: 900, deg: 100 },   // long committed right
-    { kind: 'str',  len: 260 },
-    { kind: 'turn', dir: -1, r: 640, deg: 150 },   // almost a hairpin
-    { kind: 'str',  len: 160 },
-    { kind: 'turn', dir:  1, r: 620, deg: 180, hairpin: true },   // hairpin the other way
-    { kind: 'str',  len: 420 },
-    { kind: 'turn', dir: -1, r: 760, deg: 115 },
-    { kind: 'str',  len: 300 }
+     Two rules every layout obeys: no corner radius anywhere near MIN_RADIUS
+     (504, the tightest circle the car can hold), and the left and right
+     degrees cancel exactly, so a lap comes back to the heading it started on
+     and the thing drives like a circuit rather than a spiral. */
+  var TRACKS = [
+    { name: 'VELOCITY RING', blurb: 'Long straights, fast sweepers', tag: 'FAST', lap: [
+      { kind:'str', len:1500 },
+      { kind:'turn', dir: 1, r:1000, deg: 80 },
+      { kind:'str', len:1000 },
+      { kind:'turn', dir: 1, r: 900, deg: 60 },
+      { kind:'str', len: 620 },
+      { kind:'turn', dir:-1, r:1100, deg: 60 },
+      { kind:'str', len: 700 },
+      { kind:'turn', dir: 1, r: 640, deg:170, hairpin:true },
+      { kind:'str', len: 900 },
+      { kind:'turn', dir: 1, r: 980, deg: 55 },
+      { kind:'str', len: 560 },
+      { kind:'turn', dir:-1, r: 760, deg: 45 },
+      { kind:'turn', dir: 1, r: 760, deg: 45 },
+      { kind:'str', len: 820 },
+      { kind:'turn', dir: 1, r:1050, deg: 55 },
+      { kind:'str', len: 640 }
+    ]},
+    { name: 'HARBOUR MAZE', blurb: 'Barely a straight on it', tag: 'TECHNICAL', lap: [
+      { kind:'str', len: 340 },
+      { kind:'turn', dir: 1, r: 640, deg: 70 },
+      { kind:'str', len: 220 },
+      { kind:'turn', dir:-1, r: 620, deg: 95 },
+      { kind:'str', len: 180 },
+      { kind:'turn', dir: 1, r: 600, deg:170, hairpin:true },
+      { kind:'str', len: 260 },
+      { kind:'turn', dir: 1, r: 680, deg: 50 },
+      { kind:'turn', dir:-1, r: 680, deg: 50 },
+      { kind:'str', len: 200 },
+      { kind:'turn', dir: 1, r: 620, deg: 60 },
+      { kind:'str', len: 180 },
+      { kind:'turn', dir: 1, r: 660, deg: 55 },
+      { kind:'turn', dir:-1, r: 660, deg: 55 },
+      { kind:'turn', dir: 1, r: 660, deg: 55 },
+      { kind:'str', len: 240 },
+      { kind:'turn', dir: 1, r: 640, deg: 60 },
+      { kind:'str', len: 220 },
+      { kind:'turn', dir: 1, r: 720, deg: 40 },
+      { kind:'str', len: 320 }
+    ]},
+    { name: 'GRAND CIRCUIT', blurb: 'Four big corners, hairpin, esses', tag: 'BALANCED', lap: [
+      { kind:'str', len: 800 },
+      { kind:'turn', dir: 1, r: 820, deg: 90 },
+      { kind:'str', len: 400 },
+      { kind:'turn', dir:-1, r: 700, deg: 60 },
+      { kind:'str', len: 300 },
+      { kind:'turn', dir: 1, r: 620, deg:175, hairpin:true },
+      { kind:'str', len: 500 },
+      { kind:'turn', dir:-1, r: 760, deg: 60 },
+      { kind:'str', len: 350 },
+      { kind:'turn', dir: 1, r: 880, deg: 90 },
+      { kind:'str', len: 450 },
+      { kind:'turn', dir: 1, r: 660, deg: 55 },
+      { kind:'turn', dir:-1, r: 660, deg: 55 },
+      { kind:'turn', dir: 1, r: 660, deg: 55 },
+      { kind:'str', len: 300 },
+      { kind:'turn', dir:-1, r: 720, deg: 55 },
+      { kind:'str', len: 400 },
+      { kind:'turn', dir: 1, r: 900, deg: 90 },
+      { kind:'str', len: 380 },
+      { kind:'turn', dir:-1, r: 700, deg: 55 },
+      { kind:'str', len: 300 },
+      { kind:'turn', dir: 1, r: 840, deg: 90 },
+      { kind:'str', len: 600 }
+    ]}
   ];
+
+  /* A lap that comes back to its starting heading still does not come back to
+     its starting POINT, which is why the maps looked like rally stages rather
+     than circuits. Closing it is a two-unknown problem: walk the lap, measure
+     how far the end misses the start, then stretch or shrink two straights
+     that run at different angles until the miss cancels. Two straights, two
+     equations. Solved once per track and cached.
+
+     Because the lap now closes in position as well as heading, lap two
+     retraces lap one exactly — it is a real circuit, not a repeating shape. */
+  var _closed = {};
+  function closedLap(t) {
+    if (_closed[t]) return _closed[t];
+    var def = TRACKS[t].lap, i;
+
+    function walk(lens) {
+      var h = 0, x = 0, y = 0, straights = [], STEP = 8;
+      for (var j = 0; j < def.length; j++) {
+        var seg = def[j];
+        if (seg.kind === 'str') {
+          straights.push({ i: j, s: Math.sin(h), c: Math.cos(h) });
+          x += Math.sin(h) * lens[j]; y += Math.cos(h) * lens[j];
+        } else {
+          var total = segLength(seg);
+          for (var u = 0; u < total; u += STEP) {
+            var k = segCurvature(seg, u + STEP * 0.5);
+            h += k * STEP * 0.5;
+            x += Math.sin(h) * STEP; y += Math.cos(h) * STEP;
+            h += k * STEP * 0.5;
+          }
+        }
+      }
+      return { x: x, y: y, straights: straights };
+    }
+
+    var lens = [];
+    for (i = 0; i < def.length; i++) lens[i] = def[i].kind === 'str' ? def[i].len : 0;
+
+    // Smallest set of straight-length changes that shuts the loop. Repeated a
+    // few times because clamping the short ones makes it non-linear.
+    for (var pass = 0; pass < 10; pass++) {
+      var w = walk(lens);
+      if (Math.sqrt(w.x * w.x + w.y * w.y) < 0.5) break;
+      var ss = 0, sc = 0, cc = 0, A;
+      for (i = 0; i < w.straights.length; i++) {
+        A = w.straights[i]; ss += A.s * A.s; sc += A.s * A.c; cc += A.c * A.c;
+      }
+      var det = ss * cc - sc * sc;
+      if (Math.abs(det) < 1e-6) break;
+      var u2 = (-w.x * cc + w.y * sc) / det;
+      var v2 = (-w.y * ss + w.x * sc) / det;
+      for (i = 0; i < w.straights.length; i++) {
+        A = w.straights[i];
+        lens[A.i] = Math.max(130, lens[A.i] + A.s * u2 + A.c * v2);
+      }
+    }
+
+    var out = [];
+    for (i = 0; i < def.length; i++) {
+      out[i] = def[i].kind === 'str' ? { kind: 'str', len: lens[i] } : def[i];
+    }
+    _closed[t] = out;
+    return out;
+  }
+
+  var curTrack = 2;
+  function LAP() { return closedLap(curTrack); }
+  function trackList() { return TRACKS; }
+  function currentTrack() { return curTrack; }
+  function setTrack(i) {
+    curTrack = Math.max(0, Math.min(TRACKS.length - 1, i | 0));
+    _lapLen = 0;
+    reset();
+  }
 
   var INTRO_LEN = 1100;      // run-up before the start line
 
   // One lap is the whole LAP list once. Computed on demand, then remembered.
   var _lapLen = 0;
   function lapLength() {
-    if (!_lapLen) for (var i = 0; i < LAP.length; i++) _lapLen += segLength(LAP[i]);
+    if (!_lapLen) { var L = LAP(); for (var i = 0; i < L.length; i++) _lapLen += segLength(L[i]); }
     return _lapLen;
   }
 
   // One lap's shape, walked once and cached, for the minimap. Normalised into
   // a unit box with the arc length kept alongside so a car can be placed on it.
-  var _outline = null;
-  function lapOutline() {
-    if (_outline) return _outline;
+  var _outline = {};
+  function lapOutline(which) {
+    var t = (which === undefined) ? curTrack : which;
+    if (_outline[t]) return _outline[t];
+    var lapDef = closedLap(t);
     var pts = [], x = 0, y = 0, h = 0, s = 0, STEP = 30;
-    for (var i = 0; i < LAP.length; i++) {
-      var seg = LAP[i], len = segLength(seg);
+    for (var i = 0; i < lapDef.length; i++) {
+      var seg = lapDef[i], len = segLength(seg);
       for (var t = 0; t < len; t += STEP) {
         var k = segCurvature(seg, t + STEP * 0.5);
         h += k * STEP * 0.5;
@@ -111,8 +231,8 @@
       pts[j].ny = (pts[j].y - (minY + maxY) / 2) / span + 0.5;
       pts[j].f = pts[j].s / total;
     }
-    _outline = pts;
-    return _outline;
+    _outline[t] = pts;
+    return pts;
   }
 
   /* Boost pickups. Their positions come from a hash of a running index, so
@@ -241,14 +361,14 @@
   }
 
   function currentSeg() {
-    return inIntro ? { kind: 'str', len: INTRO_LEN } : LAP[genIndex];
+    return inIntro ? { kind: 'str', len: INTRO_LEN } : LAP()[genIndex];
   }
 
   function advanceSeg() {
     if (inIntro) { inIntro = false; genIndex = 0; }
     else {
       genIndex++;
-      if (genIndex >= LAP.length) { genIndex = 0; lapNo++; }
+      if (genIndex >= LAP().length) { genIndex = 0; lapNo++; }
     }
     genT = 0;
     var seg = currentSeg();
@@ -815,6 +935,7 @@
     dirAt: dirAt, isHairpin: isHairpin, radiusAt: radiusAt,
     lengthGenerated: lengthGenerated,
     lapLength: lapLength, INTRO_LEN: INTRO_LEN, lapOutline: lapOutline,
+    tracks: trackList, setTrack: setTrack, currentTrack: currentTrack,
     picks: pickList, ensurePicks: ensurePicks, trimPicks: trimPicks, drawPicks: drawPicks,
     project: project, project3: project3, CAM_LIFT: CAM_LIFT,
     buildRibbon: buildRibbon, quads: quads,

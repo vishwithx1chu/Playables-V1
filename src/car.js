@@ -27,7 +27,7 @@
                      and it goes back to looking like plain steering.
      ====================================================================== */
   var MIN_RADIUS      = 504;
-  var SLIP_AT_LIMIT   = 58 * Math.PI / 180;
+  var SLIP_AT_LIMIT   = 52 * Math.PI / 180;
   var BUILD_TAU       = 0.34;
   var DECAY_TAU       = 0.55;
   var REVERSE_TAU     = 0.42;

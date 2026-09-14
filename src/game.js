@@ -18,7 +18,7 @@
      The car's grip is derived from whatever the speed currently is (see
      MIN_RADIUS in car.js), so boosting into a corner never makes it
      impossible — it just gives you less time to get it right. */
-  var BASE_SPEED = 898;      // was 718, up 25%
+  var BASE_SPEED = 808;      // was 898, down 10%
   var BOOST_MULT = 1.35;     // 35% faster while boosting, applied instantly
   var BOOST_HOLD = 1.5;      // seconds at full boost
   var BOOST_FADE = 3.0;      // seconds easing back to normal
@@ -50,6 +50,12 @@
   /* --------------------------------------------------------------------- */
 
   var BOOST_BTN = { x: 360, y: 1168, r: 72 };
+  var RACE_LAPS = 3;
+
+  // 'select' -> 'racing' -> 'done' -> back to 'select'
+  var phase = 'select';
+  var selected = 2;
+  var raceTotal = 0;
   var FIXED = 1 / 60;    // physics rate, so the feel never changes with framerate
 
   var CAM_TAU  = 0.22;   // how lazily the camera swings round to follow you
@@ -174,6 +180,7 @@
   }
 
   function update(dt) {
+    if (phase !== 'racing') { clock += dt; return; }
     var steer = DR.Input.steer();
     if (steer !== 0) hintAlpha = Math.max(0, hintAlpha - dt * 2.4);
 
@@ -213,11 +220,12 @@
 
     var done = Math.floor(Math.max(0, DR.Car.roadS - DR.Road.INTRO_LEN) / DR.Road.lapLength());
     if (done + 1 > lap) {
+      lapTimes.push(lapTimer);
+      raceTotal += lapTimer;
+      lapTimer = 0;
       lap = done + 1;
       lapFlash = 1;
-      lapTimes.push(lapTimer);
-      if (lapTimes.length > 3) lapTimes.shift();
-      lapTimer = 0;
+      if (lapTimes.length >= RACE_LAPS) { phase = 'done'; lapFlash = 0; }
     }
     if (lapFlash > 0) lapFlash = Math.max(0, lapFlash - dt / 1.6);
 
@@ -255,12 +263,12 @@
     ctx2.fillStyle = 'rgba(150,196,225,0.85)';
     ctx2.fillText('LAP', x, y);
 
-    ctx2.font = '800 52px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.font = '800 44px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx2.lineWidth = 6;
     ctx2.strokeStyle = 'rgba(4,2,10,0.85)';
-    ctx2.strokeText(String(lap), x, y + 22);
+    ctx2.strokeText(Math.min(lap, RACE_LAPS) + '/' + RACE_LAPS, x, y + 22);
     ctx2.fillStyle = '#eaf6ff';
-    ctx2.fillText(String(lap), x, y + 22);
+    ctx2.fillText(Math.min(lap, RACE_LAPS) + '/' + RACE_LAPS, x, y + 22);
 
     var bw = 200, bh = 7, by = y + 88;
     ctx2.fillStyle = 'rgba(255,255,255,0.13)';
@@ -402,53 +410,178 @@
     ctx2.textAlign = 'left';
   }
 
+  // Draws a lap's shape into a box. Used by both the minimap and the cards
+  // on the track-select screen, so they can never disagree.
+  function drawOutline(ctx2, box, which, dotAt, thick) {
+    var pts = DR.Road.lapOutline(which), i;
+    var pad = box.w * 0.12, iw = box.w - pad * 2, ih = box.h - pad * 2;
+    function mx(p) { return box.x + pad + p.nx * iw; }
+    function my(p) { return box.y + pad + (1 - p.ny) * ih; }
+
+    ctx2.beginPath();
+    ctx2.moveTo(mx(pts[0]), my(pts[0]));
+    for (i = 1; i < pts.length; i++) ctx2.lineTo(mx(pts[i]), my(pts[i]));
+    ctx2.lineJoin = 'round';
+    ctx2.lineCap = 'round';
+    ctx2.lineWidth = thick + 3;
+    ctx2.strokeStyle = 'rgba(34,230,255,0.28)';
+    ctx2.stroke();
+    ctx2.lineWidth = thick;
+    ctx2.strokeStyle = '#22e6ff';
+    ctx2.stroke();
+
+    ctx2.beginPath();
+    ctx2.arc(mx(pts[0]), my(pts[0]), thick + 1.5, 0, Math.PI * 2);
+    ctx2.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx2.fill();
+
+    if (dotAt !== undefined && dotAt !== null) {
+      var best = pts[0];
+      for (i = 0; i < pts.length; i++) {
+        if (Math.abs(pts[i].f - dotAt) < Math.abs(best.f - dotAt)) best = pts[i];
+      }
+      ctx2.beginPath();
+      ctx2.arc(mx(best), my(best), thick + 4, 0, Math.PI * 2);
+      ctx2.fillStyle = '#ff4b3a';
+      ctx2.shadowColor = '#ff4b3a';
+      ctx2.shadowBlur = 12;
+      ctx2.fill();
+      ctx2.shadowBlur = 0;
+    }
+  }
+
+  function cardBox(i) { return { x: 64, y: 322 + i * 300, w: 592, h: 268 }; }
+
+  function drawSelect(ctx2, v) {
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var tracks = DR.Road.tracks(), i;
+
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '800 74px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText('DRIFT RUN', v.W * 0.5, 168);
+    ctx2.font = '700 26px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(180,214,236,0.9)';
+    ctx2.fillText('CHOOSE YOUR CIRCUIT  \u2022  ' + RACE_LAPS + ' LAPS', v.W * 0.5, 212);
+
+    for (i = 0; i < tracks.length; i++) {
+      var b = cardBox(i), on = i === selected;
+      ctx2.fillStyle = on ? 'rgba(34,120,150,0.28)' : 'rgba(10,8,24,0.55)';
+      ctx2.fillRect(b.x, b.y, b.w, b.h);
+      ctx2.lineWidth = on ? 3 : 1.5;
+      ctx2.strokeStyle = on ? '#41e0ff' : 'rgba(150,196,225,0.35)';
+      ctx2.strokeRect(b.x, b.y, b.w, b.h);
+
+      drawOutline(ctx2, { x: b.x + 14, y: b.y + 14, w: 240, h: 240 }, i, null, 2.5);
+
+      ctx2.textAlign = 'left';
+      ctx2.font = '800 36px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = on ? '#eaf6ff' : 'rgba(226,240,250,0.8)';
+      ctx2.fillText(tracks[i].name, b.x + 274, b.y + 74);
+
+      ctx2.font = '700 20px ' + MONO;
+      ctx2.fillStyle = on ? '#7dffb0' : 'rgba(125,255,176,0.6)';
+      ctx2.fillText(tracks[i].tag, b.x + 274, b.y + 114);
+
+      ctx2.font = '500 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = 'rgba(180,206,226,0.85)';
+      ctx2.fillText(tracks[i].blurb, b.x + 274, b.y + 158);
+
+      ctx2.font = '700 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = on ? '#ffd76a' : 'rgba(190,214,235,0.5)';
+      ctx2.fillText(on ? 'TAP AGAIN TO RACE' : 'TAP TO SELECT', b.x + 274, b.y + 214);
+    }
+    ctx2.textAlign = 'left';
+  }
+
+  function drawDone(ctx2, v) {
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    ctx2.fillStyle = 'rgba(6,4,16,0.74)';
+    ctx2.fillRect(0, 0, v.W, v.H);
+
+    ctx2.textAlign = 'center';
+    ctx2.font = '800 64px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText('RACE COMPLETE', v.W * 0.5, 300);
+
+    ctx2.font = '700 24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(180,214,236,0.9)';
+    ctx2.fillText(DR.Road.tracks()[DR.Road.currentTrack()].name, v.W * 0.5, 344);
+
+    ctx2.font = '700 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(150,196,225,0.85)';
+    ctx2.fillText('TOTAL', v.W * 0.5, 420);
+    ctx2.font = '800 86px ' + MONO;
+    ctx2.fillStyle = '#eaf6ff';
+    ctx2.fillText(fmt(raceTotal), v.W * 0.5, 500);
+
+    var best = lapTimes.length ? Math.min.apply(null, lapTimes) : 0;
+    for (var i = 0; i < lapTimes.length; i++) {
+      var y = 600 + i * 62, isBest = lapTimes[i] === best;
+      ctx2.textAlign = 'right';
+      ctx2.font = '700 28px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = 'rgba(150,196,225,0.8)';
+      ctx2.fillText('LAP ' + (i + 1), v.W * 0.5 - 24, y);
+      ctx2.textAlign = 'left';
+      ctx2.font = '700 34px ' + MONO;
+      ctx2.fillStyle = isBest ? '#7dffb0' : 'rgba(228,242,252,0.92)';
+      ctx2.fillText(fmt(lapTimes[i]), v.W * 0.5 + 8, y);
+      if (isBest) {
+        ctx2.font = '700 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx2.fillStyle = '#7dffb0';
+        ctx2.fillText('BEST', v.W * 0.5 + 176, y);
+      }
+    }
+
+    ctx2.textAlign = 'center';
+    ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText('TAP TO RACE AGAIN', v.W * 0.5, 880);
+    ctx2.textAlign = 'left';
+  }
+
+  // Menu presses. The boost button owns its own, so this only runs off-race.
+  function handleMenuTap() {
+    var t = DR.Input.takeTap();
+    if (!t) return;
+    var lx = (t.x - offX) / scale, ly = (t.y - offY) / scale;
+    if (phase === 'select') {
+      for (var i = 0; i < DR.Road.tracks().length; i++) {
+        var b = cardBox(i);
+        if (lx >= b.x && lx <= b.x + b.w && ly >= b.y && ly <= b.y + b.h) {
+          if (selected === i) startRace(i);
+          else selected = i;
+          return;
+        }
+      }
+    } else if (phase === 'done') {
+      phase = 'select';
+    }
+  }
+
+  function startRace(i) {
+    selected = i;
+    DR.Road.setTrack(i);
+    DR.Car.reset(); DR.FX.reset();
+    camReady = false; hitCool = 0;
+    lap = 1; lapFlash = 0; boostT = 1e9;
+    lapTimer = 0; timing = false; lapTimes.length = 0;
+    hitPenalty = 1; meter = 0.55; driftTime = 0; pickPop = 0; boostDenied = 0;
+    raceTotal = 0; hintAlpha = 1;
+    phase = 'racing';
+  }
+
   // Minimap, top right. The whole lap seen from above, with you on it.
   // North-up rather than rotating, so the shape stays learnable.
   var MAP = { x: 528, y: 50, w: 164, h: 164 };
   function drawMinimap(ctx2) {
-    var pts = DR.Road.lapOutline(), i, p2;
-    var pad = 16, iw = MAP.w - pad * 2, ih = MAP.h - pad * 2;
-
     ctx2.fillStyle = 'rgba(10,6,22,0.55)';
     ctx2.fillRect(MAP.x, MAP.y, MAP.w, MAP.h);
     ctx2.lineWidth = 1.5;
     ctx2.strokeStyle = 'rgba(150,196,225,0.35)';
     ctx2.strokeRect(MAP.x, MAP.y, MAP.w, MAP.h);
-
-    function mx(p) { return MAP.x + pad + p.nx * iw; }
-    function my(p) { return MAP.y + pad + (1 - p.ny) * ih; }
-
-    ctx2.beginPath();
-    ctx2.moveTo(mx(pts[0]), my(pts[0]));
-    for (i = 1; i < pts.length; i++) ctx2.lineTo(mx(pts[i]), my(pts[i]));
-    ctx2.lineWidth = 5;
-    ctx2.lineJoin = 'round';
-    ctx2.lineCap = 'round';
-    ctx2.strokeStyle = 'rgba(34,230,255,0.30)';
-    ctx2.stroke();
-    ctx2.lineWidth = 2;
-    ctx2.strokeStyle = '#22e6ff';
-    ctx2.stroke();
-
-    // Start line.
-    ctx2.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx2.beginPath();
-    ctx2.arc(mx(pts[0]), my(pts[0]), 3.5, 0, Math.PI * 2);
-    ctx2.fill();
-
-    // You.
-    var f = lapProgress(), best = pts[0];
-    for (i = 0; i < pts.length; i++) if (Math.abs(pts[i].f - f) < Math.abs(best.f - f)) best = pts[i];
-    ctx2.beginPath();
-    ctx2.arc(mx(best), my(best), 6.5, 0, Math.PI * 2);
-    ctx2.fillStyle = '#ff4b3a';
-    ctx2.shadowColor = '#ff4b3a';
-    ctx2.shadowBlur = 12;
-    ctx2.fill();
-    ctx2.shadowBlur = 0;
-    ctx2.strokeStyle = 'rgba(255,225,215,0.9)';
-    ctx2.lineWidth = 1.5;
-    ctx2.stroke();
+    drawOutline(ctx2, MAP, undefined, lapProgress(), 2);
   }
 
   // Did we just run over a pickup?
@@ -487,6 +620,34 @@
     ctx2.globalAlpha = 1;
   }
 
+  var menuV = null;
+  function menuView() {
+    if (!menuV) {
+      menuV = { W: LOGICAL_W, H: LOGICAL_H, carY: DR.Road.CAR_Y, carS: 0,
+                camX: 0, camY: 0, camAngle: 0, camSin: 0, camCos: 1, boost: 0 };
+    }
+    return menuV;
+  }
+
+  // Off-race input: steer to change track, boost to confirm, tap anywhere.
+  var lastSteer = 0;
+  function updateMenu() {
+    var st = DR.Input.steer();
+    var confirm = DR.Input.takeBoost();
+
+    if (phase === 'select') {
+      if (st !== 0 && lastSteer === 0) {
+        var n = DR.Road.tracks().length;
+        selected = (selected + (st > 0 ? 1 : n - 1)) % n;
+      }
+      if (confirm) startRace(selected);
+    } else if (phase === 'done') {
+      if (confirm) phase = 'select';
+    }
+    lastSteer = st;
+    handleMenuTap();
+  }
+
   function draw() {
     var v = view();
     var sh = DR.FX.shakeOffset();
@@ -504,6 +665,13 @@
     ctx.clip();
     ctx.translate(sh.x, sh.y);
 
+    if (phase === 'select') {
+      DR.Road.drawBackground(ctx, menuView());
+      drawSelect(ctx, v);
+      ctx.restore();
+      return;
+    }
+
     DR.Road.drawBackground(ctx, v);
     var rib = DR.Road.draw(ctx, v);
     DR.FX.drawSkids(ctx, v);
@@ -517,8 +685,9 @@
     DR.FX.drawBoostFx(ctx, v);
     DR.FX.drawFlash(ctx, v, rib);
     DR.FX.drawLabels(ctx, v);
-    drawHud(ctx, v);
-    drawHint(ctx, v);
+    // The results panel owns the screen; the race HUD behind it is clutter.
+    if (phase === 'racing') { drawHud(ctx, v); drawHint(ctx, v); }
+    if (phase === 'done') drawDone(ctx, v);
 
     ctx.restore();
   }
@@ -528,6 +697,9 @@
     last = now;
     if (!(dt > 0)) dt = FIXED;
     if (dt > 0.25) dt = 0.25;
+
+    if (phase === 'racing') DR.Input.clearTap();
+    else updateMenu();
 
     acc += dt;
     var steps = 0;
@@ -584,6 +756,10 @@
     camAngle: function () { return camAngle; },
     lap: function () { return lap; },
     lapProgress: lapProgress,
+    phase: function () { return phase; },
+    startRace: startRace,
+    RACE_LAPS: RACE_LAPS,
+    raceTotal: function () { return raceTotal; },
     restart: function () {
       DR.Road.reset(); DR.Car.reset(); DR.FX.reset();
       camReady = false; hitCool = 0; lap = 1; lapFlash = 0; boostT = 1e9;

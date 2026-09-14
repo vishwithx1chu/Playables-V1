@@ -32,13 +32,18 @@ touchscreen.
 
 ---
 
-## Current state: Milestone 2.0
+## Current state: Milestone 2.1
 
 Milestone 1 answers one question and nothing else: **does the drift feel
 good?** There is deliberately no score, no grading, no damage, no timer, no
 menu and no results screen — those are later milestones.
 
 What is in:
+
+- **Three circuits to choose from**, then a **three lap race** with a results
+  screen: total, each lap, and the quickest of them called out.
+- Every circuit is a genuine closed loop — it comes back to its own starting
+  point, not just its starting heading.
 
 - A real **circuit**, not a scrolling strip. The track is a line that genuinely
   turns through the world, so a corner is a corner: it has a radius, and you
