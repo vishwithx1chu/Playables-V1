@@ -96,67 +96,166 @@
       var p = DR.Road.project(this.x, this.y, view);
       if (!p.vis) return;
       var lean = Math.abs(this.drift) / MAX_DRIFT;
+      var steer = this.drift / MAX_DRIFT;
 
       ctx.save();
       ctx.translate(p.x, p.y);
 
+      // Neon spill on the tarmac underneath, brighter the harder it slides.
       if (!glowGrad) {
-        glowGrad = ctx.createRadialGradient(0, 0, 4, 0, 0, 96);
-        glowGrad.addColorStop(0.00, 'rgba(255,74,206,0.42)');
-        glowGrad.addColorStop(0.45, 'rgba(140,60,255,0.16)');
+        glowGrad = ctx.createRadialGradient(0, 0, 4, 0, 0, 104);
+        glowGrad.addColorStop(0.00, 'rgba(255,74,206,0.44)');
+        glowGrad.addColorStop(0.45, 'rgba(140,60,255,0.17)');
         glowGrad.addColorStop(1.00, 'rgba(0,0,0,0)');
       }
       ctx.globalAlpha = 0.65 + lean * 0.35;
       ctx.fillStyle = glowGrad;
-      ctx.fillRect(-96, -96, 192, 192);
+      ctx.fillRect(-104, -104, 208, 208);
       ctx.globalAlpha = 1;
 
-      // On screen the body is turned by however far it is off the camera's
-      // bearing, which is heading plus slip.
       ctx.rotate(this.h + this.drift * VISUAL_YAW - view.camAngle);
 
+      // Headlight wash thrown up the road.
       ctx.beginPath();
-      ctx.moveTo(-16, -40); ctx.lineTo(16, -40);
-      ctx.lineTo(96, -330); ctx.lineTo(-96, -330);
+      ctx.moveTo(-18, -44); ctx.lineTo(18, -44);
+      ctx.lineTo(110, -360); ctx.lineTo(-110, -360);
       ctx.closePath();
-      ctx.fillStyle = 'rgba(150,240,255,0.055)';
+      ctx.fillStyle = 'rgba(150,240,255,0.05)';
       ctx.fill();
 
-      if (!bodyGrad) {
-        bodyGrad = ctx.createLinearGradient(0, -CAR_L * 0.5, 0, CAR_L * 0.5);
-        bodyGrad.addColorStop(0.00, '#4ef2ff');
-        bodyGrad.addColorStop(0.45, '#2f7ce8');
-        bodyGrad.addColorStop(1.00, '#c032d8');
-      }
+      // Shadow on the ground.
       ctx.beginPath();
-      ctx.moveTo(0, -42); ctx.lineTo(14, -38); ctx.lineTo(23, -18);
-      ctx.lineTo(23, 30); ctx.lineTo(18, 42); ctx.lineTo(-18, 42);
-      ctx.lineTo(-23, 30); ctx.lineTo(-23, -18); ctx.lineTo(-14, -38);
-      ctx.closePath();
-      ctx.fillStyle = bodyGrad; ctx.fill();
-      ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(190,250,255,0.85)'; ctx.stroke();
+      ctx.ellipse(0, 6, 34, 50, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.42)';
+      ctx.fill();
 
-      ctx.fillStyle = '#1b1030'; ctx.fillRect(-26, 36, 52, 6);
-      ctx.fillStyle = 'rgba(78,242,255,0.55)'; ctx.fillRect(-26, 36, 52, 2);
-
-      ctx.beginPath();
-      ctx.moveTo(-11, -14); ctx.lineTo(11, -14);
-      ctx.lineTo(14, 14); ctx.lineTo(-14, 14);
-      ctx.closePath();
-      ctx.fillStyle = 'rgba(8,6,20,0.92)'; ctx.fill();
-      ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(120,220,255,0.45)'; ctx.stroke();
-
-      ctx.shadowColor = '#ff2fa8'; ctx.shadowBlur = 14;
-      ctx.fillStyle = '#ff5cc0';
-      ctx.fillRect(-17, 33, 11, 5); ctx.fillRect(6, 33, 11, 5);
-      ctx.shadowBlur = 0;
-
-      ctx.fillStyle = '#d9fbff';
-      ctx.fillRect(-13, -41, 8, 3); ctx.fillRect(5, -41, 8, 3);
+      drawWheels(ctx, steer);
+      drawBody(ctx);
 
       ctx.restore();
     }
   };
+
+  // Four wheels sitting on the tarmac. The fronts turn with the drift, which
+  // is a small thing that does a lot of work at this camera angle.
+  function drawWheels(ctx, steer) {
+    var fx = 27, rx = 29, fy = -25, ry = 27;
+    var wheels = [
+      [-fx, fy, steer * 0.42], [fx, fy, steer * 0.42],
+      [-rx, ry, 0], [rx, ry, 0]
+    ];
+    for (var i = 0; i < 4; i++) {
+      var w = wheels[i];
+      ctx.save();
+      ctx.translate(w[0], w[1]);
+      ctx.rotate(w[2]);
+      ctx.fillStyle = '#08060f';
+      ctx.fillRect(-6, -13, 12, 26);
+      ctx.fillStyle = 'rgba(120,160,200,0.30)';   // rim catching the light
+      ctx.fillRect(-6, -4, 12, 3);
+      ctx.fillStyle = 'rgba(255,74,206,0.22)';    // neon bleeding onto rubber
+      ctx.fillRect(-6, 10, 12, 3);
+      ctx.restore();
+    }
+  }
+
+  // The body is drawn as a footprint on the ground plus the same shape lifted
+  // by RIDE, with the gap between them filled in. That gap is what reads as
+  // the car having height, which matters now the camera sits low.
+  var RIDE = 15;
+  var FOOT = [
+    [0, -46], [16, -41], [25, -20], [27, 13], [23, 41],
+    [-23, 41], [-27, 13], [-25, -20], [-16, -41]
+  ];
+  var TOP = FOOT.map(function (q) { return [q[0] * 0.80, q[1] * 0.88 - RIDE]; });
+
+  function path(ctx, pts) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+  }
+
+  function drawBody(ctx) {
+    var i;
+
+    // Sills: the flanks between ground and roof.
+    ctx.beginPath();
+    for (i = 0; i < FOOT.length; i++) {
+      var a = FOOT[i], b = FOOT[(i + 1) % FOOT.length];
+      var c = TOP[(i + 1) % TOP.length], d = TOP[i];
+      ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+      ctx.lineTo(c[0], c[1]); ctx.lineTo(d[0], d[1]);
+      ctx.closePath();
+    }
+    ctx.fillStyle = '#241041';
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(140,90,220,0.5)';
+    ctx.stroke();
+
+    // Upper surface.
+    if (!bodyGrad) {
+      bodyGrad = ctx.createLinearGradient(0, -46, 0, 41);
+      bodyGrad.addColorStop(0.00, '#63f4ff');
+      bodyGrad.addColorStop(0.38, '#2f7ce8');
+      bodyGrad.addColorStop(0.78, '#8a34d6');
+      bodyGrad.addColorStop(1.00, '#d63aa6');
+    }
+    path(ctx, TOP);
+    ctx.fillStyle = bodyGrad;
+    ctx.fill();
+    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = 'rgba(200,252,255,0.85)';
+    ctx.stroke();
+
+    // A crease down the middle so the roof is not a flat slab.
+    ctx.beginPath();
+    ctx.moveTo(0, -40 - RIDE); ctx.lineTo(0, 34 - RIDE);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+    ctx.stroke();
+
+    // Glass.
+    ctx.beginPath();
+    ctx.moveTo(-11, -22 - RIDE); ctx.lineTo(11, -22 - RIDE);
+    ctx.lineTo(14, 8 - RIDE); ctx.lineTo(-14, 8 - RIDE);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(6,5,18,0.94)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(130,225,255,0.5)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.beginPath();                                   // sheen across the glass
+    ctx.moveTo(-10, -20 - RIDE); ctx.lineTo(2, -20 - RIDE); ctx.lineTo(-6, -8 - RIDE);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(160,235,255,0.13)';
+    ctx.fill();
+
+    // Rear wing, standing above the deck.
+    var wy = 36 - RIDE - 7;
+    ctx.fillStyle = '#1b1030';
+    ctx.fillRect(-22, wy + 5, 4, 9);
+    ctx.fillRect(18, wy + 5, 4, 9);
+    ctx.fillStyle = '#2a1350';
+    ctx.fillRect(-27, wy, 54, 6);
+    ctx.fillStyle = 'rgba(99,244,255,0.5)';
+    ctx.fillRect(-27, wy, 54, 2);
+
+    // Tail lights.
+    ctx.shadowColor = '#ff2fa8'; ctx.shadowBlur = 16;
+    ctx.fillStyle = '#ff5cc0';
+    ctx.fillRect(-19, 30 - RIDE, 12, 5);
+    ctx.fillRect(7, 30 - RIDE, 12, 5);
+    ctx.shadowBlur = 0;
+
+    // Headlights.
+    ctx.shadowColor = '#bff4ff'; ctx.shadowBlur = 10;
+    ctx.fillStyle = '#eaffff';
+    ctx.fillRect(-14, -38 - RIDE, 9, 4);
+    ctx.fillRect(5, -38 - RIDE, 9, 4);
+    ctx.shadowBlur = 0;
+  }
 
   DR.Car = Car;
 })(window.DR = window.DR || {});

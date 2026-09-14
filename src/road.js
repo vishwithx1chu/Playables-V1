@@ -9,6 +9,7 @@
   var BASE_HW = 190;         // straights: road is 380 units wide
   var CORNER_EXTRA = 40;     // corners widen by up to this much per side
   var TIGHTEST_K = 1 / 600;  // curvature of the tightest corner on the track
+  var WIDEN_WIN = 30;        // smoothing window, in samples either side (240 units)
   var HALF_W = BASE_HW;      // kept for anything asking for the nominal width
   var SAMPLE = 8;            // world units between stored centreline points
 
@@ -16,10 +17,10 @@
      Sits CAM_BACK behind the car, turned to face the way the car is going,
      high enough that the car lands on CAR_Y. Lower CAM_BACK for a more
      dramatic angle, raise it to flatten back toward top-down. */
-  var HORIZON_Y = 240;
-  var CAR_Y     = 930;
-  var CAM_BACK  = 520;
-  var FOCAL     = 489;
+  var HORIZON_Y = 470;       // horizon sits higher in frame = camera is lower
+  var CAR_Y     = 950;
+  var CAM_BACK  = 420;       // how far behind the car the camera sits
+  var FOCAL     = 442;
   var NEAR      = 70;        // nothing closer than this can be drawn
   var LOOKAHEAD = 2600;      // world units of road drawn ahead of the car
   var K         = (CAR_Y - HORIZON_Y) * CAM_BACK;
@@ -63,11 +64,18 @@
     { kind: 'str',  len: 300 }
   ];
 
-  var INTRO_LEN = 1100;
+  var INTRO_LEN = 1100;      // run-up before the start line
+
+  // One lap is the whole LAP list once. Computed on demand, then remembered.
+  var _lapLen = 0;
+  function lapLength() {
+    if (!_lapLen) for (var i = 0; i < LAP.length; i++) _lapLen += segLength(LAP[i]);
+    return _lapLen;
+  }
 
   // Centreline, sampled every SAMPLE units. Uniform spacing means arc length
   // converts to an array index by division — no searching.
-  var cx, cy, ch, ck, chw, baseS;
+  var cx, cy, ch, ck, chw, cmx, hwFilled, mxFilled, baseS;
   var segs, genX, genY, genH, genS, genIndex, genT, inIntro, lapNo;
 
   function segLength(seg) {
@@ -131,15 +139,73 @@
 
       genS += SAMPLE;
       genT += SAMPLE;
-      // The tighter the corner, the more room it gets. Ramps in and out with
-      // the curvature, so the road opens up as you arrive rather than jumping.
-      var wide = BASE_HW + CORNER_EXTRA * Math.min(1, Math.abs(k) / TIGHTEST_K);
-      cx.push(genX); cy.push(genY); ch.push(genH); ck.push(k); chw.push(wide);
+      cx.push(genX); cy.push(genY); ch.push(genH); ck.push(k);
     }
   }
 
+  // Width is built in two passes. First a rolling MAXIMUM, which is what
+  // stops the road nipping in where two opposite corners meet: curvature
+  // passes through zero there for an instant, and an average gets dragged
+  // down by exactly the dip it is supposed to fill. Then a blur over the
+  // maximum, which takes the corners off it so the width glides.
+  var BLUR_WIN = 16;
+
+  var KER = null, KSUM = 0;
+  function kernel() {
+    if (KER) return KER;
+    KER = [];
+    for (var t = -BLUR_WIN; t <= BLUR_WIN; t++) {
+      var w = 0.5 + 0.5 * Math.cos(Math.PI * t / (BLUR_WIN + 1));
+      KER.push(w); KSUM += w;
+    }
+    return KER;
+  }
+
+  function rawWidth(i) {
+    return BASE_HW + CORNER_EXTRA * Math.min(1, Math.abs(ck[i]) / TIGHTEST_K);
+  }
+
+  // Each pass lags the one before it, because each needs to see both sides of
+  // the point it is filling in. Geometry always runs far enough ahead of both.
+  function ensureWidths() {
+    var lastMax = ck.length - 1 - WIDEN_WIN;
+    var i, t, j;
+    while (mxFilled <= lastMax) {
+      i = mxFilled;
+      var m = 0;
+      for (j = Math.max(0, i - WIDEN_WIN); j <= Math.min(ck.length - 1, i + WIDEN_WIN); j++) {
+        var r = rawWidth(j);
+        if (r > m) m = r;
+      }
+      cmx[i] = m;
+      mxFilled++;
+    }
+
+    var K = kernel();
+    var lastBlur = mxFilled - 1 - BLUR_WIN;
+    while (hwFilled <= lastBlur) {
+      i = hwFilled;
+      var acc = 0, wsum = 0;
+      for (t = -BLUR_WIN; t <= BLUR_WIN; t++) {
+        j = i + t;
+        if (j < 0 || j >= mxFilled) continue;
+        var w2 = K[t + BLUR_WIN];
+        acc += cmx[j] * w2; wsum += w2;
+      }
+      chw[i] = wsum > 0 ? acc / wsum : BASE_HW;
+      hwFilled++;
+    }
+  }
+
+  function widthAtIndex(i) {
+    ensureWidths();
+    var w = chw[i];
+    return w === undefined ? BASE_HW : w;
+  }
+
   function reset() {
-    cx = [0]; cy = [0]; ch = [0]; ck = [0]; chw = [BASE_HW];
+    cx = [0]; cy = [0]; ch = [0]; ck = [0]; chw = []; cmx = [];
+    hwFilled = 0; mxFilled = 0;
     baseS = 0;
     segs = [{ s0: 0, s1: INTRO_LEN, turn: false, dir: 0, r: 0, hairpin: false }];
     genX = 0; genY = 0; genH = 0; genS = 0;
@@ -150,7 +216,10 @@
   function trim(sMin) {
     var drop = Math.floor((sMin - baseS) / SAMPLE);
     if (drop > 2000) {
-      cx.splice(0, drop); cy.splice(0, drop); ch.splice(0, drop); ck.splice(0, drop); chw.splice(0, drop);
+      cx.splice(0, drop); cy.splice(0, drop); ch.splice(0, drop); ck.splice(0, drop);
+      chw.splice(0, drop); cmx.splice(0, drop);
+      hwFilled = Math.max(0, hwFilled - drop);
+      mxFilled = Math.max(0, mxFilled - drop);
       baseS += drop * SAMPLE;
     }
     while (segs.length > 2 && segs[0].s1 < sMin) segs.shift();
@@ -167,7 +236,7 @@
 
   function lengthGenerated() { return baseS + (cx.length - 1) * SAMPLE; }
 
-  function halfWidthAt(s) { ensure(s + SAMPLE * 4); return chw[indexAt(s)]; }
+  function halfWidthAt(s) { ensure(s + SAMPLE * (4 + WIDEN_WIN + BLUR_WIN)); return widthAtIndex(indexAt(s)); }
 
   // Where the centreline is, and which way it points, at an arc length.
   var _c = { x: 0, y: 0, h: 0, k: 0 };
@@ -224,7 +293,7 @@
     out.i = best;
     out.h = h;
     out.k = ck[best];
-    out.hw = chw[best];
+    out.hw = widthAtIndex(best);
     out.px = cx[best]; out.py = cy[best];
     out.nx = cs; out.ny = -sn;            // unit normal, pointing right
     out.dev = ex * cs - ey * sn;          // + is right of the centreline
@@ -253,6 +322,42 @@
 
   var skyGrad = null, groundGrad = null, fogGrad = null;
 
+  var stars = null;
+  function makeStars() {
+    if (stars) return stars;
+    stars = [];
+    var seed = 20260914;
+    function rnd() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+    for (var i = 0; i < 150; i++) {
+      stars.push({
+        bearing: rnd() * Math.PI * 2,
+        y: 18 + rnd() * rnd() * (HORIZON_Y - 46),   // clustered up high
+        r: 0.7 + rnd() * 1.5,
+        a: 0.25 + rnd() * 0.6
+      });
+    }
+    return stars;
+  }
+
+  function drawStars(ctx, view) {
+    var st = makeStars(), W = view.W;
+    ctx.fillStyle = '#ffffff';
+    for (var i = 0; i < st.length; i++) {
+      var s2 = st[i];
+      var rel = s2.bearing - view.camAngle;
+      while (rel > Math.PI) rel -= Math.PI * 2;
+      while (rel < -Math.PI) rel += Math.PI * 2;
+      if (Math.abs(rel) > 1.15) continue;
+      var x = W * 0.5 + Math.tan(rel) * FOCAL;
+      if (x < -20 || x > W + 20) continue;
+      // fade out near the horizon so they do not sit on the skyline
+      var f = Math.min(1, (HORIZON_Y - s2.y) / 90);
+      ctx.globalAlpha = s2.a * f;
+      ctx.fillRect(x - s2.r, s2.y - s2.r, s2.r * 2, s2.r * 2);
+    }
+    ctx.globalAlpha = 1;
+  }
+
   function drawBackground(ctx, view) {
     var W = view.W, H = view.H;
     if (!skyGrad) {
@@ -265,6 +370,7 @@
     ctx.fillStyle = skyGrad;
     ctx.fillRect(-60, -60, W + 120, HORIZON_Y + 60);
 
+    drawStars(ctx, view);
     drawSun(ctx, view);
 
     if (!groundGrad) {
@@ -289,7 +395,7 @@
     while (rel < -Math.PI) rel += Math.PI * 2;
     if (Math.abs(rel) > 1.5) return;            // behind you
     var cxp = W * 0.5 + Math.tan(rel) * FOCAL;
-    var r = 190;
+    var r = 210;
 
     var halo = ctx.createRadialGradient(cxp, HORIZON_Y, r * 0.3, cxp, HORIZON_Y, r * 2.4);
     halo.addColorStop(0.00, 'rgba(255,138,60,0.42)');
@@ -345,12 +451,12 @@
   // World-anchored, so it slides and swings underneath you through a corner —
   // which is most of what tells you the car has actually turned.
   function drawGrid(ctx, view) {
-    var W = view.W, G = 240, R = 3400;
+    var W = view.W, G = 200, R = 3400;
     var gx0 = Math.floor((view.camX - R) / G) * G;
     var gy0 = Math.floor((view.camY - R) / G) * G;
     var g;
 
-    ctx.strokeStyle = 'rgba(158,116,240,0.14)';
+    ctx.strokeStyle = 'rgba(168,124,248,0.20)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (g = gx0; g <= view.camX + R; g += G) {
@@ -378,7 +484,7 @@
     var out = ribPool, n = 0;
     var sStart = view.carS - (CAM_BACK - NEAR) - 40;
     var sEnd = view.carS + LOOKAHEAD;
-    ensure(sEnd + 200);
+    ensure(sEnd + 200 + (WIDEN_WIN + BLUR_WIN) * SAMPLE);
 
     var pL = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
     var pR = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
@@ -389,7 +495,7 @@
       var i = indexAt(s);
       var h = ch[i], sn = Math.sin(h), cs = Math.cos(h);
       var nx = cs, ny = -sn;                       // unit normal, pointing right
-      var hw = chw[i];
+      var hw = widthAtIndex(i);
       project(cx[i] - nx * hw, cy[i] - ny * hw, view, pL);
       project(cx[i] + nx * hw, cy[i] + ny * hw, view, pR);
       project(cx[i], cy[i], view, pC);
@@ -482,7 +588,7 @@
   }
 
   function drawChevron(ctx, x, y, sc, dir, alpha, doubled) {
-    var fade = (sc - 0.20) / 0.14;
+    var fade = (sc - 0.17) / 0.13;
     if (fade <= 0) return;
     if (fade > 1) fade = 1;
     var w = 16 * sc / SC_CAR, h = 14 * sc / SC_CAR;
@@ -532,7 +638,7 @@
         var a = s <= g.s0 ? 1 : Math.max(0, 1 - (s - g.s0) / (len * 0.4));
         var idx = indexAt(s);
         var hh = ch[idx], nx = Math.cos(hh), ny = -Math.sin(hh);
-        var off = chw[idx] + 42;
+        var off = widthAtIndex(idx) + 42;
         project(cx[idx] - nx * off, cy[idx] - ny * off, view, p);
         if (p.vis) drawChevron(ctx, p.x, p.y, p.sc, g.dir, a, g.hairpin);
         project(cx[idx] + nx * off, cy[idx] + ny * off, view, p);
@@ -561,6 +667,7 @@
     centreAt: centreAt, locate: locate, indexAt: indexAt,
     dirAt: dirAt, isHairpin: isHairpin, radiusAt: radiusAt,
     lengthGenerated: lengthGenerated,
+    lapLength: lapLength, INTRO_LEN: INTRO_LEN,
     project: project, buildRibbon: buildRibbon, quads: quads,
     drawBackground: drawBackground, draw: draw,
     drawChevrons: drawChevrons, drawFog: drawFog

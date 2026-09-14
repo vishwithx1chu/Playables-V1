@@ -22,6 +22,7 @@
   var last = 0, acc = 0;
   var hintAlpha = 1;
   var hitCool = 0;
+  var lap = 1, lapFlash = 0;
 
   function resize() {
     var vw = Math.max(1, window.innerWidth);
@@ -114,10 +115,64 @@
     checkEdges(dt);
     updateCamera(dt);
 
+    // Laps. One lap is the whole corner sequence once; the start line is the
+    // end of the run-up.
+    var done = Math.floor(Math.max(0, DR.Car.roadS - DR.Road.INTRO_LEN) / DR.Road.lapLength());
+    if (done + 1 > lap) { lap = done + 1; lapFlash = 1; }
+    if (lapFlash > 0) lapFlash = Math.max(0, lapFlash - dt / 1.6);
+
     DR.FX.emit(DR.Car, SPEED, dt);
     DR.FX.update(dt, DR.Car.x, DR.Car.y);
     DR.Road.ensure(DR.Car.roadS + DR.Road.LOOKAHEAD + 400);
     DR.Road.trim(DR.Car.roadS - DR.Road.CAM_BACK - 900);
+  }
+
+  function lapProgress() {
+    var d = DR.Car.roadS - DR.Road.INTRO_LEN;
+    if (d < 0) return 0;
+    var L = DR.Road.lapLength();
+    return (d - Math.floor(d / L) * L) / L;
+  }
+
+  // Lap read-out. Deliberately small and quiet: this milestone is still about
+  // the driving, not the scoreboard.
+  function drawHud(ctx2, v) {
+    var x = 40, y = 54;
+    ctx2.textAlign = 'left';
+    ctx2.textBaseline = 'top';
+
+    ctx2.font = '700 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(150,196,225,0.85)';
+    ctx2.fillText('LAP', x, y);
+
+    ctx2.font = '800 52px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.lineWidth = 6;
+    ctx2.strokeStyle = 'rgba(4,2,10,0.85)';
+    ctx2.strokeText(String(lap), x, y + 24);
+    ctx2.fillStyle = '#eaf6ff';
+    ctx2.fillText(String(lap), x, y + 24);
+
+    // How far round this lap you are.
+    var bw = 190, bh = 7, by = y + 88;
+    ctx2.fillStyle = 'rgba(255,255,255,0.13)';
+    ctx2.fillRect(x, by, bw, bh);
+    ctx2.fillStyle = '#22e6ff';
+    ctx2.fillRect(x, by, bw * lapProgress(), bh);
+
+    // Crossing the line: one soft swell, no strobe.
+    if (lapFlash > 0) {
+      var k = Math.sin(Math.PI * Math.min(1, lapFlash));
+      ctx2.globalAlpha = k;
+      ctx2.textAlign = 'center';
+      ctx2.font = '800 64px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.lineWidth = 8;
+      ctx2.strokeStyle = 'rgba(4,2,10,0.85)';
+      ctx2.strokeText('LAP ' + lap, v.W * 0.5, v.H * 0.30);
+      ctx2.fillStyle = '#ffd76a';
+      ctx2.fillText('LAP ' + lap, v.W * 0.5, v.H * 0.30);
+      ctx2.globalAlpha = 1;
+      ctx2.textAlign = 'left';
+    }
   }
 
   function drawHint(ctx2, v) {
@@ -164,6 +219,7 @@
     DR.Car.draw(ctx, v);
     DR.FX.drawFlash(ctx, v, rib);
     DR.FX.drawLabels(ctx, v);
+    drawHud(ctx, v);
     drawHint(ctx, v);
 
     ctx.restore();
@@ -210,7 +266,12 @@
     LOGICAL_W: LOGICAL_W,
     LOGICAL_H: LOGICAL_H,
     camAngle: function () { return camAngle; },
-    restart: function () { DR.Road.reset(); DR.Car.reset(); DR.FX.reset(); camReady = false; hitCool = 0; }
+    lap: function () { return lap; },
+    lapProgress: lapProgress,
+    restart: function () {
+      DR.Road.reset(); DR.Car.reset(); DR.FX.reset();
+      camReady = false; hitCool = 0; lap = 1; lapFlash = 0;
+    }
   };
 
   if (document.readyState === 'loading') {

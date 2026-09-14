@@ -27,7 +27,7 @@ Let go to straighten out. That is every input the game has.
 
 ---
 
-## Current state: Milestone 1.4
+## Current state: Milestone 1.5
 
 Milestone 1 answers one question and nothing else: **does the drift feel
 good?** There is deliberately no score, no grading, no damage, no timer, no
@@ -44,14 +44,20 @@ What is in:
   changes in a row, flicking the car from one side to the other.
 - 85% of the lap is spent in a corner. The longest straight is 520 units.
 - The road is **380 units wide on the straights and up to 460 through the
-  corners** — the tighter the corner, the more tarmac it gets, widening and
-  narrowing smoothly as the curvature ramps in and out.
+  corners** — the tighter the corner, the more tarmac it gets, opening and
+  closing smoothly, and staying open across a direction change instead of
+  nipping in between two corners that meet.
 - Hitting a wall now helps you recover instead of trapping you. See below.
 - The lap returns to exactly the heading it started on, so it drives like a
   circuit rather than a spiral.
-- Chase camera behind and above the car, turning to follow it, with a
-  world-anchored ground grid and a sun that stays put in the world — which is
-  what lets you feel that a hairpin really has turned you around.
+- Low, close chase camera turning to follow the car, over a world-anchored
+  ground grid, under a sun and stars fixed in the world — all of which sweep
+  across as you turn, which is what lets you feel that a hairpin really has
+  turned you around.
+- **Lap counter** with a progress bar. One lap is the whole corner sequence
+  once, about 35 seconds of driving.
+- The car is drawn with real volume: a footprint on the tarmac, a raised body
+  over it, four wheels that steer with the drift, glass, lights and a wing.
 - Chevrons ahead of every corner; doubled red-orange ones for the hairpins.
 - Edge contact detected, with screen shake, an edge flash and a word telling
   you which mistake you made — but no health lost and the run never ends.
@@ -143,6 +149,14 @@ var TIGHTEST_K   = 1 / 600;  // what counts as "tightest"
 Corners widen in proportion to how tight they are, so the hardest corners get
 the most help and easy sweepers get almost none.
 
+The width is worked out in two passes: a rolling **maximum** of that figure
+over 240 units either side, then a blur over the result. The maximum is the
+important one — where two opposite corners meet, the curvature passes through
+zero for an instant, and anything that averages instead of maximising gets
+dragged down by exactly the dip it is meant to fill, nipping the road in
+between the two corners. The blur then takes the corners off it so the width
+glides rather than steps.
+
 **For harder levels later, this is the dial to turn.** Narrowing `CORNER_EXTRA`
 toward zero makes the whole circuit harder without changing a single corner's
 shape, which means difficulty tiers can reuse the same track.
@@ -181,8 +195,18 @@ milestone. The point of this is only that a mistake should be recoverable.
 ## Camera
 
 The block marked `THE CAMERA` at the top of [`src/road.js`](src/road.js).
-Lower `CAM_BACK` for a closer, more dramatic angle; raise it to pull back
-toward the old top-down view.
+`CAM_BACK` is how far behind the car it sits — smaller is closer. `HORIZON_Y`
+is how high the horizon sits on screen, which is really the camera's tilt:
+a bigger number means a lower, more level camera and more sky.
+
+## A note on car artwork
+
+Everything in the game is drawn in code, including the car. That is not only
+the rights rule in CLAUDE.md — downloaded artwork physically cannot work
+here. The published page blocks all external images, and the Playables rules
+forbid external assets and network calls, so a fetched image would simply
+fail to load in the thing you are actually playing. If we ever want richer
+artwork, the route is a hand-drawn vector car in code, not a downloaded one.
 
 ## Files
 
