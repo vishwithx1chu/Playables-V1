@@ -10,7 +10,7 @@
   var LOGICAL_W = 720;
   var LOGICAL_H = 1280;
 
-  var SPEED = 480;       // constant for now; the speed system is a later milestone
+  var SPEED = 540;       // constant for now; the speed system is a later milestone
   var FIXED = 1 / 60;    // physics rate, so the feel never changes with framerate
 
   var CAM_TAU  = 0.22;   // how lazily the camera swings round to follow you
@@ -69,7 +69,7 @@
     DR.Car.roadS = loc.s;
     DR.Car.dev = loc.dev;
 
-    var limit = DR.Road.HALF_W - DR.Car.halfWidth();
+    var limit = loc.hw - DR.Car.halfWidth();
     if (Math.abs(loc.dev) <= limit) return;
 
     var side = loc.dev > 0 ? 1 : -1;
@@ -89,7 +89,21 @@
 
     DR.FX.hit(kind, Math.max(0.35, severity), side, DR.Car);
     hitCool = 0.45;
-    DR.Car.drift *= 0.42;   // scrubbing the wall kills some of the slide
+
+    // A crash should push you toward the correction you actually needed.
+    // Running wide means you were not turning ENOUGH, so bleeding the drift
+    // off — which is what used to happen — guaranteed you scraped the rest of
+    // the corner and could never get back. Nudge it further into the corner
+    // instead, starting from wherever it already is.
+    if (kind === 'OUTER') {
+      var m = DR.Car.MAX_DRIFT;
+      var want = DR.Car.drift + dir * m * 0.22;
+      DR.Car.drift = want > m ? m : (want < -m ? -m : want);
+    } else {
+      // Cutting in, or sliding about on a straight: here you WERE turning too
+      // much, so scrubbing off some slide is the right correction.
+      DR.Car.drift *= 0.55;
+    }
   }
 
   function update(dt) {

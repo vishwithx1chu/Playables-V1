@@ -21,7 +21,7 @@
                     this is the number that decides how hard chicanes feel.
      ====================================================================== */
   var MAX_DRIFT_DEG = 38;
-  var TURN_GAIN     = 1.55;
+  var TURN_GAIN     = 1.74;
   var BUILD_TAU     = 0.34;
   var DECAY_TAU     = 0.72;
   var REVERSE_TAU   = 0.42;
@@ -37,6 +37,7 @@
   var Car = {
     W: CAR_W,
     L: CAR_L,
+    MAX_DRIFT: MAX_DRIFT,
     x: 0, y: 0,      // world position
     h: 0,            // heading: the direction the car is travelling
     drift: 0,        // slip angle; the body points this far off the heading

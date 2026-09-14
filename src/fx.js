@@ -183,15 +183,14 @@
 
     // Light up the edge that was actually touched.
     if (rib) {
-      var lo = flash.side < 0 ? -0.07 : 0.93;
-      var hi = flash.side < 0 ? 0.07 : 1.07;
+      var sd = flash.side;
       ctx.beginPath();
-      DR.Road.quads(ctx, rib, lo, hi, lo, hi);
+      DR.Road.quads(ctx, rib, sd, -26, sd, 26);
       ctx.globalAlpha = 0.85 * k * flash.strength;
       ctx.fillStyle = flash.color;
       ctx.fill();
       ctx.beginPath();
-      DR.Road.quads(ctx, rib, lo - 0.06, hi + 0.06, lo - 0.06, hi + 0.06);
+      DR.Road.quads(ctx, rib, sd, -52, sd, 52);
       ctx.globalAlpha = 0.30 * k * flash.strength;
       ctx.fill();
     }

@@ -27,7 +27,7 @@ Let go to straighten out. That is every input the game has.
 
 ---
 
-## Current state: Milestone 1.3
+## Current state: Milestone 1.4
 
 Milestone 1 answers one question and nothing else: **does the drift feel
 good?** There is deliberately no score, no grading, no damage, no timer, no
@@ -43,8 +43,10 @@ What is in:
 - **Four back-to-back esses** with no straight between them: three direction
   changes in a row, flicking the car from one side to the other.
 - 85% of the lap is spent in a corner. The longest straight is 520 units.
-- The road is 380 units wide, which leaves about 150 units of room either side
-  of the centre line once the car's own width is taken off.
+- The road is **380 units wide on the straights and up to 460 through the
+  corners** — the tighter the corner, the more tarmac it gets, widening and
+  narrowing smoothly as the curvature ramps in and out.
+- Hitting a wall now helps you recover instead of trapping you. See below.
 - The lap returns to exactly the heading it started on, so it drives like a
   circuit rather than a spiral.
 - Chase camera behind and above the car, turning to follow it, with a
@@ -128,11 +130,22 @@ The lap is the `LAP` list near the top of [`src/road.js`](src/road.js), written
 the way a track map reads — a straight of so many units, then a corner of so
 many degrees at such a radius.
 
-Road width is `HALF_W` at the top of the same file, and it is the gentlest
-difficulty dial there is: it changes how much room you have to be wrong in
-without touching a single corner. Widening the road from 340 to 380 took a
-good driver from occasional contact to clean laps, while leaving a sloppy one
-just as punished.
+Road width is the gentlest difficulty dial there is: it changes how much room
+you have to be wrong in without touching a single corner. Three numbers at the
+top of [`src/road.js`](src/road.js) control it:
+
+```js
+var BASE_HW      = 190;      // half width on a straight
+var CORNER_EXTRA = 40;       // how much wider the tightest corner gets
+var TIGHTEST_K   = 1 / 600;  // what counts as "tightest"
+```
+
+Corners widen in proportion to how tight they are, so the hardest corners get
+the most help and easy sweepers get almost none.
+
+**For harder levels later, this is the dial to turn.** Narrowing `CORNER_EXTRA`
+toward zero makes the whole circuit harder without changing a single corner's
+shape, which means difficulty tiers can reuse the same track.
 
 **The one rule: no corner's radius may go near 503.** A corner at exactly that
 radius needs 100% of the car's turning for its whole length, which leaves
@@ -146,6 +159,24 @@ Two more things worth knowing:
   easy; a 60-degree corner at radius 600 is hard.
 - The lap's left and right degrees are made to cancel out, so the track comes
   back to the heading it started on.
+
+## What happens when you hit a wall
+
+A crash nudges you toward the correction you actually needed, which is not
+the same in both directions:
+
+- **Ran wide** (hit the outer edge) means you were not turning *enough*. The
+  crash now turns the car a little further into the corner, starting from
+  however much it was already steering. Before, it bled the steering off,
+  which made the problem worse and meant one mistake scraped the rest of the
+  corner. Measured on a hairpin: recovery went from 3.66 seconds and seven
+  contacts down to 1.46 seconds and two.
+- **Cut in** (hit the inner edge) means you were turning *too much*, so here
+  the crash does bleed some steering off — that is the right correction, and
+  this case is unchanged.
+
+There is still no health and the run still never ends; that is a later
+milestone. The point of this is only that a mistake should be recoverable.
 
 ## Camera
 
