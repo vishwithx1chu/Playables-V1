@@ -32,7 +32,7 @@ touchscreen.
 
 ---
 
-## Current state: Milestone 1.6
+## Current state: Milestone 1.7
 
 Milestone 1 answers one question and nothing else: **does the drift feel
 good?** There is deliberately no score, no grading, no damage, no timer, no
@@ -59,9 +59,11 @@ What is in:
   ground grid, under a sun and stars fixed in the world — all of which sweep
   across as you turn, which is what lets you feel that a hairpin really has
   turned you around.
-- **Boost**: one press gives 10% more speed for two seconds, then eases back
-  over three. Unlimited presses. Bottom-centre button on touch and mouse,
-  Space / Up / W on the keyboard.
+- **Boost**: one press gives 15% more speed instantly — full on the very next
+  frame — held for two seconds, then eased back over three. Unlimited presses.
+  Bottom-centre button on touch and mouse, Space / Up / W on the keyboard.
+- **Lap timer**: running time for the lap you are on, plus the last three
+  completed laps with the quickest of them called out.
 - **Lap counter** with a progress bar. One lap is the whole corner sequence
   once, about 35 seconds of driving.
 - The car is an original low, wide, red mid-engine shape drawn in code:
@@ -189,15 +191,25 @@ Two more things worth knowing:
 `BASE_SPEED`, and the four boost numbers, are at the top of
 [`src/game.js`](src/game.js).
 
+Cruising speed is 624 and boost takes it to 718.
+
 The important part is not the boost itself, it is what had to change to make
 it safe. The car's turn rate is worked out from whatever the speed currently
 is, so that the tightest circle it can carve stays fixed at `MIN_RADIUS`
-however fast it is going. Without that, a 10% boost would push the tightest
-circle from 529 to 582 units against a 600-unit corner — 97% of it — and
-boosting into a hairpin would simply throw you off the road.
+however fast it is going. Without that, boost would push the tightest circle
+well past the 600-unit corners and boosting into a hairpin would simply throw
+you off the road.
 
-With it, boost costs you **time** instead: same geometry, 10% less of it.
+With it, boost costs you **time** instead: same geometry, 15% less of it.
 That is the risk, and it is a fair one.
+
+Speed is also the strongest difficulty lever in the game, because the car's
+reaction times are fixed in seconds — at a higher speed you cover more ground
+while a drift builds. Going from 567 to 624 took a well-anticipating test
+driver from 2 edge contacts in 30 seconds to 9. If that turns out to be too
+much, `CORNER_EXTRA` in [`src/road.js`](src/road.js) is the offset: it hands
+back margin in exactly the corners where speed costs it, without touching the
+corners themselves or the speed.
 
 ## What happens when you hit a wall
 

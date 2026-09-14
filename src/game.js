@@ -18,11 +18,10 @@
      The car's grip is derived from whatever the speed currently is (see
      MIN_RADIUS in car.js), so boosting into a corner never makes it
      impossible — it just gives you less time to get it right. */
-  var BASE_SPEED = 567;      // was 540, up 5%
-  var BOOST_MULT = 1.10;     // 10% faster while boosting
+  var BASE_SPEED = 624;      // was 567, up 10%
+  var BOOST_MULT = 1.15;     // 15% faster while boosting, applied instantly
   var BOOST_HOLD = 2.0;      // seconds at full boost
   var BOOST_FADE = 3.0;      // seconds easing back to normal
-  var BOOST_RISE = 0.12;     // brief ramp in, so it surges instead of snapping
   /* --------------------------------------------------------------------- */
 
   var BOOST_BTN = { x: 360, y: 1168, r: 72 };
@@ -39,6 +38,9 @@
   var hitCool = 0;
   var lap = 1, lapFlash = 0;
   var boostT = 1e9;          // seconds since the boost was pressed
+  var lapTimer = 0;          // seconds into the current lap
+  var timing = false;        // false until the start line is crossed
+  var lapTimes = [];         // completed laps, newest last
 
   function resize() {
     var vw = Math.max(1, window.innerWidth);
@@ -56,8 +58,7 @@
 
   function boostMult() {
     if (boostT >= BOOST_HOLD + BOOST_FADE) return 1;
-    if (boostT < BOOST_RISE) return 1 + (BOOST_MULT - 1) * (boostT / BOOST_RISE);
-    if (boostT < BOOST_HOLD) return BOOST_MULT;
+    if (boostT < BOOST_HOLD) return BOOST_MULT;   // full, from the first frame
     return BOOST_MULT - (BOOST_MULT - 1) * ((boostT - BOOST_HOLD) / BOOST_FADE);
   }
 
@@ -147,14 +148,33 @@
 
     // Laps. One lap is the whole corner sequence once; the start line is the
     // end of the run-up.
+    // The clock starts at the start line, so the run-up is not part of lap 1.
+    if (!timing && DR.Car.roadS >= DR.Road.INTRO_LEN) { timing = true; lapTimer = 0; }
+    if (timing) lapTimer += dt;
+
     var done = Math.floor(Math.max(0, DR.Car.roadS - DR.Road.INTRO_LEN) / DR.Road.lapLength());
-    if (done + 1 > lap) { lap = done + 1; lapFlash = 1; }
+    if (done + 1 > lap) {
+      lap = done + 1;
+      lapFlash = 1;
+      lapTimes.push(lapTimer);
+      if (lapTimes.length > 3) lapTimes.shift();
+      lapTimer = 0;
+    }
     if (lapFlash > 0) lapFlash = Math.max(0, lapFlash - dt / 1.6);
 
     DR.FX.emit(DR.Car, speed, dt);
     DR.FX.update(dt, DR.Car.x, DR.Car.y);
     DR.Road.ensure(DR.Car.roadS + DR.Road.LOOKAHEAD + 400);
     DR.Road.trim(DR.Car.roadS - DR.Road.CAM_BACK - 900);
+  }
+
+  // m:ss.hh under a minute drops the minutes, because a lap is about half one.
+  function fmt(t) {
+    if (!(t >= 0)) return '--.--';
+    var m = Math.floor(t / 60);
+    var rest = t - m * 60;
+    var ss = rest < 10 ? '0' + rest.toFixed(2) : rest.toFixed(2);
+    return m > 0 ? m + ':' + ss : rest.toFixed(2);
   }
 
   function lapProgress() {
@@ -167,7 +187,8 @@
   // Lap read-out. Deliberately small and quiet: this milestone is still about
   // the driving, not the scoreboard.
   function drawHud(ctx2, v) {
-    var x = 40, y = 54;
+    var x = 40, y = 50, i;
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     ctx2.textAlign = 'left';
     ctx2.textBaseline = 'top';
 
@@ -178,16 +199,56 @@
     ctx2.font = '800 52px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx2.lineWidth = 6;
     ctx2.strokeStyle = 'rgba(4,2,10,0.85)';
-    ctx2.strokeText(String(lap), x, y + 24);
+    ctx2.strokeText(String(lap), x, y + 22);
     ctx2.fillStyle = '#eaf6ff';
-    ctx2.fillText(String(lap), x, y + 24);
+    ctx2.fillText(String(lap), x, y + 22);
 
-    // How far round this lap you are.
-    var bw = 190, bh = 7, by = y + 88;
+    var bw = 200, bh = 7, by = y + 88;
     ctx2.fillStyle = 'rgba(255,255,255,0.13)';
     ctx2.fillRect(x, by, bw, bh);
     ctx2.fillStyle = '#22e6ff';
     ctx2.fillRect(x, by, bw * lapProgress(), bh);
+
+    // Running time for the lap you are on.
+    ctx2.font = '700 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(150,196,225,0.8)';
+    ctx2.fillText('THIS LAP', x, y + 108);
+    ctx2.font = '700 38px ' + MONO;
+    ctx2.lineWidth = 5;
+    ctx2.strokeStyle = 'rgba(4,2,10,0.85)';
+    ctx2.strokeText(timing ? fmt(lapTimer) : '--.--', x, y + 130);
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText(timing ? fmt(lapTimer) : '--.--', x, y + 130);
+
+    // The last three, newest at the top. The quickest of them is called out,
+    // so the list says something rather than just listing.
+    if (lapTimes.length) {
+      var best = Math.min.apply(null, lapTimes);
+      ctx2.font = '700 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = 'rgba(150,196,225,0.8)';
+      ctx2.fillText('LAST LAPS', x, y + 182);
+
+      for (i = 0; i < lapTimes.length; i++) {
+        var idx = lapTimes.length - 1 - i;          // newest first
+        var t = lapTimes[idx];
+        var row = y + 206 + i * 28;
+        var isBest = t === best && lapTimes.length > 1;
+
+        ctx2.font = '600 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx2.fillStyle = 'rgba(150,196,225,0.65)';
+        ctx2.fillText('L' + (lap - 1 - i), x, row + 3);   // row 0 is the lap just finished
+
+        ctx2.font = '700 24px ' + MONO;
+        ctx2.fillStyle = isBest ? '#7dffb0' : 'rgba(228,242,252,0.92)';
+        ctx2.fillText(fmt(t), x + 46, row);
+
+        if (isBest) {
+          ctx2.font = '700 16px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+          ctx2.fillStyle = '#7dffb0';
+          ctx2.fillText('BEST', x + 162, row + 6);
+        }
+      }
+    }
 
     drawBoostButton(ctx2);
 
@@ -196,12 +257,18 @@
       var k = Math.sin(Math.PI * Math.min(1, lapFlash));
       ctx2.globalAlpha = k;
       ctx2.textAlign = 'center';
-      ctx2.font = '800 64px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.font = '800 60px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
       ctx2.lineWidth = 8;
       ctx2.strokeStyle = 'rgba(4,2,10,0.85)';
-      ctx2.strokeText('LAP ' + lap, v.W * 0.5, v.H * 0.30);
+      ctx2.strokeText('LAP ' + (lap - 1), v.W * 0.5, v.H * 0.26);
       ctx2.fillStyle = '#ffd76a';
-      ctx2.fillText('LAP ' + lap, v.W * 0.5, v.H * 0.30);
+      ctx2.fillText('LAP ' + (lap - 1), v.W * 0.5, v.H * 0.26);
+      if (lapTimes.length) {
+        ctx2.font = '700 46px ' + MONO;
+        ctx2.strokeText(fmt(lapTimes[lapTimes.length - 1]), v.W * 0.5, v.H * 0.26 + 66);
+        ctx2.fillStyle = '#eaf6ff';
+        ctx2.fillText(fmt(lapTimes[lapTimes.length - 1]), v.W * 0.5, v.H * 0.26 + 66);
+      }
       ctx2.globalAlpha = 1;
       ctx2.textAlign = 'left';
     }
@@ -255,13 +322,13 @@
     ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx2.lineWidth = 6;
     ctx2.strokeStyle = 'rgba(4,2,10,0.9)';
-    ctx2.strokeText('HOLD LEFT OR RIGHT SIDE', v.W * 0.5, v.H - 1010);
+    ctx2.strokeText('HOLD LEFT OR RIGHT SIDE', v.W * 0.5, v.H - 790);
     ctx2.fillStyle = '#dff6ff';
-    ctx2.fillText('HOLD LEFT OR RIGHT SIDE', v.W * 0.5, v.H - 1010);
+    ctx2.fillText('HOLD LEFT OR RIGHT SIDE', v.W * 0.5, v.H - 790);
     ctx2.font = '600 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.strokeText('hold all the way through a corner', v.W * 0.5, v.H - 972);
+    ctx2.strokeText('hold all the way through a corner', v.W * 0.5, v.H - 752);
     ctx2.fillStyle = 'rgba(190,214,235,0.9)';
-    ctx2.fillText('hold all the way through a corner', v.W * 0.5, v.H - 972);
+    ctx2.fillText('hold all the way through a corner', v.W * 0.5, v.H - 752);
     ctx2.globalAlpha = 1;
   }
 
@@ -346,6 +413,9 @@
     BASE_SPEED: BASE_SPEED,
     speed: function () { return BASE_SPEED * boostMult(); },
     boostAmount: boostAmount,
+    lapTimes: function () { return lapTimes.slice(); },
+    lapTimer: function () { return lapTimer; },
+    timing: function () { return timing; },
     boostButton: BOOST_BTN,
     LOGICAL_W: LOGICAL_W,
     LOGICAL_H: LOGICAL_H,
@@ -355,6 +425,7 @@
     restart: function () {
       DR.Road.reset(); DR.Car.reset(); DR.FX.reset();
       camReady = false; hitCool = 0; lap = 1; lapFlash = 0; boostT = 1e9;
+      lapTimer = 0; timing = false; lapTimes.length = 0;
     }
   };
 

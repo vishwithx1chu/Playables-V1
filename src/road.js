@@ -34,8 +34,8 @@
   var SC_CAR    = FOCAL / CAM_BACK;
   /* -------------------------------------------------------------------- */
 
-  var CHEVRON_LEAD = 1000;
-  var HAIRPIN_LEAD = 1450;
+  var CHEVRON_LEAD = 1100;
+  var HAIRPIN_LEAD = 1595;
 
   /* ------------------------------ THE LAP ------------------------------
      Radius is what makes a corner hard: the car's tightest possible circle
