@@ -61,7 +61,9 @@
       this.roadS = 0; this.dev = 0;
     },
 
-    update: function (dt, steer, speed) {
+    // `straighten` scales how fast the body squares itself up when you are
+    // not holding a side. 1 is normal; boost passes more than 1.
+    update: function (dt, steer, speed, straighten) {
       /* Two angles, not one, and the gap between them is the drift.
 
          cmdSlip is how far round the BODY is — it answers your thumb almost
@@ -76,7 +78,9 @@
 
       var target = steer * SLIP_AT_LIMIT;
       var tau;
-      if (steer === 0) tau = DECAY_TAU;
+      // Only the letting-go case is spedable. Holding a side is you asking
+      // for the drift, and nothing should take it away from you.
+      if (steer === 0) tau = DECAY_TAU / (straighten > 0 ? straighten : 1);
       else if (this.cmdSlip * steer < 0) tau = REVERSE_TAU;
       else tau = BUILD_TAU;
 

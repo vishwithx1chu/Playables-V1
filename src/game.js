@@ -11,17 +11,32 @@
   var LOGICAL_H = 1280;
 
   /* ------------------------------- SPEED -------------------------------
-     BASE_SPEED is the cruising speed. Boost multiplies it for BOOST_HOLD
-     seconds, then eases back over BOOST_FADE. Unlimited presses; pressing
-     again restarts the two seconds.
+     BASE_SPEED is the cruising speed. Boost multiplies it on the envelope
+     below; pressing again restarts that envelope from the top.
 
      The car's grip is derived from whatever the speed currently is (see
      MIN_RADIUS in car.js), so boosting into a corner never makes it
      impossible — it just gives you less time to get it right. */
   var BASE_SPEED = 808;      // was 898, down 10%
-  var BOOST_MULT = 1.35;     // 35% faster while boosting, applied instantly
-  var BOOST_HOLD = 1.5;      // seconds at full boost
-  var BOOST_FADE = 3.0;      // seconds easing back to normal
+
+  /* The boost envelope, in four parts: it lands on 40% instantly, holds there
+     for a second, eases down to 30% over the next second, and then bleeds the
+     last of it away over three. The step down to 30% is the point — a single
+     long fade reads as one event, while a shove that settles into a shorter
+     push reads as two, so the boost has a peak you can feel it come off. */
+  var BOOST_PEAK = 1.40;     // 40% faster the very frame you press it
+  var BOOST_HOLD = 1.0;      // seconds held at the full 40%
+  var BOOST_STEP = 1.30;     // then eased down to 30% ...
+  var BOOST_DROP = 1.0;      // ... over this long
+  var BOOST_FADE = 3.0;      // and back to normal over this long again
+
+  /* Boost also squares the car up. Lighting it mid-drift takes a little angle
+     off at once and then straightens half again as fast as normal — but only
+     while you are NOT holding a side, because holding one is you asking for
+     the drift. So boost out of a corner and the car snaps into line for the
+     straight; boost while still holding and it stays sideways. */
+  var BOOST_STRAIGHTEN = 1.5;   // decay rate multiplier at full boost
+  var BOOST_SLIP_SCRUB = 0.85;  // angle kept when the boost fires
 
   /* ------------------------------ BOOST FUEL ----------------------------
      Boost is no longer free. The meter fills two ways: by drifting, where a
@@ -94,12 +109,15 @@
   }
 
   function boostMult() {
-    if (boostT >= BOOST_HOLD + BOOST_FADE) return 1;
-    if (boostT < BOOST_HOLD) return BOOST_MULT;   // full, from the first frame
-    return BOOST_MULT - (BOOST_MULT - 1) * ((boostT - BOOST_HOLD) / BOOST_FADE);
+    if (boostT < BOOST_HOLD) return BOOST_PEAK;            // full, from frame one
+    var t = boostT - BOOST_HOLD;
+    if (t < BOOST_DROP) return BOOST_PEAK + (BOOST_STEP - BOOST_PEAK) * (t / BOOST_DROP);
+    t -= BOOST_DROP;
+    if (t < BOOST_FADE) return BOOST_STEP + (1 - BOOST_STEP) * (t / BOOST_FADE);
+    return 1;
   }
 
-  function boostAmount() { return (boostMult() - 1) / (BOOST_MULT - 1); }
+  function boostAmount() { return (boostMult() - 1) / (BOOST_PEAK - 1); }
 
   function slipDrag() {
     var sn = Math.sin(DR.Car.slip);
@@ -225,8 +243,11 @@
     if (boostDenied > 0) boostDenied = Math.max(0, boostDenied - dt / 0.6);
 
     if (DR.Input.takeBoost()) {
-      if (meter >= BOOST_COST) { meter -= BOOST_COST; boostT = 0; DR.FX.boostKick(); }
-      else boostDenied = 1;
+      if (meter >= BOOST_COST) {
+        meter -= BOOST_COST; boostT = 0; DR.FX.boostKick();
+        // A shove forward takes some of the sideways out of it straight away.
+        DR.Car.scrubSlip(BOOST_SLIP_SCRUB);
+      } else boostDenied = 1;
     }
     if (boostT < 1e9) boostT += dt;
 
@@ -244,7 +265,10 @@
 
     if (hitPenalty < 1) hitPenalty = Math.min(1, hitPenalty + HIT_RECOVER_PER_SEC * dt);
     var speed = currentSpeed();
-    DR.Car.update(dt, steer, speed);
+    // Eased off with the boost rather than switched off at the end of it, so
+    // there is no moment where the car suddenly stops squaring up.
+    var straighten = steer === 0 ? 1 + (BOOST_STRAIGHTEN - 1) * boostAmount() : 1;
+    DR.Car.update(dt, steer, speed, straighten);
 
     // The push off the barrier, spent over a fifth of a second rather than
     // all at once, so you can see the car come back off the wall.
@@ -391,7 +415,7 @@
   // seconds of boost and refills as the car eases back to normal.
   function drawBoostButton(ctx2) {
     var b = BOOST_BTN, amt = boostAmount();
-    var live = boostT < BOOST_HOLD + BOOST_FADE;
+    var live = boostT < BOOST_HOLD + BOOST_DROP + BOOST_FADE;
     var ready = meter >= BOOST_COST;
     var i;
 

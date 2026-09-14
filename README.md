@@ -76,9 +76,14 @@ those are later milestones. What is in:
   Grand — and the same set comes round every lap, from lap one.
 - **A big slide costs speed.** Being sideways scrubs up to about 13% off, so
   drifting hard for fuel is a real trade against a clean quick line.
-- **Boost**: one press gives 35% more speed instantly — full on the very next
-  frame — held for one and a half seconds, then eased back over three. Unlimited presses.
-  Bottom-centre button on touch and mouse, Space / Up / W on the keyboard.
+- **Boost**: one press gives **40% more speed on the very next frame**, holds
+  there for a second, eases down to 30% over the second after that, and then
+  bleeds the last of it away over three more. Bottom-centre button on touch and
+  mouse, Space / Up / W on the keyboard.
+- **Boost also squares the car up.** Lighting it mid-drift takes 15% of the
+  angle off at once, and the car then straightens **half again as fast as
+  normal** — but only while you are *not* holding a side. Hold one and the
+  drift stays: holding is you asking for it.
 - **Lap timer**: running time for the lap you are on, plus the last three
   completed laps with the quickest of them called out.
 - **Lap counter** with a progress bar. One lap is the whole corner sequence
@@ -236,9 +241,11 @@ test checks every circuit against the tightest circle the car can carve.
 
 The target itself comes from `targetSecs x pace` on each track. `pace` is how
 many world units a clean lap actually covers per second, **measured from a
-driven lap rather than guessed** — 856, 852 and 860 for the three circuits.
-Driven cleanly with no wall contact the three now come out at 24.9, 32.1 and
-40.0 seconds.
+driven lap rather than guessed** — 869, 858 and 868 for the three circuits.
+Driven cleanly with no wall contact the three now come out at **25.0, 32.0 and
+40.0 seconds**. Change anything that affects how fast a lap is driven — the
+boost envelope most of all — and these three numbers have to be re-measured,
+or the stated lap times quietly stop being true.
 
 ## Where lap-to-lap variety comes from
 
@@ -265,8 +272,21 @@ Measured over four laps by the same test driver, the spread went from 2.9% to
 `BASE_SPEED`, and the four boost numbers, are at the top of
 [`src/game.js`](src/game.js).
 
-Cruising speed is 808 and boost takes it to 1091 — 35% more, from the very
-next frame.
+Cruising speed is 808 and boost takes it to 1131 — 40% more, from the very
+next frame — then 1050 a second later, back to 808 five seconds after the
+press.
+
+The envelope has a step in it rather than one long fade, and that is the
+point. A single fade reads as one event; a shove that settles into a shorter
+push reads as two, so you feel the peak come off instead of just noticing, at
+some point, that you are slow again.
+
+Boost is also a **steering** input, not only a speed one. Press it and the car
+takes 15% of its drift angle off at once and then straightens half again as
+fast as normal — but only while you are not holding a side. So boost on the
+exit of a corner and the car snaps into line for the straight; boost while
+still holding and it stays sideways and just goes faster. Both are useful, and
+choosing between them is the decision the change adds.
 
 The important part is not the boost itself, it is what had to change to make
 it safe. The car's turn rate is worked out from whatever the speed currently

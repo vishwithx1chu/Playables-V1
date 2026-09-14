@@ -55,7 +55,7 @@
      and the thing drives like a circuit rather than a spiral. */
   var TRACKS = [
     { name: 'VELOCITY RING', blurb: 'Long straights, fast sweepers', tag: 'FAST',
-      targetSecs: 25, pace: 856, picks: 4, lap: [
+      targetSecs: 25, pace: 869, picks: 4, lap: [
       { kind:'str', len:1600 },
       { kind:'turn', dir: 1, r:1000, deg: 90 },
       { kind:'str', len:1300 },
@@ -80,7 +80,7 @@
       { kind:'str', len:1000 }
     ]},
     { name: 'HARBOUR MAZE', blurb: 'Barely a straight on it', tag: 'TECHNICAL',
-      targetSecs: 32, pace: 852, picks: 5, lap: [
+      targetSecs: 32, pace: 858, picks: 5, lap: [
       { kind:'str', len: 400 },
       { kind:'turn', dir: 1, r: 640, deg: 90 },
       { kind:'str', len: 250 },
@@ -112,7 +112,7 @@
       { kind:'str', len: 420 }
     ]},
     { name: 'GRAND CIRCUIT', blurb: 'Four big corners, hairpin, esses', tag: 'BALANCED',
-      targetSecs: 40, pace: 860, picks: 6, lap: [
+      targetSecs: 40, pace: 868, picks: 6, lap: [
       { kind:'str', len: 900 },
       { kind:'turn', dir: 1, r: 820, deg: 90 },
       { kind:'str', len: 500 },
