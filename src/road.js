@@ -7,7 +7,7 @@
   'use strict';
 
   var BASE_HW = 190;         // straights: road is 380 units wide
-  var CORNER_EXTRA = 40;     // corners widen by up to this much per side
+  var CORNER_EXTRA = 65;     // corners widen by up to this much per side
   var TIGHTEST_K = 1 / 600;  // curvature of the tightest corner on the track
   var WIDEN_WIN = 30;        // smoothing window, in samples either side (240 units)
   var HALF_W = BASE_HW;      // kept for anything asking for the nominal width
@@ -24,10 +24,10 @@
   // Useful identity: the car sits FOCAL x tan(tilt) below the horizon. So at a
   // fixed low tilt, a longer FOCAL buys back sky, a bigger car and a wider
   // road all at once — it only costs field of view to the sides.
-  var HORIZON_Y = 547;       // 43% sky, at a 38 degree tilt
-  var CAR_Y     = 930;
-  var CAM_BACK  = 380;       // how far behind the car the camera sits
-  var FOCAL     = 490;
+  var HORIZON_Y = 633;       // 32 degree tilt now — lower still
+  var CAR_Y     = 880;
+  var CAM_BACK  = 300;       // right up behind the car
+  var FOCAL     = 395;
   var NEAR      = 70;        // nothing closer than this can be drawn
   var LOOKAHEAD = 2600;      // world units of road drawn ahead of the car
   var K         = (CAR_Y - HORIZON_Y) * CAM_BACK;
@@ -78,6 +78,41 @@
   function lapLength() {
     if (!_lapLen) for (var i = 0; i < LAP.length; i++) _lapLen += segLength(LAP[i]);
     return _lapLen;
+  }
+
+  // One lap's shape, walked once and cached, for the minimap. Normalised into
+  // a unit box with the arc length kept alongside so a car can be placed on it.
+  var _outline = null;
+  function lapOutline() {
+    if (_outline) return _outline;
+    var pts = [], x = 0, y = 0, h = 0, s = 0, STEP = 30;
+    for (var i = 0; i < LAP.length; i++) {
+      var seg = LAP[i], len = segLength(seg);
+      for (var t = 0; t < len; t += STEP) {
+        var k = segCurvature(seg, t + STEP * 0.5);
+        h += k * STEP * 0.5;
+        x += Math.sin(h) * STEP; y += Math.cos(h) * STEP;
+        h += k * STEP * 0.5;
+        s += STEP;
+        pts.push({ x: x, y: y, s: s });
+      }
+    }
+    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, j;
+    for (j = 0; j < pts.length; j++) {
+      if (pts[j].x < minX) minX = pts[j].x;
+      if (pts[j].x > maxX) maxX = pts[j].x;
+      if (pts[j].y < minY) minY = pts[j].y;
+      if (pts[j].y > maxY) maxY = pts[j].y;
+    }
+    var span = Math.max(maxX - minX, maxY - minY) || 1;
+    var total = s;
+    for (j = 0; j < pts.length; j++) {
+      pts[j].nx = (pts[j].x - (minX + maxX) / 2) / span + 0.5;
+      pts[j].ny = (pts[j].y - (minY + maxY) / 2) / span + 0.5;
+      pts[j].f = pts[j].s / total;
+    }
+    _outline = pts;
+    return _outline;
   }
 
   // Centreline, sampled every SAMPLE units. Uniform spacing means arc length
@@ -674,7 +709,7 @@
     centreAt: centreAt, locate: locate, indexAt: indexAt,
     dirAt: dirAt, isHairpin: isHairpin, radiusAt: radiusAt,
     lengthGenerated: lengthGenerated,
-    lapLength: lapLength, INTRO_LEN: INTRO_LEN,
+    lapLength: lapLength, INTRO_LEN: INTRO_LEN, lapOutline: lapOutline,
     project: project, buildRibbon: buildRibbon, quads: quads,
     drawBackground: drawBackground, draw: draw,
     drawChevrons: drawChevrons, drawFog: drawFog

@@ -32,7 +32,7 @@ touchscreen.
 
 ---
 
-## Current state: Milestone 1.7
+## Current state: Milestone 1.8
 
 Milestone 1 answers one question and nothing else: **does the drift feel
 good?** There is deliberately no score, no grading, no damage, no timer, no
@@ -59,8 +59,10 @@ What is in:
   ground grid, under a sun and stars fixed in the world — all of which sweep
   across as you turn, which is what lets you feel that a hairpin really has
   turned you around.
-- **Boost**: one press gives 15% more speed instantly — full on the very next
-  frame — held for two seconds, then eased back over three. Unlimited presses.
+- **Minimap** top right, showing the lap's shape and where you are on it.
+- Hitting a wall costs **10% of your speed**, won back over one second.
+- **Boost**: one press gives 25% more speed instantly — full on the very next
+  frame — held for one and a half seconds, then eased back over three. Unlimited presses.
   Bottom-centre button on touch and mouse, Space / Up / W on the keyboard.
 - **Lap timer**: running time for the lap you are on, plus the last three
   completed laps with the quickest of them called out.
@@ -102,45 +104,54 @@ The point of this milestone is feel, so drive it and answer these:
 
 ## How the drift works
 
-Holding a side builds a **slip angle** — how far the car's body is slewed away
-from the direction it is travelling. That part has not changed, and neither has
-the weight of it.
+There are **two angles**, and the gap between them is the whole thing.
 
-What the slip angle *does* changed in Milestone 1.2. It used to shove the car
-sideways. It now **rotates** the car. So:
+- `cmdSlip` is how far round the **body** has swung. It answers your thumb
+  almost at once.
+- `gripSlip` is how far round the **tyres have actually taken hold**. It
+  trails the body by `GRIP_TAU`.
 
-- Hold, and the car turns harder and harder up to its limit — it carves a
-  circle. Hold all the way through a hairpin and you come out facing backwards.
-- Let go, and the slip angle bleeds away over about three quarters of a second,
-  so the car keeps turning for a moment before it runs straight. That lag is
-  the weight you feel, and it is why you have to release *before* the corner
-  ends rather than at the end of it.
-- Hold the other way and you have to unwind the old drift before the new one
-  builds. That is what makes the esses hard.
+The car's path bends from `gripSlip`, never from `cmdSlip`. So flicking in
+swings the tail out *before* the car goes anywhere, and letting go squares the
+body up while the car is *still coming round*. Set `GRIP_TAU` to zero and both
+of those disappear and it goes straight back to looking like plain steering.
+
+Measured at the shipped settings: a quarter of a second after turn-in the body
+is 31 degrees sideways while the path has only bent 5 degrees. Let go
+mid-corner and the path comes round another 33 degrees while the body actually
+rotates back.
+
+### The cost, measured
+
+That lag is not free. It is the difference between drifting and turning, and
+it is also the hardest thing about driving the car. Contacts in 30 seconds for
+the same test driver, changing nothing but `GRIP_TAU`:
+
+| GRIP_TAU | 0.00 | 0.06 | 0.12 | 0.20 |
+|---|---|---|---|---|
+| contacts | 16 | 21 | 25 | 28 |
+
+Zero reproduces the old model exactly. The game ships at **0.09**. If it ever
+feels uncontrollable rather than loose, that is the one number to lower.
 
 ## Changing how it feels
 
 Top of [`src/car.js`](src/car.js):
 
 ```js
-var MAX_DRIFT_DEG = 38;    // how far round the car slews
-var TURN_GAIN     = 1.55;  // how hard that slew rotates the car
-var BUILD_TAU     = 0.34;  // seconds to lean into a drift
-var DECAY_TAU     = 0.72;  // seconds to straighten after you let go
-var REVERSE_TAU   = 0.42;  // seconds to flick from one drift to the other
+var MIN_RADIUS    = 504;   // tightest circle the car can carve, at any speed
+var SLIP_AT_LIMIT = 58;    // degrees sideways at full lock — the drift dial
+var BUILD_TAU     = 0.34;  // seconds to swing the body out
+var DECAY_TAU     = 0.55;  // seconds for it to square itself up
+var REVERSE_TAU   = 0.42;  // seconds to flick the other way
+var GRIP_TAU      = 0.09;  // how far the path lags the body — drift vs turning
 ```
 
-`DECAY_TAU` is the weight dial. `REVERSE_TAU` is the chicane dial — raise it
-and back-to-back corners get much harder. `TURN_GAIN` is the difficulty dial
-for the whole track at once: it sets the tightest circle the car can possibly
-carve, which is
-
-```
-tightest circle = speed / (TURN_GAIN * sin(MAX_DRIFT_DEG))
-```
-
-At the current numbers that is about **503 units**. Every corner on the track
-is checked against it.
+`GRIP_TAU` decides how much this looks like drifting. `SLIP_AT_LIMIT` decides
+how sideways it gets. `REVERSE_TAU` is the chicane dial. `MIN_RADIUS` is the
+difficulty dial for the whole track: it is the tightest circle the car can
+carve at **any** speed, because the turn rate is derived from the current
+speed. Every corner is checked against it by a test.
 
 ## Changing the circuit
 

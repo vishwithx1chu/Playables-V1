@@ -18,10 +18,15 @@
      The car's grip is derived from whatever the speed currently is (see
      MIN_RADIUS in car.js), so boosting into a corner never makes it
      impossible — it just gives you less time to get it right. */
-  var BASE_SPEED = 624;      // was 567, up 10%
-  var BOOST_MULT = 1.15;     // 15% faster while boosting, applied instantly
-  var BOOST_HOLD = 2.0;      // seconds at full boost
+  var BASE_SPEED = 718;
+  var BOOST_MULT = 1.25;     // 25% faster while boosting, applied instantly
+  var BOOST_HOLD = 1.5;      // seconds at full boost
   var BOOST_FADE = 3.0;      // seconds easing back to normal
+
+  // Every wall costs 10% of your speed, and it takes a second to win back.
+  var HIT_LOSS = 0.10;
+  var HIT_RECOVER_PER_SEC = 0.10;
+  var HIT_FLOOR = 0.55;      // repeated hits cannot bring you to a crawl
   /* --------------------------------------------------------------------- */
 
   var BOOST_BTN = { x: 360, y: 1168, r: 72 };
@@ -41,6 +46,7 @@
   var lapTimer = 0;          // seconds into the current lap
   var timing = false;        // false until the start line is crossed
   var lapTimes = [];         // completed laps, newest last
+  var hitPenalty = 1;        // speed multiplier lost to walls, climbing back to 1
 
   function resize() {
     var vw = Math.max(1, window.innerWidth);
@@ -64,6 +70,8 @@
 
   function boostAmount() { return (boostMult() - 1) / (BOOST_MULT - 1); }
 
+  function currentSpeed() { return BASE_SPEED * boostMult() * hitPenalty; }
+
   function view() {
     return {
       W: LOGICAL_W, H: LOGICAL_H,
@@ -83,7 +91,7 @@
 
     var f = Math.exp(0);   // camera sits CAM_BACK behind, along its own bearing
     var sn = Math.sin(camAngle), cs = Math.cos(camAngle);
-    var lean = Math.sin(DR.Car.drift) * CAM_LEAN;
+    var lean = Math.sin(DR.Car.slip) * CAM_LEAN;
     camX = DR.Car.x - sn * DR.Road.CAM_BACK + cs * lean;
     camY = DR.Car.y - cs * DR.Road.CAM_BACK - sn * lean;
   }
@@ -113,7 +121,7 @@
     // so hitting that edge means you cut in and the other means you ran wide.
     var dir = DR.Road.dirAt(loc.s);
     var kind = dir === 0 ? 'OFFLINE' : (side === dir ? 'INNER' : 'OUTER');
-    var severity = Math.min(1, Math.abs(Math.sin(DR.Car.drift)) * BASE_SPEED / 250);
+    var severity = Math.min(1, Math.abs(Math.sin(DR.Car.slip)) * BASE_SPEED / 320);
 
     DR.FX.hit(kind, Math.max(0.35, severity), side, DR.Car);
     hitCool = 0.45;
@@ -123,14 +131,15 @@
     // off — which is what used to happen — guaranteed you scraped the rest of
     // the corner and could never get back. Nudge it further into the corner
     // instead, starting from wherever it already is.
+    // Every wall costs speed, and it takes a second to get it back.
+    hitPenalty = Math.max(HIT_FLOOR, hitPenalty * (1 - HIT_LOSS));
+
     if (kind === 'OUTER') {
-      var m = DR.Car.MAX_DRIFT;
-      var want = DR.Car.drift + dir * m * 0.22;
-      DR.Car.drift = want > m ? m : (want < -m ? -m : want);
+      DR.Car.nudgeBody(dir * DR.Car.SLIP_AT_LIMIT * 0.22);
     } else {
       // Cutting in, or sliding about on a straight: here you WERE turning too
       // much, so scrubbing off some slide is the right correction.
-      DR.Car.drift *= 0.55;
+      DR.Car.scrubSlip(0.55);
     }
   }
 
@@ -141,7 +150,8 @@
     if (DR.Input.takeBoost()) boostT = 0;
     if (boostT < 1e9) boostT += dt;
 
-    var speed = BASE_SPEED * boostMult();
+    if (hitPenalty < 1) hitPenalty = Math.min(1, hitPenalty + HIT_RECOVER_PER_SEC * dt);
+    var speed = currentSpeed();
     DR.Car.update(dt, steer, speed);
     checkEdges(dt);
     updateCamera(dt);
@@ -251,6 +261,7 @@
     }
 
     drawBoostButton(ctx2);
+    drawMinimap(ctx2);
 
     // Crossing the line: one soft swell, no strobe.
     if (lapFlash > 0) {
@@ -312,6 +323,55 @@
     ctx2.fillStyle = live ? 'rgba(255,220,170,0.95)' : 'rgba(190,220,240,0.7)';
     ctx2.fillText('BOOST', b.x, b.y + 34);
     ctx2.textAlign = 'left';
+  }
+
+  // Minimap, top right. The whole lap seen from above, with you on it.
+  // North-up rather than rotating, so the shape stays learnable.
+  var MAP = { x: 528, y: 50, w: 164, h: 164 };
+  function drawMinimap(ctx2) {
+    var pts = DR.Road.lapOutline(), i, p2;
+    var pad = 16, iw = MAP.w - pad * 2, ih = MAP.h - pad * 2;
+
+    ctx2.fillStyle = 'rgba(10,6,22,0.55)';
+    ctx2.fillRect(MAP.x, MAP.y, MAP.w, MAP.h);
+    ctx2.lineWidth = 1.5;
+    ctx2.strokeStyle = 'rgba(150,196,225,0.35)';
+    ctx2.strokeRect(MAP.x, MAP.y, MAP.w, MAP.h);
+
+    function mx(p) { return MAP.x + pad + p.nx * iw; }
+    function my(p) { return MAP.y + pad + (1 - p.ny) * ih; }
+
+    ctx2.beginPath();
+    ctx2.moveTo(mx(pts[0]), my(pts[0]));
+    for (i = 1; i < pts.length; i++) ctx2.lineTo(mx(pts[i]), my(pts[i]));
+    ctx2.lineWidth = 5;
+    ctx2.lineJoin = 'round';
+    ctx2.lineCap = 'round';
+    ctx2.strokeStyle = 'rgba(34,230,255,0.30)';
+    ctx2.stroke();
+    ctx2.lineWidth = 2;
+    ctx2.strokeStyle = '#22e6ff';
+    ctx2.stroke();
+
+    // Start line.
+    ctx2.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx2.beginPath();
+    ctx2.arc(mx(pts[0]), my(pts[0]), 3.5, 0, Math.PI * 2);
+    ctx2.fill();
+
+    // You.
+    var f = lapProgress(), best = pts[0];
+    for (i = 0; i < pts.length; i++) if (Math.abs(pts[i].f - f) < Math.abs(best.f - f)) best = pts[i];
+    ctx2.beginPath();
+    ctx2.arc(mx(best), my(best), 6.5, 0, Math.PI * 2);
+    ctx2.fillStyle = '#ff4b3a';
+    ctx2.shadowColor = '#ff4b3a';
+    ctx2.shadowBlur = 12;
+    ctx2.fill();
+    ctx2.shadowBlur = 0;
+    ctx2.strokeStyle = 'rgba(255,225,215,0.9)';
+    ctx2.lineWidth = 1.5;
+    ctx2.stroke();
   }
 
   function drawHint(ctx2, v) {
@@ -411,7 +471,8 @@
     view: view,
     SPEED: BASE_SPEED,
     BASE_SPEED: BASE_SPEED,
-    speed: function () { return BASE_SPEED * boostMult(); },
+    speed: currentSpeed,
+    hitPenalty: function () { return hitPenalty; },
     boostAmount: boostAmount,
     lapTimes: function () { return lapTimes.slice(); },
     lapTimer: function () { return lapTimer; },
@@ -425,7 +486,7 @@
     restart: function () {
       DR.Road.reset(); DR.Car.reset(); DR.FX.reset();
       camReady = false; hitCool = 0; lap = 1; lapFlash = 0; boostT = 1e9;
-      lapTimer = 0; timing = false; lapTimes.length = 0;
+      lapTimer = 0; timing = false; lapTimes.length = 0; hitPenalty = 1;
     }
   };
 

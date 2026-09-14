@@ -8,7 +8,7 @@
 
   var DRIFT_THRESHOLD = 0.14;
   var MAX_SKIDS = 1100;
-  var MAX_SMOKE = 230;
+  var MAX_SMOKE = 320;
   var CULL = 1500;             // world units from the car before we forget it
 
   var skids = [], smoke = [], labels = [];
@@ -46,17 +46,19 @@
   }
 
   function emit(car, speed, dt) {
-    var mag = Math.abs(car.drift);
+    var mag = Math.abs(car.slip);
     if (mag <= DRIFT_THRESHOLD) return;
 
-    var intensity = Math.min(1, (mag - DRIFT_THRESHOLD) / 0.42);
+    // Scaled against how sideways the car can actually get, so a proper drift
+    // smokes properly instead of topping out early.
+    var intensity = Math.min(1, (mag - DRIFT_THRESHOLD) / (car.SLIP_AT_LIMIT - DRIFT_THRESHOLD));
     var lvl = intensity > 0.66 ? 2 : (intensity > 0.33 ? 1 : 0);
 
     for (var side = -1; side <= 1; side += 2) {
       car.bodyPoint(side * car.W * 0.46, -car.L * 0.36, tmp);
       skids.push({ x: tmp.x, y: tmp.y, r: 4.4 + intensity * 2.0, lvl: lvl });
 
-      if (Math.random() < 0.35 + intensity * 0.5) {
+      if (Math.random() < 0.30 + intensity * 0.95) {
         var a = Math.random() * Math.PI * 2, sp = 20 + Math.random() * 70;
         smoke.push({
           x: tmp.x + (Math.random() - 0.5) * 14,
@@ -65,7 +67,7 @@
           r: 8 + Math.random() * 9,
           grow: 34 + Math.random() * 30,
           life: 0, max: 0.55 + Math.random() * 0.5,
-          peak: 0.16 + intensity * 0.30
+          peak: 0.14 + intensity * 0.38
         });
       }
     }
