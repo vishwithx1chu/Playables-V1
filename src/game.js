@@ -637,6 +637,9 @@
 
   function startRace(i) {
     selected = i;
+    // Whatever was being held to get here is not a steering input.
+    DR.Input.releaseAll();
+    DR.Input.clearTap();
     DR.Road.setTrack(i);
     DR.Car.reset(); DR.FX.reset();
     camReady = false; hitCool = 0;
@@ -708,7 +711,9 @@
   // Off-race input: steer to change track, boost to confirm, tap anywhere.
   var lastSteer = 0;
   function updateMenu() {
-    var st = DR.Input.steer();
+    // Keyboard only: see Input.steerKeys. A finger or mouse on a menu is
+    // tapping a card, and must not also count as steering.
+    var st = DR.Input.steerKeys();
     var confirm = DR.Input.takeBoost();
 
     if (phase === 'select') {
@@ -837,6 +842,7 @@
     startRace: startRace,
     RACE_LAPS: RACE_LAPS,
     raceTotal: function () { return raceTotal; },
+    toSelect: function () { phase = 'select'; DR.Input.releaseAll(); DR.Input.clearTap(); },
     restart: function () {
       DR.Road.reset(); DR.Car.reset(); DR.FX.reset();
       camReady = false; hitCool = 0; lap = 1; lapFlash = 0; boostT = 1e9;

@@ -371,6 +371,31 @@ is not the same in both directions:
 There is still no health and the run still never ends; that is a later
 milestone. The point of this is only that a mistake should be recoverable.
 
+## The tap that would not start a race
+
+Worth writing down, because the test suite had a check for exactly this and
+it passed the whole time the game was broken.
+
+A press does two things on the menu: it sets a tap for the card under your
+finger, and — because the left and right halves of the screen are the steering
+control — it also reads as steering. `updateMenu` acted on the steering first,
+so pressing a card moved the selection OFF that card, and the tap that arrived
+a moment later could only ever select it again. "Tap again to race" could
+never match. The race never started.
+
+The automated test missed it for two reasons at once. Playwright's `click()`
+presses and releases inside a single frame, so the pointer was already gone by
+the time the game looked at it; and the test clicked the exact centre of the
+card, which on a 720-wide playfield is the exact centre of the screen — the one
+x where the left/right split is ambiguous. A human tap is neither: it holds for
+a tenth of a second, and it lands off-centre.
+
+Two fixes. Menus now read `Input.steerKeys()`, which is keyboard only, because
+on a menu a press is a tap on a card and nothing else. And starting a race
+calls `Input.releaseAll()`, so the finger that pressed "race" does not also
+throw the car into a drift before the player has seen the road. The regression
+test now presses, waits, and releases, off-centre — like a thumb.
+
 ## Camera
 
 The block marked `THE CAMERA` at the top of [`src/road.js`](src/road.js).

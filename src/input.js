@@ -128,6 +128,24 @@
       return 0;
     },
 
+    // Steering from the KEYBOARD only. Menus use this, because on a menu a
+    // press is a tap on a card, not a request to drift — and treating it as
+    // both meant a press moved the selection off the card you were tapping.
+    steerKeys: function () {
+      if (keyLeft && !keyRight) return -1;
+      if (keyRight && !keyLeft) return 1;
+      return 0;
+    },
+
+    // Forget everything currently held. Called when a race starts, so the
+    // finger that pressed "race" does not also throw the car into a drift
+    // before the player has even seen the road.
+    releaseAll: function () {
+      pointers.length = 0;
+      boostPointers.length = 0;
+      boostQueued = false;
+    },
+
     used: function () { return pressedOnce; },
 
     setBoostHitTest: function (fn) { boostHitTest = fn; },
