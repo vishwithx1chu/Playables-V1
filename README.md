@@ -32,7 +32,72 @@ touchscreen.
 
 ---
 
-## Current state: Milestone 2.3
+## Current state: Milestone 2.4
+
+Three modes now, picked from a screen the game opens on:
+
+- **RACE** — three laps, results screen, best lap called out.
+- **PRACTICE** — no clock. The ideal line painted on the road, with a read-out
+  saying hold left, hold right, or release.
+- **CHECKPOINT RUSH** — a clock that only runs down and gates that wind it back
+  up. Distance is the score. Spike strips and potholes on the road.
+
+## Checkpoint Rush
+
+The clock starts at 25 seconds. Every gate adds time — more if you reached it
+without a scratch — and the bonus shrinks each lap while the road gets busier,
+so a run always ends. The question is only how far you got, which is why
+**distance is the score**: it never falls, and it needs no explaining.
+
+**Gates are a fixed distance apart, not a fixed count per lap.** A quarter of
+Velocity Ring is six seconds and a quarter of Grand Circuit is ten, so counting
+them per lap would have made the same clock generous on one circuit and brutal
+on another. Spaced by distance and rounded to a whole number per lap, every
+gate lands about six seconds from the last on all three — 4, 5 and 7 a lap —
+and they still come back to the start line.
+
+### The hazards, and the two rules they obey
+
+- **Spike strip** — half speed for three seconds, with a countdown bar and the
+  word SPIKED, because a car that goes slow for no visible reason reads as a
+  bug rather than a punishment.
+- **Pothole** — a jolt and a 12% speed loss, the same cost as a wall.
+
+Both rules are non-negotiable, and both come from the brief's hardest line —
+a crash must never feel unavoidable:
+
+1. **A hazard never spans the road.** The widest takes 34% of the width, so
+   there is always a line through. The worst one can do is take your line away,
+   never your lap.
+2. **A hazard never sits in a tight corner.** Nothing is placed anywhere
+   tighter than a 900-unit radius, and never in a hairpin. On a hairpin you are
+   already using all the road; something dropped in there is not difficulty, it
+   is a coin toss.
+
+Every one also carries a warning marker 820 units up the road, standing at the
+hazard's own position across the tarmac — so it tells you which side to be on,
+not just that something is coming. The marker's shape says which hazard it is,
+so the two are never told apart by colour alone.
+
+Hazard positions come from a hash of the lap number, so every run meets the
+same hazards in the same places. That is what makes comparing two scores mean
+anything.
+
+### How long a run lasts
+
+Measured with the test driver following the racing line, which is a better
+driver than a person will be:
+
+| Circuit | Run lasted | Distance | Gates | Laps |
+|---|---|---|---|---|
+| Velocity Ring | 98s | 8123 m | 15 | 3 |
+| Harbour Maze | 119s | 10109 m | 19 | 3 |
+
+So a real session should land comfortably under those. If they want shortening,
+`RUSH_START` and `RUSH_BONUS_DROP` at the top of [`src/game.js`](src/game.js)
+are the two dials.
+
+## Previously: Milestone 2.3
 
 **Modes.** The game now opens on a mode picker. Two so far:
 

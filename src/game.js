@@ -64,6 +64,29 @@
   var HIT_FLOOR = 0.55;      // repeated hits cannot bring you to a crawl
   /* --------------------------------------------------------------------- */
 
+  /* --------------------------- CHECKPOINT RUSH ---------------------------
+     A clock that only ever runs down, and gates that wind it back up. The
+     bonus shrinks every lap while the road gets busier, so a run always ends
+     — the question is only how far you got, and distance IS the score.
+
+     The bonus is deliberately tuned just either side of the time it takes to
+     reach the next gate: drive it perfectly early on and you gain a second or
+     two, and by the fourth lap nothing you do keeps up. */
+  var RUSH_START      = 25;    // seconds on the clock at the off
+  var RUSH_BONUS      = 4.8;   // seconds a gate gives you on lap one...
+  var RUSH_BONUS_DROP = 0.8;   // ...less this much per lap survived
+  var RUSH_BONUS_MIN  = 2.0;
+  var RUSH_CLEAN      = 2.0;   // extra for reaching it without a scratch
+  var RUSH_CLEAN_DROP = 0.2;
+  var RUSH_CLEAN_MIN  = 1.2;
+  var SPIKE_SLOW      = 0.5;   // spikes halve your speed...
+  var SPIKE_SECS      = 3.0;   // ...for this long
+  var PIT_LOSS        = 0.12;  // a pothole costs this much speed, like a wall
+
+  var rushTime = 0, rushScore = 0, rushBest = 0;
+  var cpIndex = 0, cpClean = true, cpFlash = 0, cpFlashText = '';
+  var spikeT = 0, rushGates = 0;
+
   var BOOST_BTN = { x: 360, y: 1168, r: 72 };
   var BACK_BTN = { x: 40, y: 34, w: 156, h: 56 };      // track screen -> modes
   var EXIT_BTN = { x: 40, y: 1184, w: 176, h: 58 };    // practice -> menu
@@ -76,7 +99,9 @@
     { id: 'race',     name: 'RACE',     tag: '3 LAPS',
       blurb: 'Three laps. Best lap called out at the end.' },
     { id: 'practice', name: 'PRACTICE', tag: 'NO CLOCK',
-      blurb: 'The ideal line painted on the road, and when to hold.' }
+      blurb: 'The ideal line painted on the road, and when to hold.' },
+    { id: 'rush',     name: 'CHECKPOINT RUSH', tag: 'SURVIVE',
+      blurb: 'Beat the clock to each gate. Spikes and potholes.' }
   ];
   var mode = 'race';
   var modeSel = 0;
@@ -137,7 +162,19 @@
     return 1 - SLIP_DRAG * sn * sn;
   }
 
-  function currentSpeed() { return BASE_SPEED * boostMult() * hitPenalty * slipDrag(); }
+  function spikeMult() { return spikeT > 0 ? SPIKE_SLOW : 1; }
+
+  function currentSpeed() {
+    return BASE_SPEED * boostMult() * hitPenalty * slipDrag() * spikeMult();
+  }
+
+  // Where the next gate is, in world arc length.
+  function cpWorldS(n) {
+    return DR.Road.INTRO_LEN + n * (DR.Road.lapLength() / DR.Road.cpCount());
+  }
+  function rushLapsDone() {
+    return Math.floor(cpIndex / DR.Road.cpCount());
+  }
 
   function view() {
     return {
@@ -275,6 +312,7 @@
     }
 
     collectPicks();
+    if (mode === 'rush') updateRush(dt);
 
     if (hitPenalty < 1) hitPenalty = Math.min(1, hitPenalty + HIT_RECOVER_PER_SEC * dt);
     var speed = currentSpeed();
@@ -307,8 +345,9 @@
       lapTimer = 0;
       lap = done + 1;
       lapFlash = 1;
-      // Practice has no finish line to cross for the last time.
-      if (mode !== 'practice' && lapTimes.length >= RACE_LAPS) { phase = 'done'; lapFlash = 0; }
+      // Only a race has a last lap. Practice runs until you leave; Rush runs
+      // until the clock beats you.
+      if (mode === 'race' && lapTimes.length >= RACE_LAPS) { phase = 'done'; lapFlash = 0; }
     }
     if (lapFlash > 0) lapFlash = Math.max(0, lapFlash - dt / 1.6);
 
@@ -316,6 +355,67 @@
     DR.FX.update(dt, DR.Car.x, DR.Car.y);
     DR.Road.ensure(DR.Car.roadS + DR.Road.LOOKAHEAD + 400);
     DR.Road.trim(DR.Car.roadS - DR.Road.CAM_BACK - 900);
+  }
+
+  function updateRush(dt) {
+    if (spikeT > 0) spikeT = Math.max(0, spikeT - dt);
+    if (cpFlash > 0) cpFlash = Math.max(0, cpFlash - dt / 1.6);
+
+    // Distance IS the score, so it never falls and never needs explaining.
+    var travelled = Math.max(0, DR.Car.roadS - DR.Road.INTRO_LEN);
+    rushScore = Math.floor(travelled / 10);
+
+    DR.Road.ensureHazards(DR.Car.roadS + DR.Road.LOOKAHEAD);
+    DR.Road.trimHazards(DR.Car.roadS - 500);
+    hitHazards();
+
+    // Gates.
+    while (DR.Car.roadS >= cpWorldS(cpIndex)) {
+      var laps = rushLapsDone();
+      var bonus = Math.max(RUSH_BONUS_MIN, RUSH_BONUS - laps * RUSH_BONUS_DROP);
+      var extra = cpClean ? Math.max(RUSH_CLEAN_MIN, RUSH_CLEAN - laps * RUSH_CLEAN_DROP) : 0;
+      rushTime += bonus + extra;
+      cpFlash = 1;
+      cpFlashText = '+' + (bonus + extra).toFixed(1) + 's' + (cpClean ? '  CLEAN' : '');
+      cpClean = true;
+      cpIndex++;
+      rushGates++;
+    }
+
+    rushTime -= dt;
+    if (rushTime <= 0) {
+      rushTime = 0;
+      if (rushScore > rushBest) rushBest = rushScore;
+      phase = 'done';
+    }
+  }
+
+  // Did we drive over a spike strip or into a pothole?
+  function hitHazards() {
+    var list = DR.Road.hazards();
+    var hw = DR.Road.halfWidthAt(DR.Car.roadS);
+    var carFrac = DR.Car.halfWidth() / hw;
+    for (var i = 0; i < list.length; i++) {
+      var h = list[i];
+      if (h.hit) continue;
+      if (Math.abs(h.s - DR.Car.roadS) > h.len * 0.5 + 24) continue;
+      var lat = DR.Car.dev / hw;
+      if (Math.abs(lat - h.lat) > h.halfW + carFrac) continue;
+
+      h.hit = true;
+      cpClean = false;
+      var side = h.lat >= lat ? 1 : -1;
+      if (h.spike) {
+        spikeT = SPIKE_SECS;
+        DR.FX.hazardHit('SPIKED', '#dfe6f2', 0.9, DR.Car);
+        DR.FX.wallSparks(DR.Car.x, DR.Car.y,
+                         -Math.sin(DR.Car.h), -Math.cos(DR.Car.h), 22, 1.1);
+      } else {
+        hitPenalty = Math.max(HIT_FLOOR, hitPenalty * (1 - PIT_LOSS));
+        DR.Car.jolt(side * 3.4);
+        DR.FX.hazardHit('POTHOLE', '#ffb24d', 0.6, DR.Car);
+      }
+    }
   }
 
   // m:ss.hh under a minute drops the minutes, because a lap is about half one.
@@ -651,7 +751,45 @@
     ctx2.textAlign = 'left';
   }
 
+  function drawRushDone(ctx2, v) {
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    ctx2.fillStyle = 'rgba(6,4,16,0.78)';
+    ctx2.fillRect(0, 0, v.W, v.H);
+
+    ctx2.textAlign = 'center';
+    ctx2.font = '800 62px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = '#ff6a5a';
+    ctx2.fillText('TIME UP', v.W * 0.5, 320);
+
+    ctx2.font = '700 24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(180,214,236,0.9)';
+    ctx2.fillText(DR.Road.tracks()[DR.Road.currentTrack()].name, v.W * 0.5, 364);
+
+    ctx2.font = '700 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(150,196,225,0.85)';
+    ctx2.fillText('DISTANCE', v.W * 0.5, 448);
+    ctx2.font = '800 96px ' + MONO;
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText(rushScore + ' m', v.W * 0.5, 540);
+
+    var beat = rushScore >= rushBest && rushScore > 0;
+    ctx2.font = '700 28px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = beat ? '#7dffb0' : 'rgba(190,214,235,0.85)';
+    ctx2.fillText(beat ? 'NEW BEST' : 'BEST  ' + rushBest + ' m', v.W * 0.5, 592);
+
+    ctx2.font = '700 26px ' + MONO;
+    ctx2.fillStyle = 'rgba(228,242,252,0.9)';
+    ctx2.fillText(rushGates + ' GATES', v.W * 0.5, 664);
+    ctx2.fillText(rushLapsDone() + (rushLapsDone() === 1 ? ' LAP' : ' LAPS'), v.W * 0.5, 706);
+
+    ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText('TAP TO GO AGAIN', v.W * 0.5, 860);
+    ctx2.textAlign = 'left';
+  }
+
   function drawDone(ctx2, v) {
+    if (mode === 'rush') { drawRushDone(ctx2, v); return; }
     var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     ctx2.fillStyle = 'rgba(6,4,16,0.74)';
     ctx2.fillRect(0, 0, v.W, v.H);
@@ -722,7 +860,9 @@
         }
       }
     } else if (phase === 'done') {
-      phase = 'modes';
+      // Going again should be one tap, not three. Back to the tracks, with
+      // the mode you were already playing still chosen.
+      phase = 'select';
     }
   }
 
@@ -749,6 +889,9 @@
     lapTimer = 0; timing = false; lapTimes.length = 0;
     hitPenalty = 1; meter = 0.55; driftTime = 0; pickPop = 0; boostDenied = 0;
     rebound = 0; scrapeT = 0;
+    rushTime = RUSH_START; rushScore = 0; cpIndex = 0; cpClean = true;
+    cpFlash = 0; spikeT = 0; rushGates = 0;
+    DR.Road.resetHazards();
     raceTotal = 0; hintAlpha = 1;
     phase = 'racing';
   }
@@ -867,6 +1010,78 @@
     drawButton(ctx2, EXIT_BTN, '\u25C2 MENU');
   }
 
+  /* Rush read-out. The clock is the whole mode, so it is the biggest thing on
+     the screen and it turns red AND starts pulsing under five seconds — never
+     colour on its own. */
+  function drawRushHud(ctx2, v) {
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var cx2 = v.W * 0.5;
+    var low = rushTime < 5;
+    var pulse = low ? 0.78 + 0.22 * Math.sin(clock * 12) : 1;
+
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '700 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(150,196,225,0.85)';
+    ctx2.fillText('TIME', cx2, 62);
+
+    ctx2.globalAlpha = pulse;
+    ctx2.font = '800 96px ' + MONO;
+    ctx2.lineWidth = 10;
+    ctx2.strokeStyle = 'rgba(4,2,10,0.9)';
+    ctx2.strokeText(rushTime.toFixed(1), cx2, 148);
+    ctx2.fillStyle = low ? '#ff6a5a' : '#eaf6ff';
+    ctx2.fillText(rushTime.toFixed(1), cx2, 148);
+    ctx2.globalAlpha = 1;
+
+    ctx2.font = '700 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(150,196,225,0.8)';
+    ctx2.fillText('DISTANCE', cx2, 190);
+    ctx2.font = '800 46px ' + MONO;
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText(rushScore + ' m', cx2, 236);
+
+    if (rushBest > 0) {
+      ctx2.font = '700 20px ' + MONO;
+      ctx2.fillStyle = 'rgba(125,255,176,0.85)';
+      ctx2.fillText('BEST ' + rushBest + ' m', cx2, 268);
+    }
+
+    // Gate bonus, swelling and fading.
+    if (cpFlash > 0) {
+      var k = Math.sin(Math.PI * Math.min(1, cpFlash));
+      ctx2.globalAlpha = k;
+      ctx2.font = '800 44px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.lineWidth = 7;
+      ctx2.strokeStyle = 'rgba(4,2,10,0.85)';
+      ctx2.strokeText(cpFlashText, cx2, 330);
+      ctx2.fillStyle = '#7dffb0';
+      ctx2.fillText(cpFlashText, cx2, 330);
+      ctx2.globalAlpha = 1;
+    }
+
+    // Spiked: a countdown bar, so it is obvious WHY the car went slow and for
+    // how much longer. A speed drop with no cause reads as a bug.
+    if (spikeT > 0) {
+      // Low enough to clear the SPIKED label that floats over the car itself,
+      // which says the same thing in the same instant.
+      var bw = 300, bh = 16, bx = cx2 - bw * 0.5, by = 1022;
+      ctx2.fillStyle = 'rgba(10,6,22,0.7)';
+      ctx2.fillRect(bx - 4, by - 4, bw + 8, bh + 8);
+      ctx2.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx2.fillRect(bx, by, bw, bh);
+      ctx2.fillStyle = '#ff6a5a';
+      ctx2.fillRect(bx, by, bw * (spikeT / SPIKE_SECS), bh);
+      ctx2.font = '700 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = '#ffd9d2';
+      ctx2.fillText('SPIKED \u2014 HALF SPEED', cx2, by - 14);
+    }
+
+    ctx2.textAlign = 'left';
+    drawBoostButton(ctx2);
+    drawMinimap(ctx2, MAP_PRACTICE);
+  }
+
   function drawHint(ctx2, v) {
     if (hintAlpha <= 0.01) return;
     ctx2.globalAlpha = hintAlpha;
@@ -914,7 +1129,7 @@
       }
       if (confirm) startRace(selected);
     } else if (phase === 'done') {
-      if (confirm) phase = 'modes';
+      if (confirm) startRace(selected);
     }
     lastSteer = st;
     handleMenuTap();
@@ -950,6 +1165,10 @@
     DR.FX.drawSkids(ctx, v);
     // Over the skid marks, or your own rubber hides the advice.
     if (mode === 'practice') DR.Road.drawRacingLine(ctx, rib, v, clock);
+    if (mode === 'rush') {
+      DR.Road.drawCheckpoints(ctx, rib, v, cpWorldS(cpIndex));
+      DR.Road.drawHazards(ctx, rib, v, clock);
+    }
     DR.Road.drawChevrons(ctx, v);
     DR.Road.drawFog(ctx, v);
     DR.Road.drawPicks(ctx, v, clock);
@@ -964,6 +1183,7 @@
     // The results panel owns the screen; the race HUD behind it is clutter.
     if (phase === 'racing') {
       if (mode === 'practice') drawPracticeHud(ctx, v);
+      else if (mode === 'rush') drawRushHud(ctx, v);
       else { drawHud(ctx, v); drawHint(ctx, v); }
     }
     if (phase === 'done') drawDone(ctx, v);
@@ -1043,6 +1263,11 @@
     lapProgress: lapProgress,
     phase: function () { return phase; },
     mode: function () { return mode; },
+    rush: function () {
+      return { time: rushTime, score: rushScore, best: rushBest,
+               gates: rushGates, laps: rushLapsDone(), spiked: spikeT };
+    },
+    setRushTime: function (t) { rushTime = t; },
     // Where a given menu card actually is, so a test can tap the real thing
     // instead of a hard-coded guess that goes stale the moment a layout moves.
     uiBox: function (kind, i) {

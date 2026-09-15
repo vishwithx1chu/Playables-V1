@@ -144,6 +144,17 @@
     if (labels.length > 4) labels.shift();
   }
 
+  // A hazard is not a wall: no edge flash, no direction, but the same shake
+  // and the same word, because the word is what tells you WHAT hit you.
+  function hazardHit(text, color, severity, car) {
+    shake.mag = Math.max(shake.mag, 5 + severity * 14);
+    shake.t = 0; shake.dur = 0.34;
+    var lp = { x: 0, y: 0 };
+    car.bodyPoint(0, 40, lp);
+    labels.push({ text: text, color: color, x: lp.x, y: lp.y, t: 0, dur: 1.1 });
+    if (labels.length > 4) labels.shift();
+  }
+
   function update(dt, carX, carY) {
     var i, p, dx, dy;
     shake.t += dt;
@@ -407,7 +418,7 @@
   }
 
   DR.FX = {
-    reset: reset, emit: emit, hit: hit, update: update,
+    reset: reset, emit: emit, hit: hit, hazardHit: hazardHit, update: update,
     shakeOffset: shakeOffset,
     drawSkids: drawSkids, drawSmoke: drawSmoke,
     drawFlash: drawFlash, drawLabels: drawLabels, drawSpeedLines: drawSpeedLines,

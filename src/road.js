@@ -467,6 +467,238 @@
     }
   }
 
+  /* ------------------------------- HAZARDS -------------------------------
+     Checkpoint Rush scatters spike strips and potholes down the road. Two
+     rules keep them fair, and they are not negotiable:
+
+     1. A hazard NEVER spans the road. Every one of them leaves most of the
+        tarmac clear, so there is always a line through — the worst a hazard
+        can do is take your line away, never your lap.
+     2. A hazard never sits in a corner tight enough that you have no room to
+        move. On a hairpin you are already using all the road; dropping
+        something in there is not difficulty, it is a coin toss.
+
+     Both follow from the brief's hardest rule: a crash must never feel
+     unavoidable. */
+  var HAZ_SPIKE_W  = 0.34;    // half-width, as a fraction of the road half-width
+  var HAZ_PIT_W    = 0.17;
+  var HAZ_SPIKE_L  = 74;      // how far along the road a strip reaches
+  var HAZ_PIT_L    = 58;
+  var HAZ_GENTLE_R = 900;     // corners tighter than this get left alone
+  var HAZ_CLEAR    = 460;     // keep this far from a checkpoint or each other
+  var HAZ_WARN     = 820;     // warning marker this far up the road
+
+  /* Gates are a fixed DISTANCE apart, not a fixed count per lap. A quarter of
+     Velocity Ring is six seconds and a quarter of Grand Circuit is ten, so
+     counting them per lap would have made the same clock generous on one
+     circuit and brutal on another. Spacing them by distance and then rounding
+     to a whole number per lap keeps every gate about six seconds from the
+     last, and keeps them landing back on the start line. */
+  var CP_SPACING   = 5200;
+
+  var hazards = [], hazGenLap = 0, hazIdx = 0;
+
+  // Deterministic noise. Every run of Checkpoint Rush therefore meets the same
+  // hazards in the same places, which is what makes comparing two scores mean
+  // anything at all.
+  function hash1(n) {
+    var x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function cpCount() { return Math.max(3, Math.round(lapLength() / CP_SPACING)); }
+  function checkpointAt(i) { return lapLength() * (i / cpCount()); }
+
+  // How many hazards a given lap gets. The road gets busier the longer you
+  // survive, which is most of what makes a long run hard rather than just long.
+  function hazardCount(lapNo) {
+    return Math.min(9, 3 + lapNo);
+  }
+
+  function hazardPlan(t, lapNo) {
+    var tab = lapSegTable(t), L = tab.total;
+    var count = hazardCount(lapNo), list = [], i, j;
+
+    function segAtLap(s) {
+      s = s - Math.floor(s / L) * L;
+      for (var q = 0; q < tab.length; q++) if (s >= tab[q].s0 && s < tab[q].s1) return tab[q];
+      return tab[tab.length - 1];
+    }
+    function gentle(s) {
+      var g = segAtLap(s);
+      return !g.turn || g.r >= HAZ_GENTLE_R;
+    }
+    function nearCheckpoint(s) {
+      for (var c = 0; c < cpCount(); c++) {
+        var d = Math.abs(s - checkpointAt(c));
+        if (d > L * 0.5) d = L - d;
+        if (d < HAZ_CLEAR) return true;
+      }
+      return false;
+    }
+    function nearAnother(s) {
+      for (var k = 0; k < list.length; k++) {
+        var d = Math.abs(s - list[k].s);
+        if (d > L * 0.5) d = L - d;
+        if (d < HAZ_CLEAR) return true;
+      }
+      return false;
+    }
+
+    for (i = 0; i < count; i++) {
+      var seed = lapNo * 977 + i * 131 + t * 17;
+      var want = L * (i + 0.5) / count + (hash1(seed) - 0.5) * (L / count) * 0.5;
+      want = ((want % L) + L) % L;
+
+      // Walk outward from the wanted spot until somewhere legal turns up.
+      var found = -1;
+      for (j = 0; j < 90; j++) {
+        var off = (j % 2 ? -1 : 1) * Math.ceil(j / 2) * 60;
+        var s = ((want + off) % L + L) % L;
+        if (gentle(s) && !nearCheckpoint(s) && !nearAnother(s)) { found = s; break; }
+      }
+      if (found < 0) continue;
+
+      var spike = hash1(seed * 3 + 7) > 0.42;
+      var halfW = spike ? HAZ_SPIKE_W : HAZ_PIT_W;
+      // Placed so the hazard's far edge always stops short of the barrier,
+      // and so the clear side is never narrower than the car needs.
+      var room = 0.92 - halfW;
+      var lat = (hash1(seed * 5 + 3) * 2 - 1) * room;
+      list.push({ s: found, lat: lat, halfW: halfW, spike: spike,
+                  len: spike ? HAZ_SPIKE_L : HAZ_PIT_L });
+    }
+    list.sort(function (a, b) { return a.s - b.s; });
+    return list;
+  }
+
+  function ensureHazards(sMax) {
+    var L = lapLength(), i;
+    while (INTRO_LEN + hazGenLap * L <= sMax) {
+      var base = INTRO_LEN + hazGenLap * L;
+      var plan = hazardPlan(curTrack, hazGenLap);
+      for (i = 0; i < plan.length; i++) {
+        hazards.push({ s: base + plan[i].s, lat: plan[i].lat, halfW: plan[i].halfW,
+                       spike: plan[i].spike, len: plan[i].len, hit: false, id: hazIdx++ });
+      }
+      hazGenLap++;
+    }
+  }
+
+  function trimHazards(sMin) {
+    while (hazards.length && hazards[0].s < sMin) hazards.shift();
+  }
+
+  function hazardList() { return hazards; }
+  function resetHazards() { hazards = []; hazGenLap = 0; hazIdx = 0; }
+
+  // A patch of tarmac given in arc length and in lateral offset as a fraction
+  // of the road's half-width, so it keeps its share of the road wherever the
+  // road is wide or narrow.
+  function roadPatch(ctx, rib, s0, s1, k0, k1) {
+    for (var i = 0; i < rib.count - 1; i++) {
+      var a = rib[i], b = rib[i + 1];
+      if (!a.ok || !b.ok) continue;
+      if (b.s < s0 || a.s > s1) continue;
+      var aw = a.oR - a.oL, bw = b.oR - b.oL;
+      var fa1 = (k0 * a.hw - a.oL) / aw, fa2 = (k1 * a.hw - a.oL) / aw;
+      var fb1 = (k0 * b.hw - b.oL) / bw, fb2 = (k1 * b.hw - b.oL) / bw;
+      var ax1 = a.lx + (a.rx - a.lx) * fa1, ay1 = a.ly + (a.ry - a.ly) * fa1;
+      var ax2 = a.lx + (a.rx - a.lx) * fa2, ay2 = a.ly + (a.ry - a.ly) * fa2;
+      var bx1 = b.lx + (b.rx - b.lx) * fb1, by1 = b.ly + (b.ry - b.ly) * fb1;
+      var bx2 = b.lx + (b.rx - b.lx) * fb2, by2 = b.ly + (b.ry - b.ly) * fb2;
+      ctx.moveTo(ax1, ay1); ctx.lineTo(ax2, ay2);
+      ctx.lineTo(bx2, by2); ctx.lineTo(bx1, by1);
+      ctx.closePath();
+    }
+  }
+
+  function drawHazards(ctx, rib, view, time) {
+    ensureHazards(view.carS + LOOKAHEAD);
+    var i, h, p = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+
+    for (i = 0; i < hazards.length; i++) {
+      h = hazards[i];
+      if (h.s < view.carS - 300 || h.s > view.carS + LOOKAHEAD) continue;
+      var k0 = h.lat - h.halfW, k1 = h.lat + h.halfW;
+      var s0 = h.s - h.len * 0.5, s1 = h.s + h.len * 0.5;
+
+      if (h.spike) {
+        ctx.beginPath(); roadPatch(ctx, rib, s0, s1, k0, k1);
+        ctx.fillStyle = h.hit ? 'rgba(90,80,110,0.55)' : '#3b3450';
+        ctx.fill();
+        // Teeth: a row of bright wedges down the middle of the strip.
+        ctx.beginPath();
+        var teeth = 7;
+        for (var q = 0; q < teeth; q++) {
+          var t0 = k0 + (k1 - k0) * (q + 0.18) / teeth;
+          var t1 = k0 + (k1 - k0) * (q + 0.82) / teeth;
+          roadPatch(ctx, rib, h.s - h.len * 0.20, h.s + h.len * 0.20, t0, t1);
+        }
+        ctx.fillStyle = h.hit ? 'rgba(200,200,210,0.5)' : '#dfe6f2';
+        ctx.fill();
+      } else {
+        ctx.beginPath(); roadPatch(ctx, rib, s0, s1, k0, k1);
+        ctx.fillStyle = '#07040e';
+        ctx.fill();
+        ctx.beginPath(); roadPatch(ctx, rib, s0 + 6, s1 - 6, k0 + 0.02, k1 - 0.02);
+        ctx.fillStyle = '#1d1430';
+        ctx.fill();
+      }
+
+      // The warning, up the road, so nobody ever meets one of these blind.
+      // It stands ON the tarmac at the hazard's own position across the road,
+      // so it tells you WHICH SIDE as well as that something is coming.
+      var ws = h.s - HAZ_WARN;
+      if (ws < view.carS - 100 || ws > view.carS + LOOKAHEAD) continue;
+      var idx = indexAt(ws);
+      var hh = ch[idx], nx = Math.cos(hh), ny = -Math.sin(hh);
+      var lateral = h.lat * widthAtIndex(idx);
+      project3(cx[idx] + nx * lateral, cy[idx] + ny * lateral, 54, view, p);
+      if (!p.vis || p.sc < 0.1) continue;
+      var w = 30 * p.sc, hgt = 26 * p.sc;
+      var blink = 0.65 + 0.35 * Math.sin(time * 7 + h.id);
+      ctx.globalAlpha = Math.min(1, blink);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y - hgt);
+      ctx.lineTo(p.x + w, p.y + hgt * 0.7);
+      ctx.lineTo(p.x - w, p.y + hgt * 0.7);
+      ctx.closePath();
+      ctx.fillStyle = h.spike ? '#ff7a45' : '#ffb24d';
+      ctx.fill();
+      ctx.lineWidth = Math.max(1, 3 * p.sc);
+      ctx.strokeStyle = 'rgba(20,10,6,0.8)';
+      ctx.stroke();
+      // The mark inside says WHICH hazard, so the two are never told apart by
+      // colour alone.
+      ctx.fillStyle = 'rgba(20,10,6,0.9)';
+      if (h.spike) {
+        ctx.fillRect(p.x - w * 0.42, p.y + hgt * 0.16, w * 0.84, Math.max(1, hgt * 0.14));
+      } else {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y + hgt * 0.18, Math.max(1.2, w * 0.26), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // The finish-line style band across the road at each checkpoint.
+  function drawCheckpoints(ctx, rib, view, nextS) {
+    if (!(nextS > 0)) return;
+    var s0 = nextS - 26, s1 = nextS + 26;
+    if (s1 < view.carS - 200 || s0 > view.carS + LOOKAHEAD) return;
+    ctx.beginPath(); roadPatch(ctx, rib, s0, s1, -1, 1);
+    ctx.fillStyle = 'rgba(125,255,176,0.30)';
+    ctx.fill();
+    for (var q = 0; q < 8; q += 2) {
+      ctx.beginPath();
+      roadPatch(ctx, rib, s0, s1, -1 + q * 0.25, -1 + (q + 1) * 0.25);
+      ctx.fillStyle = 'rgba(190,255,214,0.85)';
+      ctx.fill();
+    }
+  }
+
   // Centreline, sampled every SAMPLE units. Uniform spacing means arc length
   // converts to an array index by division — no searching.
   var cx, cy, ch, ck, chw, cmx, hwFilled, mxFilled, baseS;
@@ -610,6 +842,7 @@
     genX = 0; genY = 0; genH = 0; genS = 0;
     genIndex = -1; genT = 0; inIntro = true; lapNo = 0;
     resetPicks();
+    resetHazards();
     ensure(9000);
   }
 
@@ -1615,6 +1848,9 @@
     lapLength: lapLength, INTRO_LEN: INTRO_LEN, lapOutline: lapOutline,
     tracks: trackList, setTrack: setTrack, currentTrack: currentTrack,
     picks: pickList, ensurePicks: ensurePicks, trimPicks: trimPicks, drawPicks: drawPicks,
+    hazards: hazardList, ensureHazards: ensureHazards, trimHazards: trimHazards,
+    resetHazards: resetHazards, drawHazards: drawHazards, hazardPlan: hazardPlan,
+    drawCheckpoints: drawCheckpoints, checkpointAt: checkpointAt, cpCount: cpCount,
     project: project, project3: project3, CAM_LIFT: CAM_LIFT,
     buildRibbon: buildRibbon, quads: quads, drawWalls: drawWalls,
     racingLine: racingLine, lineAt: lineAt, drawRacingLine: drawRacingLine,
