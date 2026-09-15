@@ -32,7 +32,74 @@ touchscreen.
 
 ---
 
-## Current state: Milestone 2.2
+## Current state: Milestone 2.3
+
+**Modes.** The game now opens on a mode picker. Two so far:
+
+- **RACE** — three laps, results screen, best lap called out. What was there before.
+- **PRACTICE** — no clock pressure, no finish. The ideal line is painted on the
+  road, with arrows crawling along it, and a read-out at the top telling you
+  whether to be holding left, holding right, or off the controls entirely —
+  plus how far off the line you currently are.
+
+## The racing line
+
+The line is built from anchors rather than solved for: run wide on the way in,
+clip the inside at the apex, run wide again on the way out. A solver that
+genuinely minimises cornering over a closed loop needs far more passes than a
+lap this long can afford, and a line you can explain in one sentence is worth
+more here than an optimal one nobody can reason about.
+
+The one wrinkle is corners that arrive back to back. There is no room to run
+wide between them and no driver would try — you cut straight from one apex to
+the next — so a wide anchor is only placed where there is real straight to put
+it on.
+
+**Then it is made driveable, which is the part that matters.** Anchors say
+where a good line wants to go; they know nothing about how hard the car can
+turn, and swinging the full width of the road in the length of a corner entry
+asks for a radius no car here can hold. The first version demanded radii of
+83, 196 and 257 units on the three circuits — against a car that cannot turn
+tighter than 504. So the line's own radius is measured, and wherever it is
+tighter than 620 the line is eased: a point pulled toward the middle of its
+neighbours where the offset is changing too fast, and moved away from the
+centre of the turn where it is sitting at a constant offset on the inside of a
+bend that is simply tight. Those are two different faults with two different
+cures, and the second one is easy to miss — at a constant offset the first cure
+does nothing at all, because the point is already exactly where the middle of
+its neighbours is.
+
+The correction is smoothed, not the line. Nudging single samples is itself a
+kink, and blurring the whole line every pass would wash the apexes away over
+hundreds of passes.
+
+### Is it actually the fast way round?
+
+Worth checking rather than assuming, so the test driver was pointed at it:
+
+| Driving | Best lap | Wall contacts | Average distance from the line |
+|---|---|---|---|
+| Down the centre of the road | 24.98s | 0 | 97 units |
+| Following the line | **23.67s** | 0 | 9 units |
+
+**1.3 seconds a lap, or 5.2%, on Velocity Ring.** So the line is not decoration:
+it is genuinely quicker, and quick enough that mastering it will beat the 25
+second target the circuit was built around.
+
+Two numbers in [`src/road.js`](src/road.js) shape the advice, and both come
+straight out of the drift model rather than out of taste:
+
+```js
+var LINE_LEAD    = 280;   // start holding this far BEFORE the bend
+var LINE_RELEASE = 240;   // and let go this far before it ends
+```
+
+The first exists because the slide takes time to build; the second because the
+car carries on coming round after the body has squared up. They are the two
+things the game is hardest to learn without being told, which is most of what
+Practice is for.
+
+## Previously: Milestone 2.2
 
 There is still no score, no grading and no damage — a run never ends, and
 those are later milestones. What is in:

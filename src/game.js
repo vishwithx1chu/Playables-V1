@@ -65,10 +65,23 @@
   /* --------------------------------------------------------------------- */
 
   var BOOST_BTN = { x: 360, y: 1168, r: 72 };
+  var BACK_BTN = { x: 40, y: 34, w: 156, h: 56 };      // track screen -> modes
+  var EXIT_BTN = { x: 40, y: 1184, w: 176, h: 58 };    // practice -> menu
   var RACE_LAPS = 3;
 
-  // 'select' -> 'racing' -> 'done' -> back to 'select'
-  var phase = 'select';
+  /* 'modes' -> 'select' -> 'racing' -> 'done' -> back to 'modes'.
+     A mode decides what the race is FOR; the track screen is the same either
+     way, so the two screens stack rather than each mode owning its own. */
+  var MODES = [
+    { id: 'race',     name: 'RACE',     tag: '3 LAPS',
+      blurb: 'Three laps. Best lap called out at the end.' },
+    { id: 'practice', name: 'PRACTICE', tag: 'NO CLOCK',
+      blurb: 'The ideal line painted on the road, and when to hold.' }
+  ];
+  var mode = 'race';
+  var modeSel = 0;
+
+  var phase = 'modes';
   var selected = 2;
   var raceTotal = 0;
   var FIXED = 1 / 60;    // physics rate, so the feel never changes with framerate
@@ -294,7 +307,8 @@
       lapTimer = 0;
       lap = done + 1;
       lapFlash = 1;
-      if (lapTimes.length >= RACE_LAPS) { phase = 'done'; lapFlash = 0; }
+      // Practice has no finish line to cross for the last time.
+      if (mode !== 'practice' && lapTimes.length >= RACE_LAPS) { phase = 'done'; lapFlash = 0; }
     }
     if (lapFlash > 0) lapFlash = Math.max(0, lapFlash - dt / 1.6);
 
@@ -520,6 +534,73 @@
   }
 
   function cardBox(i) { return { x: 64, y: 322 + i * 300, w: 592, h: 268 }; }
+  // Centred on the screen rather than pinned to the top, so the list looks
+  // deliberate whether it holds two modes or five.
+  var MODE_H = 156, MODE_GAP = 30;
+  function modeBox(i) {
+    var pitch = MODE_H + MODE_GAP;
+    var top = 660 - (MODES.length * pitch - MODE_GAP) * 0.5;
+    return { x: 64, y: top + i * pitch, w: 592, h: MODE_H };
+  }
+
+  function inBox(lx, ly, b) {
+    return lx >= b.x && lx <= b.x + b.w && ly >= b.y && ly <= b.y + b.h;
+  }
+
+  function drawButton(ctx2, b, text) {
+    ctx2.fillStyle = 'rgba(10,8,24,0.62)';
+    ctx2.fillRect(b.x, b.y, b.w, b.h);
+    ctx2.lineWidth = 1.5;
+    ctx2.strokeStyle = 'rgba(150,196,225,0.40)';
+    ctx2.strokeRect(b.x, b.y, b.w, b.h);
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'middle';
+    ctx2.font = '700 24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(214,234,248,0.92)';
+    ctx2.fillText(text, b.x + b.w * 0.5, b.y + b.h * 0.5 + 1);
+    ctx2.textAlign = 'left';
+    ctx2.textBaseline = 'alphabetic';
+  }
+
+  function drawModes(ctx2, v) {
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '800 74px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText('DRIFT RUN', v.W * 0.5, 180);
+    ctx2.font = '700 26px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(180,214,236,0.9)';
+    ctx2.fillText('CHOOSE A MODE', v.W * 0.5, 226);
+
+    for (var i = 0; i < MODES.length; i++) {
+      var b = modeBox(i), on = i === modeSel;
+      ctx2.fillStyle = on ? 'rgba(34,120,150,0.28)' : 'rgba(10,8,24,0.55)';
+      ctx2.fillRect(b.x, b.y, b.w, b.h);
+      ctx2.lineWidth = on ? 3 : 1.5;
+      ctx2.strokeStyle = on ? '#41e0ff' : 'rgba(150,196,225,0.35)';
+      ctx2.strokeRect(b.x, b.y, b.w, b.h);
+
+      ctx2.textAlign = 'left';
+      ctx2.font = '800 40px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = on ? '#eaf6ff' : 'rgba(226,240,250,0.8)';
+      ctx2.fillText(MODES[i].name, b.x + 30, b.y + 58);
+
+      ctx2.font = '700 20px ' + MONO;
+      ctx2.fillStyle = on ? '#7dffb0' : 'rgba(125,255,176,0.55)';
+      ctx2.fillText(MODES[i].tag, b.x + 30, b.y + 92);
+
+      ctx2.font = '500 21px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = 'rgba(180,206,226,0.85)';
+      ctx2.fillText(MODES[i].blurb, b.x + 30, b.y + 126);
+
+      ctx2.textAlign = 'right';
+      ctx2.font = '700 21px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = on ? '#ffd76a' : 'rgba(190,214,235,0.45)';
+      ctx2.fillText(on ? 'TAP AGAIN \u25B8' : 'TAP TO SELECT', b.x + b.w - 26, b.y + 58);
+    }
+    ctx2.textAlign = 'left';
+  }
 
   function drawSelect(ctx2, v) {
     var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
@@ -621,21 +702,42 @@
     var t = DR.Input.takeTap();
     if (!t) return;
     var lx = (t.x - offX) / scale, ly = (t.y - offY) / scale;
-    if (phase === 'select') {
-      for (var i = 0; i < DR.Road.tracks().length; i++) {
-        var b = cardBox(i);
-        if (lx >= b.x && lx <= b.x + b.w && ly >= b.y && ly <= b.y + b.h) {
+    var i, b;
+    if (phase === 'modes') {
+      for (i = 0; i < MODES.length; i++) {
+        if (inBox(lx, ly, modeBox(i))) {
+          if (modeSel === i) { mode = MODES[i].id; phase = 'select'; }
+          else modeSel = i;
+          return;
+        }
+      }
+    } else if (phase === 'select') {
+      if (inBox(lx, ly, BACK_BTN)) { phase = 'modes'; return; }
+      for (i = 0; i < DR.Road.tracks().length; i++) {
+        b = cardBox(i);
+        if (inBox(lx, ly, b)) {
           if (selected === i) startRace(i);
           else selected = i;
           return;
         }
       }
     } else if (phase === 'done') {
-      phase = 'select';
+      phase = 'modes';
     }
   }
 
-  function startRace(i) {
+  // Practice never ends on its own, so it needs a way out. Handled here
+  // rather than in updateMenu, because the menu loop does not run mid-race.
+  function handleRaceTap() {
+    if (mode !== 'practice') { DR.Input.clearTap(); return; }
+    var t = DR.Input.takeTap();
+    if (!t) return;
+    var lx = (t.x - offX) / scale, ly = (t.y - offY) / scale;
+    if (inBox(lx, ly, EXIT_BTN)) { phase = 'modes'; DR.Input.releaseAll(); }
+  }
+
+  function startRace(i, m) {
+    if (m) mode = m;
     selected = i;
     // Whatever was being held to get here is not a steering input.
     DR.Input.releaseAll();
@@ -654,13 +756,17 @@
   // Minimap, top right. The whole lap seen from above, with you on it.
   // North-up rather than rotating, so the shape stays learnable.
   var MAP = { x: 528, y: 50, w: 164, h: 164 };
-  function drawMinimap(ctx2) {
+  // Practice owns the top of the screen for its guidance, so the map moves
+  // down out of its way rather than the two fighting over the same corner.
+  var MAP_PRACTICE = { x: 528, y: 900, w: 164, h: 164 };
+  function drawMinimap(ctx2, box) {
+    var m = box || MAP;
     ctx2.fillStyle = 'rgba(10,6,22,0.55)';
-    ctx2.fillRect(MAP.x, MAP.y, MAP.w, MAP.h);
+    ctx2.fillRect(m.x, m.y, m.w, m.h);
     ctx2.lineWidth = 1.5;
     ctx2.strokeStyle = 'rgba(150,196,225,0.35)';
-    ctx2.strokeRect(MAP.x, MAP.y, MAP.w, MAP.h);
-    drawOutline(ctx2, MAP, undefined, lapProgress(), 2);
+    ctx2.strokeRect(m.x, m.y, m.w, m.h);
+    drawOutline(ctx2, m, undefined, lapProgress(), 2);
   }
 
   // Did we just run over a pickup?
@@ -679,6 +785,86 @@
       pickPop = 1;
       DR.FX.pickupBurst();
     }
+  }
+
+  /* Practice read-out. The line on the road says WHERE; this says WHAT TO DO
+     and HOW FAR OFF you are — and it says it in words and a bar, never in
+     colour alone, because which way to hold is the one thing here a player
+     cannot afford to misread. */
+  function drawPracticeHud(ctx2, v) {
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var info = DR.Road.lineAt(DR.Car.roadS);
+    var err = DR.Car.dev - info.off;
+    var zone = info.zone;
+
+    var cx2 = v.W * 0.5, top = 82;
+    var label = zone === 0 ? 'RELEASE' : (zone < 0 ? 'HOLD LEFT' : 'HOLD RIGHT');
+    var tint = zone === 0 ? '#7dffb0' : '#ffd76a';
+
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'middle';
+    ctx2.font = '800 50px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.lineWidth = 8;
+    ctx2.strokeStyle = 'rgba(4,2,10,0.9)';
+    ctx2.strokeText(label, cx2, top);
+    ctx2.fillStyle = tint;
+    ctx2.fillText(label, cx2, top);
+
+    // A pair of arrows either side, filled on the side you should be holding.
+    for (var sgn = -1; sgn <= 1; sgn += 2) {
+      var ax = cx2 + sgn * 232, lit = zone === sgn;
+      ctx2.globalAlpha = lit ? 1 : 0.22;
+      ctx2.beginPath();
+      ctx2.moveTo(ax - 26 * sgn, top - 26);
+      ctx2.lineTo(ax + 26 * sgn, top);
+      ctx2.lineTo(ax - 26 * sgn, top + 26);
+      ctx2.closePath();
+      ctx2.fillStyle = lit ? '#ffd76a' : 'rgba(180,206,226,0.9)';
+      ctx2.fill();
+      ctx2.globalAlpha = 1;
+    }
+
+    // How far off the line, as a bar that fills from the middle outward.
+    var bw = 420, bh = 12, bx = cx2 - bw * 0.5, by = top + 58;
+    ctx2.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx2.fillRect(bx, by, bw, bh);
+    ctx2.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx2.fillRect(cx2 - 1, by - 4, 2, bh + 8);
+    var span = Math.max(40, info.hw);
+    var f = Math.max(-1, Math.min(1, err / span));
+    var good = Math.abs(err) < 26;
+    ctx2.fillStyle = good ? '#7dffb0' : '#41e0ff';
+    if (f >= 0) ctx2.fillRect(cx2, by, f * bw * 0.5, bh);
+    else ctx2.fillRect(cx2 + f * bw * 0.5, by, -f * bw * 0.5, bh);
+
+    ctx2.font = '700 20px ' + MONO;
+    ctx2.fillStyle = good ? '#7dffb0' : 'rgba(190,214,235,0.9)';
+    ctx2.fillText(good ? 'ON THE LINE' : (Math.abs(err)).toFixed(0) + ' OFF', cx2, by + 34);
+
+    // Lap time is still worth seeing — it is how you tell whether the line is
+    // doing anything for you.
+    ctx2.textAlign = 'left';
+    ctx2.textBaseline = 'top';
+    ctx2.font = '700 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(150,196,225,0.8)';
+    ctx2.fillText('THIS LAP', 40, 986);
+    ctx2.font = '700 38px ' + MONO;
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText(timing ? fmt(lapTimer) : '--.--', 40, 1014);
+    if (lapTimes.length) {
+      var best = Math.min.apply(null, lapTimes);
+      ctx2.font = '700 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = 'rgba(150,196,225,0.8)';
+      ctx2.fillText('BEST', 260, 986);
+      ctx2.font = '700 38px ' + MONO;
+      ctx2.fillStyle = '#7dffb0';
+      ctx2.fillText(fmt(best), 260, 1014);
+    }
+    ctx2.textBaseline = 'alphabetic';
+
+    drawBoostButton(ctx2);
+    drawMinimap(ctx2, MAP_PRACTICE);
+    drawButton(ctx2, EXIT_BTN, '\u25C2 MENU');
   }
 
   function drawHint(ctx2, v) {
@@ -716,14 +902,19 @@
     var st = DR.Input.steerKeys();
     var confirm = DR.Input.takeBoost();
 
-    if (phase === 'select') {
+    if (phase === 'modes') {
+      if (st !== 0 && lastSteer === 0) {
+        modeSel = (modeSel + (st > 0 ? 1 : MODES.length - 1)) % MODES.length;
+      }
+      if (confirm) { mode = MODES[modeSel].id; phase = 'select'; }
+    } else if (phase === 'select') {
       if (st !== 0 && lastSteer === 0) {
         var n = DR.Road.tracks().length;
         selected = (selected + (st > 0 ? 1 : n - 1)) % n;
       }
       if (confirm) startRace(selected);
     } else if (phase === 'done') {
-      if (confirm) phase = 'select';
+      if (confirm) phase = 'modes';
     }
     lastSteer = st;
     handleMenuTap();
@@ -746,9 +937,10 @@
     ctx.clip();
     ctx.translate(sh.x, sh.y);
 
-    if (phase === 'select') {
+    if (phase === 'modes' || phase === 'select') {
       DR.Road.drawBackground(ctx, menuView());
-      drawSelect(ctx, v);
+      if (phase === 'modes') drawModes(ctx, v);
+      else { drawSelect(ctx, v); drawButton(ctx, BACK_BTN, '\u25C2 MODES'); }
       ctx.restore();
       return;
     }
@@ -756,6 +948,8 @@
     DR.Road.drawBackground(ctx, v);
     var rib = DR.Road.draw(ctx, v);
     DR.FX.drawSkids(ctx, v);
+    // Over the skid marks, or your own rubber hides the advice.
+    if (mode === 'practice') DR.Road.drawRacingLine(ctx, rib, v, clock);
     DR.Road.drawChevrons(ctx, v);
     DR.Road.drawFog(ctx, v);
     DR.Road.drawPicks(ctx, v, clock);
@@ -768,7 +962,10 @@
     DR.FX.drawFlash(ctx, v, rib);
     DR.FX.drawLabels(ctx, v);
     // The results panel owns the screen; the race HUD behind it is clutter.
-    if (phase === 'racing') { drawHud(ctx, v); drawHint(ctx, v); }
+    if (phase === 'racing') {
+      if (mode === 'practice') drawPracticeHud(ctx, v);
+      else { drawHud(ctx, v); drawHint(ctx, v); }
+    }
     if (phase === 'done') drawDone(ctx, v);
 
     ctx.restore();
@@ -780,7 +977,7 @@
     if (!(dt > 0)) dt = FIXED;
     if (dt > 0.25) dt = 0.25;
 
-    if (phase === 'racing') DR.Input.clearTap();
+    if (phase === 'racing') handleRaceTap();
     else updateMenu();
 
     acc += dt;
@@ -806,6 +1003,12 @@
       var lx = (clientX - offX) / scale, ly = (clientY - offY) / scale;
       var dx = lx - BOOST_BTN.x, dy = ly - BOOST_BTN.y;
       return dx * dx + dy * dy <= BOOST_BTN.r * BOOST_BTN.r;
+    });
+    // Reaching for the MENU button must not drift the car on the way.
+    DR.Input.setUiHitTest(function (clientX, clientY) {
+      if (phase !== 'racing' || mode !== 'practice') return false;
+      var lx = (clientX - offX) / scale, ly = (clientY - offY) / scale;
+      return inBox(lx, ly, EXIT_BTN);
     });
     camReady = false;
 
@@ -839,10 +1042,23 @@
     lap: function () { return lap; },
     lapProgress: lapProgress,
     phase: function () { return phase; },
+    mode: function () { return mode; },
+    // Where a given menu card actually is, so a test can tap the real thing
+    // instead of a hard-coded guess that goes stale the moment a layout moves.
+    uiBox: function (kind, i) {
+      if (kind === 'mode') return modeBox(i);
+      if (kind === 'track') return cardBox(i);
+      if (kind === 'back') return BACK_BTN;
+      if (kind === 'exit') return EXIT_BTN;
+      return null;
+    },
+    setMode: function (m) { mode = m; },
+    modes: function () { return MODES; },
     startRace: startRace,
     RACE_LAPS: RACE_LAPS,
     raceTotal: function () { return raceTotal; },
     toSelect: function () { phase = 'select'; DR.Input.releaseAll(); DR.Input.clearTap(); },
+    toModes: function () { phase = 'modes'; DR.Input.releaseAll(); DR.Input.clearTap(); },
     restart: function () {
       DR.Road.reset(); DR.Car.reset(); DR.FX.reset();
       camReady = false; hitCool = 0; lap = 1; lapFlash = 0; boostT = 1e9;

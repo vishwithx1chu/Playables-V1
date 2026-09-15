@@ -1112,6 +1112,365 @@
   // half-screen wedge of cyan you got by ending up sideways against an edge.
   var EDGE_MAX_SC = 3.2;
 
+  /* --------------------------- THE RACING LINE ---------------------------
+     A good line is the one with the least cornering in it: run wide on the
+     way in, clip the inside at the apex, run wide again on the way out. You
+     do not have to know that rule to produce it — it falls out of repeatedly
+     pulling every point toward the midpoint of its two neighbours, which is
+     what straightening a path means, while refusing to let any point leave
+     the tarmac.
+
+     Done in WORLD space, not in "distance from the centreline". The road
+     curves, so straightening an offset is not the same thing as straightening
+     a path, and doing it the cheap way gives a line that hugs the inside all
+     the way round — which is slow and, on this car, undriveable. */
+  var LINE_STEP   = 24;        // world units between line samples
+  var LINE_MARGIN = 46;        // how far the line stays off the barrier
+  var LINE_PASSES = 400;
+  var LINE_RELAX  = 0.35;
+  var LINE_FLAT_K = 1 / 3000;  // flatter than this and the line is "straight"
+  var LINE_LEAD    = 280;      // start holding this far before the bend bites
+  var LINE_RELEASE = 240;      // ...and let go this far before it ends
+
+  var _path = {}, _line = {};
+
+  // One lap walked on its own, independent of the streaming road, with the
+  // width worked out by the same rolling-maximum-then-blur rule the road
+  // itself uses — but wrapped around the loop, because a lap has no first
+  // corner and no last one.
+  function lapPath(t) {
+    if (_path[t]) return _path[t];
+    var lapDef = closedLap(t), i, j;
+    var xs = [], ys = [], hs = [], ks = [];
+    var x = 0, y = 0, h = 0;
+
+    // The step is chosen so a whole number of them spans the lap exactly, and
+    // the leftover at each segment boundary is carried into the next one.
+    // Without both, the walk ends up a couple of hundred units longer than the
+    // lap it is describing, the loop does not meet itself, and the line gets a
+    // kink at the start line that no amount of smoothing will take out.
+    var total = 0;
+    for (i = 0; i < lapDef.length; i++) total += segLength(lapDef[i]);
+    var n = Math.max(8, Math.round(total / LINE_STEP));
+    var step = total / n;
+
+    var u = 0;
+    for (i = 0; i < lapDef.length; i++) {
+      var seg = lapDef[i], len = segLength(seg);
+      while (u < len) {
+        var k = segCurvature(seg, u + step * 0.5);
+        h += k * step * 0.5;
+        x += Math.sin(h) * step;
+        y += Math.cos(h) * step;
+        h += k * step * 0.5;
+        xs.push(x); ys.push(y); hs.push(h); ks.push(k);
+        u += step;
+      }
+      u -= len;
+    }
+    while (xs.length > n) { xs.pop(); ys.pop(); hs.pop(); ks.pop(); }
+    n = xs.length;
+    var WIN  = Math.max(1, Math.round(WIDEN_WIN * SAMPLE / step));
+    var BWIN = Math.max(1, Math.round(BLUR_WIN  * SAMPLE / step));
+    var mx = [], hw = [];
+    for (i = 0; i < n; i++) {
+      var m = 0;
+      for (j = -WIN; j <= WIN; j++) {
+        var kk = Math.abs(ks[(i + j + n + n) % n]);
+        var r = BASE_HW + CORNER_EXTRA * Math.min(1, kk / TIGHTEST_K);
+        if (r > m) m = r;
+      }
+      mx.push(m);
+    }
+    for (i = 0; i < n; i++) {
+      var acc = 0, ws = 0;
+      for (j = -BWIN; j <= BWIN; j++) {
+        var w = 0.5 + 0.5 * Math.cos(Math.PI * j / (BWIN + 1));
+        acc += mx[(i + j + n + n) % n] * w; ws += w;
+      }
+      hw.push(acc / ws);
+    }
+    _path[t] = { x: xs, y: ys, h: hs, k: ks, hw: hw, n: n, step: step, len: total };
+    return _path[t];
+  }
+
+  // Every corner on a lap, in arc length from the start line.
+  var _corners = {};
+  function lapCorners(t) {
+    if (_corners[t]) return _corners[t];
+    var lapDef = closedLap(t), out = [], s = 0;
+    for (var i = 0; i < lapDef.length; i++) {
+      var len = segLength(lapDef[i]);
+      if (lapDef[i].kind === 'turn') {
+        out.push({ s0: s, s1: s + len, dir: lapDef[i].dir,
+                   r: lapDef[i].r, hairpin: !!lapDef[i].hairpin });
+      }
+      s += len;
+    }
+    _corners[t] = out;
+    return out;
+  }
+
+  /* The line is built from anchors rather than solved for, because a solver
+     that genuinely minimises cornering over a closed loop needs far more
+     passes than a lap this long can afford, and because a line you can
+     explain in a sentence is worth more here than an optimal one: run wide
+     on the way in, clip the inside at the apex, run wide again on the way
+     out.
+
+     The one wrinkle is corners that arrive back to back. There is no room to
+     run wide between them and no driver would try — you cut straight from
+     one apex to the next — so a wide anchor is only placed where there is
+     real straight to place it on. */
+  var LINE_APEX  = 0.80;   // fraction of the usable width taken at the apex
+  var LINE_WIDE  = 0.70;   // ... and on the way in and out
+  var LINE_ROOM  = 420;    // straight needed before running wide is worth it
+  var LINE_REACH = 520;    // how far before a corner the wide anchor sits
+  // A line is only advice if the car can actually drive it. The car's tightest
+  // possible circle is 504 units, so the line is held to something looser than
+  // that — a racing line through a corner should be WIDER than the corner, not
+  // tighter, and anything approaching the limit leaves nothing to correct with.
+  var LINE_MIN_R = 620;
+  var LINE_FIX_PASSES = 900;
+
+  function racingLine(t) {
+    if (_line[t]) return _line[t];
+    var P = lapPath(t), n = P.n, i, j;
+    var corners = lapCorners(t);
+    var step = P.step, total = P.len;
+    var lim = new Array(n);
+    for (i = 0; i < n; i++) lim[i] = Math.max(12, P.hw[i] - LINE_MARGIN);
+
+    function limAt(s) { return lim[((Math.round(s / step) % n) + n) % n]; }
+
+    var anchors = [];
+    function anchor(s, v) {
+      anchors.push({ s: ((s % total) + total) % total, v: v });
+    }
+
+    for (i = 0; i < corners.length; i++) {
+      var c = corners[i];
+      var prev = corners[(i - 1 + corners.length) % corners.length];
+      var next = corners[(i + 1) % corners.length];
+      var before = c.s0 - prev.s1; if (before < 0) before += total;
+      var after = next.s0 - c.s1;  if (after < 0) after += total;
+
+      // Apex: the inside of the bend, at its midpoint.
+      var mid = (c.s0 + c.s1) * 0.5;
+      anchor(mid, c.dir * limAt(mid) * LINE_APEX);
+
+      // Wide on entry and exit, but only where there is road to do it on.
+      if (before > LINE_ROOM) {
+        var e = c.s0 - Math.min(LINE_REACH, before * 0.5);
+        anchor(e, -c.dir * limAt(e) * LINE_WIDE);
+      }
+      if (after > LINE_ROOM) {
+        var x = c.s1 + Math.min(LINE_REACH, after * 0.5);
+        anchor(x, -c.dir * limAt(x) * LINE_WIDE);
+      }
+    }
+
+    anchors.sort(function (a, b) { return a.s - b.s; });
+
+    var off = new Array(n);
+    if (!anchors.length) {
+      for (i = 0; i < n; i++) off[i] = 0;
+    } else {
+      // Ease between consecutive anchors the short way round the loop, so the
+      // line arrives at each apex already settled rather than steering into it.
+      for (i = 0; i < n; i++) {
+        var s = i * step;
+        var lo = anchors[anchors.length - 1], hi = anchors[0];
+        for (j = 0; j < anchors.length; j++) {
+          if (anchors[j].s <= s) lo = anchors[j];
+          if (anchors[j].s > s) { hi = anchors[j]; break; }
+        }
+        var span = hi.s - lo.s; if (span <= 0) span += total;
+        var at = s - lo.s; if (at < 0) at += total;
+        var f = span > 0 ? at / span : 0;
+        var e2 = 0.5 - 0.5 * Math.cos(Math.PI * Math.max(0, Math.min(1, f)));
+        off[i] = lo.v + (hi.v - lo.v) * e2;
+      }
+    }
+
+    // A couple of wrapped blur passes take the last corners off it, then
+    // everything is pulled back inside the barriers whatever the anchors said.
+    var tmp = new Array(n);
+    for (var pass = 0; pass < 3; pass++) {
+      for (i = 0; i < n; i++) {
+        tmp[i] = (off[(i - 2 + n) % n] + 2 * off[(i - 1 + n) % n] + 3 * off[i] +
+                  2 * off[(i + 1) % n] + off[(i + 2) % n]) / 9;
+      }
+      for (i = 0; i < n; i++) off[i] = tmp[i];
+    }
+    for (i = 0; i < n; i++) {
+      if (off[i] > lim[i]) off[i] = lim[i];
+      if (off[i] < -lim[i]) off[i] = -lim[i];
+    }
+
+    /* Now make it driveable. Anchors say where a good line WANTS to go; they
+       know nothing about how hard the car can turn, and swinging the full
+       width of the road in the length of a corner entry asks for a radius no
+       car here can hold. So: measure the line's own radius, and wherever it is
+       tighter than LINE_MIN_R, ease that point toward the middle of its
+       neighbours — which is precisely the move that flattens a curve. Repeated,
+       it settles into the tightest line the car can actually drive, and the
+       flattening is spent only where it is needed rather than smeared over the
+       whole lap. */
+    var kmax = 1 / LINE_MIN_R;
+    var corr = new Array(n), cb = new Array(n);
+    var worst = 0;
+    for (var fix = 0; fix < LINE_FIX_PASSES; fix++) {
+      worst = 0;
+      for (i = 0; i < n; i++) corr[i] = 0;
+
+      for (i = 0; i < n; i++) {
+        var a2 = (i - 1 + n) % n, b2 = (i + 1) % n;
+        var ax = P.x[a2] + Math.cos(P.h[a2]) * off[a2];
+        var ay = P.y[a2] - Math.sin(P.h[a2]) * off[a2];
+        var bx = P.x[b2] + Math.cos(P.h[b2]) * off[b2];
+        var by = P.y[b2] - Math.sin(P.h[b2]) * off[b2];
+        var mxp = P.x[i] + Math.cos(P.h[i]) * off[i];
+        var myp = P.y[i] - Math.sin(P.h[i]) * off[i];
+        var v1x = mxp - ax, v1y = myp - ay, v2x = bx - mxp, v2y = by - myp;
+        var l1 = Math.sqrt(v1x * v1x + v1y * v1y) || 1;
+        var l2 = Math.sqrt(v2x * v2x + v2y * v2y) || 1;
+        var cr = (v1x * v2y - v1y * v2x) / (l1 * l2);
+        var ang = Math.abs(Math.asin(Math.max(-1, Math.min(1, cr))));
+        var kk2 = ang / ((l1 + l2) * 0.5);
+        if (kk2 > worst) worst = kk2;
+        if (kk2 <= kmax) continue;
+        var excess = (kk2 - kmax) / kmax;
+
+        // Two different things make a line too tight, and they need different
+        // cures. A KINK — the offset changing faster than it should — eases
+        // out by pulling the point toward the middle of its neighbours.
+        var mid = (off[a2] + off[b2]) * 0.5;
+        corr[i] += (mid - off[i]) * Math.min(0.4, excess * 0.4);
+
+        // Sitting at a CONSTANT offset on the inside of a tight bend is tight
+        // too, and the pull above does nothing there: the offset is already
+        // flat, so the middle of the neighbours is where the point already is.
+        // What is tight is the road. The cure is to give up some apex and move
+        // away from the centre of the turn — the side the line bends toward.
+        corr[i] -= (cr > 0 ? 1 : -1) * Math.min(0.9, excess * 1.2);
+      }
+      if (worst <= kmax) break;
+
+      // Smooth the CORRECTION, not the line. Nudging single samples is itself
+      // a kink — the cure reintroducing the disease — while blurring the whole
+      // line every pass would wash the apexes away over hundreds of passes.
+      for (var b3 = 0; b3 < 3; b3++) {
+        for (i = 0; i < n; i++) {
+          cb[i] = (corr[(i - 1 + n) % n] + 2 * corr[i] + corr[(i + 1) % n]) * 0.25;
+        }
+        for (i = 0; i < n; i++) corr[i] = cb[i];
+      }
+      for (i = 0; i < n; i++) {
+        off[i] += corr[i];
+        if (off[i] > lim[i]) off[i] = lim[i];
+        if (off[i] < -lim[i]) off[i] = -lim[i];
+      }
+    }
+
+    /* What to DO is read off the corners themselves, not off the shape of the
+       line — a curvature read from sampled points is noisy, and the advice has
+       to be exact. Two offsets matter, and both come straight out of the drift
+       model: start holding before the bend, because the slide takes time to
+       build; let go before it ends, because the car carries on coming round
+       after the body has squared up. */
+    var zone = new Array(n);
+    for (i = 0; i < n; i++) zone[i] = 0;
+    for (i = 0; i < corners.length; i++) {
+      var cc = corners[i];
+      var from = cc.s0 - LINE_LEAD;
+      var to = cc.s1 - LINE_RELEASE;
+      if (to <= from) to = from + step;
+      for (var u = from; u < to; u += step) {
+        var idx = ((Math.round(u / step) % n) + n) % n;
+        zone[idx] = cc.dir;
+      }
+    }
+
+    _line[t] = { off: off, zone: zone, n: n, step: step,
+                 len: total, hw: P.hw, lim: lim, corners: corners };
+    return _line[t];
+  }
+
+  // Where the line is, and what it is telling you to do, at a world arc
+  // length. The run-up wraps onto the end of the lap, which is the approach
+  // to the start line — the right piece of line for it.
+  var _lineOut = { off: 0, zone: 0, hw: BASE_HW };
+  function lineAt(s, t) {
+    var L = racingLine(t === undefined ? curTrack : t);
+    var u = (s - INTRO_LEN) / L.step;
+    u = u - Math.floor(u / L.n) * L.n;
+    var i = Math.floor(u), f = u - i;
+    var j = (i + 1) % L.n;
+    _lineOut.off = L.off[i] + (L.off[j] - L.off[i]) * f;
+    _lineOut.zone = L.zone[i];
+    _lineOut.hw = L.hw[i];
+    return _lineOut;
+  }
+
+  // The line painted on the road, as a strip that follows it.
+  function drawRacingLine(ctx, rib, view, time) {
+    var HALF = 13;
+    var i, a, b;
+    for (var layer = 0; layer < 2; layer++) {
+      var wide = layer === 0 ? HALF * 3.4 : HALF;
+      ctx.beginPath();
+      for (i = 0; i < rib.count - 1; i++) {
+        a = rib[i]; b = rib[i + 1];
+        if (!a.ok || !b.ok) continue;
+        var ka = a.sc > 3.2 ? 3.2 / a.sc : 1;
+        var kb = b.sc > 3.2 ? 3.2 / b.sc : 1;
+        var oa = lineAt(a.s).off, ob = lineAt(b.s).off;
+        var aw = a.oR - a.oL, bw = b.oR - b.oL;
+        var fa1 = (oa - wide * ka - a.oL) / aw, fa2 = (oa + wide * ka - a.oL) / aw;
+        var fb1 = (ob - wide * kb - b.oL) / bw, fb2 = (ob + wide * kb - b.oL) / bw;
+        var ax1 = a.lx + (a.rx - a.lx) * fa1, ay1 = a.ly + (a.ry - a.ly) * fa1;
+        var ax2 = a.lx + (a.rx - a.lx) * fa2, ay2 = a.ly + (a.ry - a.ly) * fa2;
+        var bx1 = b.lx + (b.rx - b.lx) * fb1, by1 = b.ly + (b.ry - b.ly) * fb1;
+        var bx2 = b.lx + (b.rx - b.lx) * fb2, by2 = b.ly + (b.ry - b.ly) * fb2;
+        ctx.moveTo(ax1, ay1); ctx.lineTo(ax2, ay2);
+        ctx.lineTo(bx2, by2); ctx.lineTo(bx1, by1);
+        ctx.closePath();
+      }
+      ctx.fillStyle = layer === 0 ? 'rgba(125,255,176,0.13)' : 'rgba(150,255,196,0.80)';
+      ctx.fill();
+    }
+
+    // Arrows crawling along the line, pointing the way you should be holding.
+    // The line alone says WHERE; these say WHICH WAY, without relying on
+    // colour to carry it.
+    var period = 300;
+    var crawl = (time * 190) % period;
+    var p = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+    for (var s = Math.ceil((rib[0].s - crawl) / period) * period + crawl;
+         s < rib[0].s + LOOKAHEAD; s += period) {
+      var info = lineAt(s);
+      if (!info.zone) continue;
+      var dir = info.zone;
+      var idx = indexAt(s);
+      var hh = ch[idx], nx = Math.cos(hh), ny = -Math.sin(hh);
+      project3(cx[idx] + nx * info.off, cy[idx] + ny * info.off, 16, view, p);
+      if (!p.vis || p.sc < 0.12 || p.sc > 4.2) continue;
+      var w = 26 * p.sc, h2 = 20 * p.sc;
+      ctx.beginPath();
+      ctx.moveTo(p.x - w * dir, p.y - h2);
+      ctx.lineTo(p.x + w * dir, p.y);
+      ctx.lineTo(p.x - w * dir, p.y + h2);
+      ctx.lineWidth = Math.max(1.5, 7 * p.sc);
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(8,24,16,0.55)';
+      ctx.stroke();
+      ctx.lineWidth = Math.max(1, 3.6 * p.sc);
+      ctx.strokeStyle = '#eaffef';
+      ctx.stroke();
+    }
+  }
+
   function draw(ctx, view) {
     var rib = buildRibbon(view);
 
@@ -1258,6 +1617,8 @@
     picks: pickList, ensurePicks: ensurePicks, trimPicks: trimPicks, drawPicks: drawPicks,
     project: project, project3: project3, CAM_LIFT: CAM_LIFT,
     buildRibbon: buildRibbon, quads: quads, drawWalls: drawWalls,
+    racingLine: racingLine, lineAt: lineAt, drawRacingLine: drawRacingLine,
+    lapPath: lapPath, lapCorners: lapCorners,
     WALL_H: WALL_H, WALL_OFF: WALL_OFF,
     drawBackground: drawBackground, draw: draw,
     drawChevrons: drawChevrons, drawFog: drawFog

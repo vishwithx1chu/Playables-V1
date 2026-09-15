@@ -20,6 +20,7 @@
   var boostKeys = 0;
   var boostPointers = [];      // pointers that landed on the button, not the road
   var boostHitTest = null;     // set by the game, which knows the screen layout
+  var uiHitTest = null;        // buttons that are buttons, not road
   var tap = null;              // last press, for menus; read once then cleared
 
   function sideFromClientX(clientX) {
@@ -100,6 +101,9 @@
           pressedOnce = true;
           return;
         }
+        // An on-screen button is pressed, not steered. Without this, reaching
+        // for one throws the car into a drift on the way.
+        if (uiHitTest && uiHitTest(e.clientX, e.clientY)) return;
         addPointer(e.pointerId, e.clientX);
       }, active);
 
@@ -149,6 +153,7 @@
     used: function () { return pressedOnce; },
 
     setBoostHitTest: function (fn) { boostHitTest = fn; },
+    setUiHitTest: function (fn) { uiHitTest = fn; },
 
     // One press, read once. Menus use this; the road does not.
     takeTap: function () { var t = tap; tap = null; return t; },
