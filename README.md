@@ -83,19 +83,27 @@ Hazard positions come from a hash of the lap number, so every run meets the
 same hazards in the same places. That is what makes comparing two scores mean
 anything.
 
-### How long a run lasts
+### The bonus decays per GATE, not per lap
 
-Measured with the test driver following the racing line, which is a better
-driver than a person will be:
+This is the same mistake as counting gates per lap, made a second time in a
+different place, and the first measurement of all three circuits is what caught
+it. A lap of Grand Circuit takes 60% longer than one of Velocity Ring, so a
+bonus that faded per lap faded 60% more slowly there — and a run that lasted 98
+seconds on the Ring ran to **154** on the Grand. Counting the decay in gates
+passed instead makes every circuit decay at the same rate in the only currency
+the mode actually has.
 
-| Circuit | Run lasted | Distance | Gates | Laps |
-|---|---|---|---|---|
-| Velocity Ring | 98s | 8123 m | 15 | 3 |
-| Harbour Maze | 119s | 10109 m | 19 | 3 |
+| Circuit | Was | Now | Distance | Gates | Laps |
+|---|---|---|---|---|---|
+| Velocity Ring | 98s | **77s** | 6496 m | 12 | 3 |
+| Harbour Maze | 119s | **80s** | 7018 m | 13 | 2 |
+| Grand Circuit | 154s | **87s** | 7354 m | 15 | 2 |
 
-So a real session should land comfortably under those. If they want shortening,
-`RUSH_START` and `RUSH_BONUS_DROP` at the top of [`src/game.js`](src/game.js)
-are the two dials.
+A 56-second spread became a 10-second one. Measured with the test driver
+following the racing line, which is a better driver than a person will be, so
+a real session should land under these. `RUSH_START` and `RUSH_BONUS_DROP` at
+the top of [`src/game.js`](src/game.js) are the two dials if they want
+shortening further.
 
 ## Previously: Milestone 2.3
 

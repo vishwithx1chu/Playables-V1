@@ -73,12 +73,17 @@
      reach the next gate: drive it perfectly early on and you gain a second or
      two, and by the fourth lap nothing you do keeps up. */
   var RUSH_START      = 25;    // seconds on the clock at the off
-  var RUSH_BONUS      = 4.8;   // seconds a gate gives you on lap one...
-  var RUSH_BONUS_DROP = 0.8;   // ...less this much per lap survived
+  var RUSH_BONUS      = 4.8;   // seconds the first gate gives you...
+  var RUSH_BONUS_DROP = 0.30;  // ...less this much for every gate since
   var RUSH_BONUS_MIN  = 2.0;
   var RUSH_CLEAN      = 2.0;   // extra for reaching it without a scratch
-  var RUSH_CLEAN_DROP = 0.2;
+  var RUSH_CLEAN_DROP = 0.12;
   var RUSH_CLEAN_MIN  = 1.2;
+  /* The decay is counted in GATES PASSED, not laps. Counting laps had the
+     same fault as counting gates per lap did: a lap of Grand Circuit takes 60%
+     longer than one of Velocity Ring, so the bonus faded 60% more slowly on it
+     and a run there lasted 154 seconds against the Ring's 98. Per gate, every
+     circuit decays at the same rate in the only currency the mode has. */
   var SPIKE_SLOW      = 0.5;   // spikes halve your speed...
   var SPIKE_SECS      = 3.0;   // ...for this long
   var PIT_LOSS        = 0.12;  // a pothole costs this much speed, like a wall
@@ -371,9 +376,8 @@
 
     // Gates.
     while (DR.Car.roadS >= cpWorldS(cpIndex)) {
-      var laps = rushLapsDone();
-      var bonus = Math.max(RUSH_BONUS_MIN, RUSH_BONUS - laps * RUSH_BONUS_DROP);
-      var extra = cpClean ? Math.max(RUSH_CLEAN_MIN, RUSH_CLEAN - laps * RUSH_CLEAN_DROP) : 0;
+      var bonus = Math.max(RUSH_BONUS_MIN, RUSH_BONUS - cpIndex * RUSH_BONUS_DROP);
+      var extra = cpClean ? Math.max(RUSH_CLEAN_MIN, RUSH_CLEAN - cpIndex * RUSH_CLEAN_DROP) : 0;
       rushTime += bonus + extra;
       cpFlash = 1;
       cpFlashText = '+' + (bonus + extra).toFixed(1) + 's' + (cpClean ? '  CLEAN' : '');
