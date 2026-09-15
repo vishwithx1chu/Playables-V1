@@ -23,6 +23,10 @@ server to start and it never touches the internet.
 | Mouse    | Click and **hold** the left or right half |
 | Keyboard | Hold **←** or **→**, **Space** to boost   |
 
+On the menus the arrow keys move the selection and **Space** confirms, so the
+whole game — choosing a mode, choosing a circuit, racing — works without ever
+touching the mouse.
+
 Let go to straighten out. Boost is the one extra input: the button at the
 bottom of the screen, or Space / Up / W.
 
@@ -564,6 +568,37 @@ is not the same in both directions:
 
 There is still no health and the run still never ends; that is a later
 milestone. The point of this is only that a mistake should be recoverable.
+
+## The keyboard that did not work in a frame
+
+The keys were wired up correctly the whole time, and a test that loaded the
+page directly passed. On a laptop, playing the published page, none of them
+did anything.
+
+The published game runs in an **iframe**, and keys only reach an iframe that
+has focus. Clicking the game should hand it that focus — except `pointerdown`
+calls `preventDefault()`, which is what stops a drag from selecting text and
+a long press from popping up a menu, and it also suppresses the browser's
+default focus change. So clicking the car never focused the frame, and every
+arrow key and every space went to the page behind the game.
+
+Reproduced by serving the game into a real iframe and checking
+`document.activeElement` after a click: still `BODY`. The fix is to ask for
+focus explicitly on pointerdown, and to give the canvas a `tabindex` so it can
+take it. Now the frame has focus from the moment it loads, and the keyboard
+works before any click at all.
+
+### And a second one, found while testing the first
+
+A quick tap of an arrow key on a menu did nothing. The road samples the keys
+once a frame — right for a drift, where what matters is whether the key is
+down *now* — but a menu sampled the same way misses any press that starts and
+ends between two frames, which is what a quick tap is. Menu presses are now
+counted as they arrive and read once, the way boost already worked.
+
+This is the same shape of bug as the tap that would not start a race, below:
+something that reads the state of an input, where it should be reading the
+event.
 
 ## The tap that would not start a race
 

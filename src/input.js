@@ -13,6 +13,16 @@
   var pointers = [];
 
   var pressedOnce = false;
+  var lastDevice = '';         // 'key' or 'pointer' — only to word the hints
+
+  /* Menus count key PRESSES; the road reads the key being HELD.
+
+     They cannot be the same thing. The road samples once a frame, which is
+     right for a drift — what matters is whether the key is down now. A menu
+     sampled the same way misses any press that starts and ends between two
+     frames, and a quick tap of an arrow key does exactly that. So presses are
+     queued here and read once, the way the boost button already worked. */
+  var menuSteps = 0;
 
   // Boost. Fires once per press: holding it down does nothing extra.
   var boostQueued = false;
@@ -61,6 +71,13 @@
            e.key === 'ArrowUp' || e.code === 'ArrowUp' || e.code === 'KeyW';
   }
 
+  function grabFocus(target) {
+    try {
+      if (window.focus) window.focus();
+      if (target && target.focus) target.focus({ preventScroll: true });
+    } catch (err) { /* a browser that will not hand it over is not fatal */ }
+  }
+
   function onBoostPointer(id) {
     for (var i = 0; i < boostPointers.length; i++) if (boostPointers[i] === id) return true;
     return false;
@@ -69,12 +86,13 @@
   DR.Input = {
     init: function (target) {
       var active = { passive: false };
+      grabFocus(target);
 
       window.addEventListener('keydown', function (e) {
         if (e.repeat) return;
-        if (isBoostKey(e)) { boostQueued = true; boostKeys++; pressedOnce = true; e.preventDefault(); }
-        else if (isLeftKey(e)) { keyLeft = true; pressedOnce = true; e.preventDefault(); }
-        else if (isRightKey(e)) { keyRight = true; pressedOnce = true; e.preventDefault(); }
+        if (isBoostKey(e)) { boostQueued = true; boostKeys++; pressedOnce = true; lastDevice = 'key'; e.preventDefault(); }
+        else if (isLeftKey(e)) { keyLeft = true; menuSteps -= 1; pressedOnce = true; lastDevice = 'key'; e.preventDefault(); }
+        else if (isRightKey(e)) { keyRight = true; menuSteps += 1; pressedOnce = true; lastDevice = 'key'; e.preventDefault(); }
       }, active);
 
       window.addEventListener('keyup', function (e) {
@@ -93,6 +111,17 @@
 
       target.addEventListener('pointerdown', function (e) {
         e.preventDefault();
+        /* Taking the keyboard.
+
+           preventDefault on a pointerdown stops the browser doing what it
+           normally would, and one of those things is moving focus. Inside an
+           iframe — which is exactly where this game is played on the web —
+           that meant clicking the car never focused the frame, so every arrow
+           key and every space went to the page BEHIND the game and the whole
+           keyboard appeared dead on a laptop. Asking for focus explicitly is
+           the fix; preventScroll stops the host page jumping when we do. */
+        grabFocus(target);
+        lastDevice = 'pointer';
         tap = { x: e.clientX, y: e.clientY };
         // A finger on the boost button boosts; it must not also steer.
         if (boostHitTest && boostHitTest(e.clientX, e.clientY)) {
@@ -148,9 +177,14 @@
       pointers.length = 0;
       boostPointers.length = 0;
       boostQueued = false;
+      menuSteps = 0;
     },
 
     used: function () { return pressedOnce; },
+    lastDevice: function () { return lastDevice; },
+
+    // Arrow presses since this was last asked, then cleared.
+    takeMenuStep: function () { var v = menuSteps; menuSteps = 0; return v; },
 
     setBoostHitTest: function (fn) { boostHitTest = fn; },
     setUiHitTest: function (fn) { uiHitTest = fn; },

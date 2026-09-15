@@ -23,6 +23,10 @@ body {
   -webkit-touch-callout: none;
 }
 
+/* Focusable, so a click can hand it the keyboard inside an iframe — but with
+   no focus ring, because it is a game and not a form field. */
+#stage:focus { outline: none; }
+
 #stage {
   position: fixed;
   inset: 0;

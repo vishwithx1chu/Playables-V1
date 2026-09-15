@@ -703,6 +703,17 @@
     return { x: 64, y: top + i * pitch, w: 592, h: MODE_H };
   }
 
+  // Draw text at the biggest size that still fits `maxW`, down to a floor.
+  function fitText(ctx2, text, x, y, maxW, size, weight, family) {
+    var px2 = size;
+    while (px2 > 18) {
+      ctx2.font = weight + ' ' + px2 + 'px ' + family;
+      if (ctx2.measureText(text).width <= maxW) break;
+      px2 -= 2;
+    }
+    ctx2.fillText(text, x, y);
+  }
+
   function inBox(lx, ly, b) {
     return lx >= b.x && lx <= b.x + b.w && ly >= b.y && ly <= b.y + b.h;
   }
@@ -720,6 +731,17 @@
     ctx2.fillText(text, b.x + b.w * 0.5, b.y + b.h * 0.5 + 1);
     ctx2.textAlign = 'left';
     ctx2.textBaseline = 'alphabetic';
+  }
+
+  // One quiet line naming both ways in. Someone on a laptop has no way to
+  // guess that the arrow keys work, and someone on a phone has no keyboard to
+  // be confused by — so saying both costs nothing and answers the question.
+  function drawControlsLine(ctx2, v, y) {
+    ctx2.textAlign = 'center';
+    ctx2.font = '600 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(150,196,225,0.62)';
+    ctx2.fillText('TAP    \u2022    or  \u2190 \u2192  and  SPACE', v.W * 0.5, y);
+    ctx2.textAlign = 'left';
   }
 
   function drawModes(ctx2, v) {
@@ -742,9 +764,11 @@
       ctx2.strokeRect(b.x, b.y, b.w, b.h);
 
       ctx2.textAlign = 'left';
-      ctx2.font = '800 40px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      // Shrunk to fit rather than trusting every mode name to be short. The
+      // first long one, CHECKPOINT RUSH, ran straight through its own
+      // "TAP TO SELECT" label.
       ctx2.fillStyle = on ? '#eaf6ff' : 'rgba(226,240,250,0.8)';
-      ctx2.fillText(MODES[i].name, b.x + 30, b.y + 58);
+      fitText(ctx2, MODES[i].name, b.x + 30, b.y + 58, 358, 40, '800', 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif');
 
       ctx2.font = '700 20px ' + MONO;
       ctx2.fillStyle = on ? '#7dffb0' : 'rgba(125,255,176,0.55)';
@@ -759,6 +783,7 @@
       ctx2.fillStyle = on ? '#ffd76a' : 'rgba(190,214,235,0.45)';
       ctx2.fillText(on ? 'TAP AGAIN \u25B8' : 'TAP TO SELECT', b.x + b.w - 26, b.y + 58);
     }
+    drawControlsLine(ctx2, v, modeBox(MODES.length - 1).y + MODE_H + 62);
     ctx2.textAlign = 'left';
   }
 
@@ -811,6 +836,7 @@
       ctx2.fillStyle = on ? '#ffd76a' : 'rgba(190,214,235,0.5)';
       ctx2.fillText(on ? 'TAP AGAIN TO RACE' : 'TAP TO SELECT', b.x + 274, b.y + 214);
     }
+    drawControlsLine(ctx2, v, 1248);
     ctx2.textAlign = 'left';
   }
 
@@ -945,7 +971,8 @@
   function startRace(i, m, keepDuel) {
     if (m) mode = m;
     selected = i;
-    // Whatever was being held to get here is not a steering input.
+    // Whatever was being held to get here is not a steering input, and any
+    // arrow presses queued for the menu are not for the road.
     DR.Input.releaseAll();
     DR.Input.clearTap();
     DR.Road.setTrack(i);
@@ -1281,9 +1308,11 @@
     ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx2.lineWidth = 6;
     ctx2.strokeStyle = 'rgba(4,2,10,0.9)';
-    ctx2.strokeText('HOLD LEFT OR RIGHT SIDE', v.W * 0.5, v.H - 790);
+    var byKey = DR.Input.lastDevice() === 'key';
+    var head = byKey ? 'HOLD \u2190 OR \u2192' : 'HOLD LEFT OR RIGHT SIDE';
+    ctx2.strokeText(head, v.W * 0.5, v.H - 790);
     ctx2.fillStyle = '#dff6ff';
-    ctx2.fillText('HOLD LEFT OR RIGHT SIDE', v.W * 0.5, v.H - 790);
+    ctx2.fillText(head, v.W * 0.5, v.H - 790);
     ctx2.font = '600 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx2.strokeText('hold all the way through a corner', v.W * 0.5, v.H - 752);
     ctx2.fillStyle = 'rgba(190,214,235,0.9)';
@@ -1301,22 +1330,21 @@
   }
 
   // Off-race input: steer to change track, boost to confirm, tap anywhere.
-  var lastSteer = 0;
   function updateMenu() {
-    // Keyboard only: see Input.steerKeys. A finger or mouse on a menu is
-    // tapping a card, and must not also count as steering.
-    var st = DR.Input.steerKeys();
+    // Counted presses, not held keys — a tap of an arrow that begins and ends
+    // between two frames still has to move the selection.
+    var st = DR.Input.takeMenuStep();
     var confirm = DR.Input.takeBoost();
 
     if (phase === 'modes') {
-      if (st !== 0 && lastSteer === 0) {
-        modeSel = (modeSel + (st > 0 ? 1 : MODES.length - 1)) % MODES.length;
+      if (st) {
+        modeSel = ((modeSel + st) % MODES.length + MODES.length) % MODES.length;
       }
       if (confirm) { mode = MODES[modeSel].id; phase = 'select'; }
     } else if (phase === 'select') {
-      if (st !== 0 && lastSteer === 0) {
+      if (st) {
         var n = DR.Road.tracks().length;
-        selected = (selected + (st > 0 ? 1 : n - 1)) % n;
+        selected = ((selected + st) % n + n) % n;
       }
       if (confirm) startRace(selected);
     } else if (phase === 'handoff') {
@@ -1324,7 +1352,6 @@
     } else if (phase === 'done') {
       if (confirm) startRace(selected);
     }
-    lastSteer = st;
     handleMenuTap();
   }
 
@@ -1483,6 +1510,7 @@
     },
     setMode: function (m) { mode = m; },
     modes: function () { return MODES; },
+    modeSel: function () { return modeSel; },
     startRace: startRace,
     RACE_LAPS: RACE_LAPS,
     raceTotal: function () { return raceTotal; },
