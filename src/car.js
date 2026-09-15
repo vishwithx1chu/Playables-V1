@@ -251,15 +251,39 @@
   var ROLL_K = 260;   // spring, about two and a half rocks a second
   var ROLL_C = 9;     // damping, so it settles rather than wobbles on
 
-  function drawCar(ctx, view, car) {
+  /* A ghost is the same car in a different coat. Painting it with its own
+     copy of the mesh would mean two models to keep in step, so instead the
+     whole draw takes a `skin`: swap the palette, drop the alpha, and skip the
+     neon glow and the exhaust flame, because a replay is not really there and
+     should not light the road it is passing over. */
+  var GHOST_MAT = {
+    body:      [ 70, 190, 220],
+    hood:      [ 96, 214, 240],
+    deck:      [ 58, 168, 200],
+    roof:      [ 84, 200, 230],
+    tailpanel: [ 40, 120, 150],
+    under:     [ 16,  50,  66],
+    glass:     [ 20,  60,  84],
+    tyre:      [ 24,  56,  70],
+    rim:       [140, 200, 220]
+  };
+  var GHOST_EMISSIVE = { tail: '#9ff0ff', head: '#eaffff' };
+  var GHOST_SKIN = { alpha: 0.42, mat: GHOST_MAT, emissive: GHOST_EMISSIVE, bare: true };
+
+  function drawCar(ctx, view, car, skin) {
     var i, j, f, n;
     var b = car.bodyYaw, cb = Math.cos(b), sb = Math.sin(b);
     var lean = Math.min(1, Math.abs(car.slip) / SLIP_AT_LIMIT);
+    var MATS = (skin && skin.mat) || MAT;
+    var EMIT = (skin && skin.emissive) || EMISSIVE;
 
     // Ground glow and shadow first, flat on the tarmac.
     var g = DR.Road.project(car.x, car.y, view);
     if (!g.vis) return;
     var gs = g.sc / DR.Road.SC_CAR;
+    if (skin && skin.alpha !== undefined) ctx.globalAlpha = skin.alpha;
+    if (skin && skin.bare) { drawGhostShadow(ctx, g, gs, car, view); }
+    else {
     ctx.save();
     ctx.translate(g.x, g.y);
     if (!glowGrad) {
@@ -280,6 +304,7 @@
     ctx.fill();
     drawBoostFlame(ctx, view.boost || 0);
     ctx.restore();
+    }
 
     // --- every vertex into the world, then onto the screen ---
     var cr = Math.cos(car.roll), sr = Math.sin(car.roll);
@@ -331,14 +356,14 @@
       }
       ctx.closePath();
 
-      if (EMISSIVE[e.m]) {
-        ctx.fillStyle = EMISSIVE[e.m];
-        ctx.shadowColor = EMISSIVE[e.m];
+      if (EMIT[e.m]) {
+        ctx.fillStyle = EMIT[e.m];
+        ctx.shadowColor = EMIT[e.m];
         ctx.shadowBlur = e.m === 'tail' ? 16 : 9;
         ctx.fill();
         ctx.shadowBlur = 0;
       } else {
-        ctx.fillStyle = shade(MAT[e.m] || MAT.body, e.nd !== undefined ? e.nd : faceLight(e, pts));
+        ctx.fillStyle = shade(MATS[e.m] || MATS.body, e.nd !== undefined ? e.nd : faceLight(e, pts));
         ctx.fill();
         if (e.m === 'glass') {
           ctx.strokeStyle = 'rgba(150,210,255,0.22)';
@@ -347,6 +372,21 @@
         }
       }
     }
+    if (skin && skin.alpha !== undefined) ctx.globalAlpha = 1;
+  }
+
+  // Just enough shadow that the ghost sits ON the road rather than hovering
+  // over it — no neon, because it is not really there.
+  function drawGhostShadow(ctx, g, gs, car, view) {
+    ctx.save();
+    ctx.translate(g.x, g.y);
+    ctx.scale(gs, gs);
+    ctx.rotate(car.bodyYaw - view.camAngle);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 30, 50, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.30)';
+    ctx.fill();
+    ctx.restore();
   }
 
   // How square-on to the light a face sits, from its world-space normal.
@@ -427,6 +467,9 @@
       ctx.fill();
     }
   }
+
+  // A ghost is not a Car — it has no physics — but it draws like one.
+  Car.drawGhost = function (ctx, view, g) { drawCar(ctx, view, g, GHOST_SKIN); };
 
   DR.Car = Car;
 })(window.DR = window.DR || {});

@@ -32,7 +32,59 @@ touchscreen.
 
 ---
 
-## Current state: Milestone 2.4
+## Current state: Milestone 2.5
+
+Four modes, picked from the screen the game opens on:
+
+- **RACE** — three laps, results screen, best lap called out.
+- **PRACTICE** — no clock. The ideal line painted on the road.
+- **CHECKPOINT RUSH** — a clock that only runs down, gates that wind it back
+  up, spike strips and potholes. Distance is the score.
+- **DUEL** — two players, two laps each, pass the phone.
+
+## Duel
+
+Player one drives two laps. Every twelfth of a second their car is written
+down — where it was, which way the body pointed, how sideways it was, and how
+far round the lap it had got. Player two then drives the same two laps with
+that recording alongside them as a translucent cyan car, and a gap in seconds.
+Lowest total wins.
+
+Two laps rather than three because the phone has to change hands: three each
+on Grand Circuit would be four minutes of sitting and watching. Two on
+Velocity Ring is under two minutes for both players.
+
+**The gap is quoted in seconds, and that is why the arc length is recorded.**
+"Two car lengths behind" means nothing on a circuit. Both cars pass through the
+same points of road, so the honest question is who reached each point first —
+and the recording is searched by position to answer it. The read-out also says
+AHEAD or BEHIND in words, because a green or red number on its own is exactly
+the sort of thing the brief says must never carry information by itself.
+
+### Checked by driving it twice, identically
+
+The only way to know a gap is measured rather than guessed is to race a run
+against a copy of itself and see zero:
+
+| | Result |
+|---|---|
+| Player one, driving the racing line | 54.78s, 658 samples recorded |
+| Sample rate | 12.0 a second |
+| Player two, driving **exactly** the same | 54.78s |
+| **Worst gap over 3285 readings** | **0.000s** |
+
+Then the same thing with player two driving down the middle of the road
+instead: 51.85s against 54.78s, and the gap climbed steadily rather than
+jumping about — which is what it should do when one driver is genuinely slower.
+
+A ghost costs about 3,500 numbers for a two-lap run, so keeping one in memory
+is not worth thinking about. It draws with the same 3D car model as the player,
+handed a different palette and a lower alpha — a second copy of the mesh would
+have been two models to keep in step. It gets a plain shadow and no neon glow
+or exhaust flame, because it is not really there and should not light the road
+it passes over.
+
+## Previously: Milestone 2.4
 
 Three modes now, picked from a screen the game opens on:
 
@@ -570,11 +622,12 @@ actually playing. Geometry in code is the only kind of 3D that ships here.
 ## Files
 
 ```
-index.html      the page: one canvas, five scripts
+index.html      the page: one canvas, six scripts
 style.css       stops the page scrolling, zooming or selecting text
 src/input.js    touch, mouse and keyboard  ->  one number: -1, 0 or +1
 src/road.js     the track, and how the road is drawn
 src/car.js      the drift physics and the car
+src/ghost.js    records a run, and plays it back as a car that is not there
 src/fx.js       smoke, skid marks, screen shake, edge flash, crash sparks
 src/game.js     the loop, and the responsive fairness rule
 ```

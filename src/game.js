@@ -96,6 +96,22 @@
   var BACK_BTN = { x: 40, y: 34, w: 156, h: 56 };      // track screen -> modes
   var EXIT_BTN = { x: 40, y: 1184, w: 176, h: 58 };    // practice -> menu
   var RACE_LAPS = 3;
+  var DUEL_LAPS = 2;     // two each, so passing the phone is not a punishment
+
+  /* ------------------------------- DUEL --------------------------------
+     Pass and play. Player one drives, and every twelfth of a second their car
+     is written down. Player two then drives the same two laps with that
+     recording alongside them, and a gap in SECONDS — not in car lengths —
+     because both cars pass through the same points of road, and the honest
+     question is who got there first. */
+  var duelStage = 1;         // 1 = setting the time, 2 = chasing it
+  var duelGhost = null;      // player one's run
+  var duelTimes = [0, 0];
+  var duelElapsed = 0;       // seconds since this player's start line
+  var duelGap = null;        // + means player two is behind
+  var _ghostPos = { x: 0, y: 0, bodyYaw: 0, slip: 0, roll: 0, done: false };
+
+  function lapsFor(m) { return m === 'duel' ? DUEL_LAPS : RACE_LAPS; }
 
   /* 'modes' -> 'select' -> 'racing' -> 'done' -> back to 'modes'.
      A mode decides what the race is FOR; the track screen is the same either
@@ -106,7 +122,9 @@
     { id: 'practice', name: 'PRACTICE', tag: 'NO CLOCK',
       blurb: 'The ideal line painted on the road, and when to hold.' },
     { id: 'rush',     name: 'CHECKPOINT RUSH', tag: 'SURVIVE',
-      blurb: 'Beat the clock to each gate. Spikes and potholes.' }
+      blurb: 'Beat the clock to each gate. Spikes and potholes.' },
+    { id: 'duel',     name: 'DUEL',     tag: '2 PLAYERS',
+      blurb: 'Two laps each. Player two races player one\u2019s ghost.' }
   ];
   var mode = 'race';
   var modeSel = 0;
@@ -318,6 +336,7 @@
 
     collectPicks();
     if (mode === 'rush') updateRush(dt);
+    if (mode === 'duel') updateDuel(dt);
 
     if (hitPenalty < 1) hitPenalty = Math.min(1, hitPenalty + HIT_RECOVER_PER_SEC * dt);
     var speed = currentSpeed();
@@ -353,6 +372,7 @@
       // Only a race has a last lap. Practice runs until you leave; Rush runs
       // until the clock beats you.
       if (mode === 'race' && lapTimes.length >= RACE_LAPS) { phase = 'done'; lapFlash = 0; }
+      if (mode === 'duel' && lapTimes.length >= DUEL_LAPS) { finishDuelLeg(); }
     }
     if (lapFlash > 0) lapFlash = Math.max(0, lapFlash - dt / 1.6);
 
@@ -360,6 +380,41 @@
     DR.FX.update(dt, DR.Car.x, DR.Car.y);
     DR.Road.ensure(DR.Car.roadS + DR.Road.LOOKAHEAD + 400);
     DR.Road.trim(DR.Car.roadS - DR.Road.CAM_BACK - 900);
+  }
+
+  function updateDuel(dt) {
+    if (!timing) return;                 // the run-up is nobody's time
+    duelElapsed += dt;
+    if (duelStage === 1) {
+      DR.Ghost.sample(dt, DR.Car, duelElapsed);
+      return;
+    }
+    // Chasing: how long the ghost took to reach the point of road we are on.
+    var was = DR.Ghost.timeAt(duelGhost, DR.Car.roadS);
+    duelGap = (was === null) ? null : duelElapsed - was;
+  }
+
+  function finishDuelLeg() {
+    lapFlash = 0;
+    if (duelStage === 1) {
+      duelTimes[0] = raceTotal;
+      duelGhost = DR.Ghost.finish();
+      phase = 'handoff';
+    } else {
+      duelTimes[1] = raceTotal;
+      phase = 'done';
+    }
+  }
+
+  // Player two's leg: same track, same everything, but the ghost stays.
+  function startDuelLeg2() {
+    duelStage = 2;
+    duelElapsed = 0;
+    duelGap = null;
+    var keep = duelGhost;
+    startRace(selected, 'duel', true);
+    duelGhost = keep;
+    duelStage = 2;
   }
 
   function updateRush(dt) {
@@ -453,9 +508,10 @@
     ctx2.font = '800 44px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx2.lineWidth = 6;
     ctx2.strokeStyle = 'rgba(4,2,10,0.85)';
-    ctx2.strokeText(Math.min(lap, RACE_LAPS) + '/' + RACE_LAPS, x, y + 22);
+    var total = lapsFor(mode);
+    ctx2.strokeText(Math.min(lap, total) + '/' + total, x, y + 22);
     ctx2.fillStyle = '#eaf6ff';
-    ctx2.fillText(Math.min(lap, RACE_LAPS) + '/' + RACE_LAPS, x, y + 22);
+    ctx2.fillText(Math.min(lap, total) + '/' + total, x, y + 22);
 
     var bw = 200, bh = 7, by = y + 88;
     ctx2.fillStyle = 'rgba(255,255,255,0.13)';
@@ -717,7 +773,10 @@
     ctx2.fillText('DRIFT RUN', v.W * 0.5, 168);
     ctx2.font = '700 26px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx2.fillStyle = 'rgba(180,214,236,0.9)';
-    ctx2.fillText('CHOOSE YOUR CIRCUIT  \u2022  ' + RACE_LAPS + ' LAPS', v.W * 0.5, 212);
+    var sub = mode === 'practice' ? 'CHOOSE YOUR CIRCUIT'
+            : mode === 'rush' ? 'CHOOSE YOUR CIRCUIT  \u2022  BEAT THE CLOCK'
+            : 'CHOOSE YOUR CIRCUIT  \u2022  ' + lapsFor(mode) + ' LAPS';
+    ctx2.fillText(sub, v.W * 0.5, 212);
 
     for (i = 0; i < tracks.length; i++) {
       var b = cardBox(i), on = i === selected;
@@ -794,6 +853,7 @@
 
   function drawDone(ctx2, v) {
     if (mode === 'rush') { drawRushDone(ctx2, v); return; }
+    if (mode === 'duel') { drawDuelDone(ctx2, v); return; }
     var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     ctx2.fillStyle = 'rgba(6,4,16,0.74)';
     ctx2.fillRect(0, 0, v.W, v.H);
@@ -863,6 +923,8 @@
           return;
         }
       }
+    } else if (phase === 'handoff') {
+      startDuelLeg2();
     } else if (phase === 'done') {
       // Going again should be one tap, not three. Back to the tracks, with
       // the mode you were already playing still chosen.
@@ -880,7 +942,7 @@
     if (inBox(lx, ly, EXIT_BTN)) { phase = 'modes'; DR.Input.releaseAll(); }
   }
 
-  function startRace(i, m) {
+  function startRace(i, m, keepDuel) {
     if (m) mode = m;
     selected = i;
     // Whatever was being held to get here is not a steering input.
@@ -896,6 +958,12 @@
     rushTime = RUSH_START; rushScore = 0; cpIndex = 0; cpClean = true;
     cpFlash = 0; spikeT = 0; rushGates = 0;
     DR.Road.resetHazards();
+
+    if (mode === 'duel' && !keepDuel) {
+      duelStage = 1; duelGhost = null; duelTimes = [0, 0];
+      duelElapsed = 0; duelGap = null;
+      DR.Ghost.start();
+    }
     raceTotal = 0; hintAlpha = 1;
     phase = 'racing';
   }
@@ -1086,6 +1154,125 @@
     drawMinimap(ctx2, MAP_PRACTICE);
   }
 
+  /* Duel read-out: which player is driving, and — for player two — the gap in
+     seconds. AHEAD and BEHIND are written out, because a green or red number
+     on its own is exactly the sort of thing the brief says must never carry
+     information alone. */
+  function drawDuelHud(ctx2, v) {
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var cx2 = v.W * 0.5;
+
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '800 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.lineWidth = 6;
+    ctx2.strokeStyle = 'rgba(4,2,10,0.85)';
+    ctx2.strokeText('PLAYER ' + duelStage, cx2, 54);
+    ctx2.fillStyle = duelStage === 1 ? '#ffd76a' : '#7ce4ff';
+    ctx2.fillText('PLAYER ' + duelStage, cx2, 54);
+
+    if (duelStage === 1) {
+      ctx2.font = '600 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = 'rgba(180,206,226,0.85)';
+      ctx2.fillText('SET THE TIME  \u2014  ' + DUEL_LAPS + ' LAPS', cx2, 84);
+    } else {
+      ctx2.font = '600 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = 'rgba(180,206,226,0.85)';
+      ctx2.fillText('TO BEAT  ' + fmt(duelTimes[0]), cx2, 84);
+
+      if (duelGap !== null) {
+        var behind = duelGap > 0;
+        var word = behind ? 'BEHIND' : 'AHEAD';
+        var mag = Math.abs(duelGap);
+        ctx2.font = '800 60px ' + MONO;
+        ctx2.lineWidth = 8;
+        ctx2.strokeStyle = 'rgba(4,2,10,0.9)';
+        ctx2.strokeText((behind ? '+' : '\u2212') + mag.toFixed(2), cx2, 152);
+        ctx2.fillStyle = behind ? '#ff8a6a' : '#7dffb0';
+        ctx2.fillText((behind ? '+' : '\u2212') + mag.toFixed(2), cx2, 152);
+        ctx2.font = '700 24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx2.fillText(word, cx2, 184);
+      } else {
+        ctx2.font = '700 26px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx2.fillStyle = '#7dffb0';
+        ctx2.fillText('GHOST HAS FINISHED', cx2, 152);
+      }
+    }
+    ctx2.textAlign = 'left';
+  }
+
+  // Between the two legs. Deliberately a wall you have to tap through, so the
+  // phone actually changes hands before the clock starts again.
+  function drawHandoff(ctx2, v) {
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    ctx2.fillStyle = 'rgba(6,4,16,0.86)';
+    ctx2.fillRect(0, 0, v.W, v.H);
+
+    ctx2.textAlign = 'center';
+    ctx2.font = '700 26px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(180,214,236,0.9)';
+    ctx2.fillText('PLAYER 1', v.W * 0.5, 340);
+
+    ctx2.font = '800 96px ' + MONO;
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText(fmt(duelTimes[0]), v.W * 0.5, 434);
+
+    var best = lapTimes.length ? Math.min.apply(null, lapTimes) : 0;
+    ctx2.font = '700 24px ' + MONO;
+    ctx2.fillStyle = 'rgba(190,214,235,0.85)';
+    ctx2.fillText('BEST LAP  ' + fmt(best), v.W * 0.5, 480);
+
+    ctx2.font = '800 54px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = '#7ce4ff';
+    ctx2.fillText('PASS THE PHONE', v.W * 0.5, 610);
+
+    ctx2.font = '600 24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(180,206,226,0.9)';
+    ctx2.fillText('Player 2 races Player 1\u2019s ghost', v.W * 0.5, 656);
+
+    ctx2.font = '700 32px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText('TAP WHEN READY', v.W * 0.5, 800);
+    ctx2.textAlign = 'left';
+  }
+
+  function drawDuelDone(ctx2, v) {
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    ctx2.fillStyle = 'rgba(6,4,16,0.80)';
+    ctx2.fillRect(0, 0, v.W, v.H);
+
+    var p1 = duelTimes[0], p2 = duelTimes[1];
+    var winner = p2 < p1 ? 2 : 1;
+    var margin = Math.abs(p1 - p2);
+
+    ctx2.textAlign = 'center';
+    ctx2.font = '800 66px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = winner === 1 ? '#ffd76a' : '#7ce4ff';
+    ctx2.fillText('PLAYER ' + winner + ' WINS', v.W * 0.5, 320);
+
+    ctx2.font = '700 28px ' + MONO;
+    ctx2.fillStyle = 'rgba(190,214,235,0.9)';
+    ctx2.fillText('BY ' + margin.toFixed(2) + 's', v.W * 0.5, 368);
+
+    for (var i = 0; i < 2; i++) {
+      var y = 470 + i * 96, won = (i + 1) === winner;
+      ctx2.textAlign = 'right';
+      ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = won ? '#eaf6ff' : 'rgba(150,196,225,0.75)';
+      ctx2.fillText('PLAYER ' + (i + 1), v.W * 0.5 - 28, y);
+      ctx2.textAlign = 'left';
+      ctx2.font = '800 48px ' + MONO;
+      ctx2.fillStyle = won ? (winner === 1 ? '#ffd76a' : '#7ce4ff') : 'rgba(228,242,252,0.8)';
+      ctx2.fillText(fmt(duelTimes[i]), v.W * 0.5 + 8, y);
+    }
+
+    ctx2.textAlign = 'center';
+    ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText('TAP TO GO AGAIN', v.W * 0.5, 850);
+    ctx2.textAlign = 'left';
+  }
+
   function drawHint(ctx2, v) {
     if (hintAlpha <= 0.01) return;
     ctx2.globalAlpha = hintAlpha;
@@ -1132,6 +1319,8 @@
         selected = (selected + (st > 0 ? 1 : n - 1)) % n;
       }
       if (confirm) startRace(selected);
+    } else if (phase === 'handoff') {
+      if (confirm) startDuelLeg2();
     } else if (phase === 'done') {
       if (confirm) startRace(selected);
     }
@@ -1177,6 +1366,10 @@
     DR.Road.drawFog(ctx, v);
     DR.Road.drawPicks(ctx, v, clock);
     DR.FX.drawSmoke(ctx, v);
+    if (mode === 'duel' && duelStage === 2 && duelGhost) {
+      DR.Ghost.at(duelGhost, duelElapsed, _ghostPos);
+      if (!_ghostPos.done) DR.Car.drawGhost(ctx, v, _ghostPos);
+    }
     DR.Car.draw(ctx, v);
     DR.FX.drawSparks(ctx, v);
     DR.FX.drawSpeedLines(ctx, v);
@@ -1189,7 +1382,9 @@
       if (mode === 'practice') drawPracticeHud(ctx, v);
       else if (mode === 'rush') drawRushHud(ctx, v);
       else { drawHud(ctx, v); drawHint(ctx, v); }
+      if (mode === 'duel') drawDuelHud(ctx, v);
     }
+    if (phase === 'handoff') drawHandoff(ctx, v);
     if (phase === 'done') drawDone(ctx, v);
 
     ctx.restore();
@@ -1272,6 +1467,11 @@
                gates: rushGates, laps: rushLapsDone(), spiked: spikeT };
     },
     setRushTime: function (t) { rushTime = t; },
+    duel: function () {
+      return { stage: duelStage, times: duelTimes.slice(), gap: duelGap,
+               ghost: duelGhost ? duelGhost.n : 0, elapsed: duelElapsed };
+    },
+    startDuelLeg2: startDuelLeg2,
     // Where a given menu card actually is, so a test can tap the real thing
     // instead of a hard-coded guess that goes stale the moment a layout moves.
     uiBox: function (kind, i) {
