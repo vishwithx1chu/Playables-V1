@@ -77,14 +77,16 @@ hundreds of passes.
 
 Worth checking rather than assuming, so the test driver was pointed at it:
 
-| Driving | Best lap | Wall contacts | Average distance from the line |
+| Circuit | Down the middle | Following the line | Gain |
 |---|---|---|---|
-| Down the centre of the road | 24.98s | 0 | 97 units |
-| Following the line | **23.67s** | 0 | 9 units |
+| Velocity Ring | 24.98s | **23.67s** | −1.31s (5.2%) |
+| Harbour Maze | 32.02s | **29.98s** | −2.04s (6.4%) |
+| Grand Circuit | 40.00s | **38.03s** | −1.97s (4.9%) |
 
-**1.3 seconds a lap, or 5.2%, on Velocity Ring.** So the line is not decoration:
-it is genuinely quicker, and quick enough that mastering it will beat the 25
-second target the circuit was built around.
+Zero wall contacts either way, and the line-following driver held to within 8
+to 10 units of the line all lap. So the line is not decoration: it is genuinely
+the quick way round, and quick enough that mastering it beats the target time
+each circuit was built around.
 
 Two numbers in [`src/road.js`](src/road.js) shape the advice, and both come
 straight out of the drift model rather than out of taste:
