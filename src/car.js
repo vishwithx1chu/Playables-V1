@@ -26,17 +26,41 @@
                      coming round after the body has straightened. Zero here
                      and it goes back to looking like plain steering.
      ====================================================================== */
-  var MIN_RADIUS      = 504;
-  var SLIP_AT_LIMIT   = 52 * Math.PI / 180;
-  var BUILD_TAU       = 0.34;
-  var DECAY_TAU       = 0.55;
-  var REVERSE_TAU     = 0.42;
-  var GRIP_TAU        = 0.09;
+  /* The numbers below this line are the STOCK values — Nightrunner, the
+     starter car, at no upgrades. Every other car in the garage is these five
+     numbers times a multiplier (see cars.js), so the physics never has two
+     sources of truth: one set of dials, scaled per car and per upgrade tier. */
+  var MIN_RADIUS_STOCK      = 504;
+  var SLIP_AT_LIMIT_STOCK   = 52 * Math.PI / 180;
+  var BUILD_TAU_STOCK       = 0.34;
+  var DECAY_TAU_STOCK       = 0.55;
+  var REVERSE_TAU_STOCK     = 0.42;
+  var GRIP_TAU        = 0.09;   // not varied per car yet — see setStats below
+
+  var MIN_RADIUS      = MIN_RADIUS_STOCK;
+  var SLIP_AT_LIMIT   = SLIP_AT_LIMIT_STOCK;
+  var BUILD_TAU       = BUILD_TAU_STOCK;
+  var DECAY_TAU       = DECAY_TAU_STOCK;
+  var REVERSE_TAU     = REVERSE_TAU_STOCK;
   /* ====================================================================== */
 
+  // Applied once when a car is selected (cars.js is the only caller). Every
+  // multiplier defaults to 1, so calling this with {} reproduces the stock
+  // car exactly — which is what lets Nightrunner be pixel-for-pixel what the
+  // game already was before the garage existed.
+  function setStats(m) {
+    m = m || {};
+    MIN_RADIUS    = MIN_RADIUS_STOCK    * (m.gripMult || 1);
+    SLIP_AT_LIMIT = SLIP_AT_LIMIT_STOCK * (m.slipMult || 1);
+    BUILD_TAU     = BUILD_TAU_STOCK     * (m.tauMult  || 1);
+    DECAY_TAU     = DECAY_TAU_STOCK     * (m.tauMult  || 1);
+    REVERSE_TAU   = REVERSE_TAU_STOCK   * (m.tauMult  || 1);
+    Car.SLIP_AT_LIMIT = SLIP_AT_LIMIT;
+  }
 
-  var CAR_W = 56;
-  var CAR_L = 96;
+  var CAR_W_STOCK = 56, CAR_L_STOCK = 96;
+  var CAR_W = CAR_W_STOCK;
+  var CAR_L = CAR_L_STOCK;
 
   var bodyGrad = null, glowGrad = null;
 
@@ -157,73 +181,149 @@
      now reads as a roof and the flanks catch light as it turns.
      ===================================================================== */
 
-  var VX = [], FACES = [];
+  /* Three cars, one topology. Every archetype is built by the same sequence
+     of rings, bands and lamps — same face count, same depth-sort and shading
+     code below untouched — but each ring's own y/half-width/height is scaled
+     by FOUR independent numbers (length, width, height, and an extra boost
+     just for the greenhouse's height), rather than one uniform stretch. That
+     is what lets "short with a tall cabin" and "long and low" both come out
+     of the same builder instead of one shape squashed two different ways.
 
-  function ring(y, hw, zb, zt) {
-    var i = VX.length;
-    VX.push([-hw, y, zb], [hw, y, zb], [hw, y, zt], [-hw, y, zt]);
-    return i;                                   // bl, br, tr, tl
-  }
-  function band(a, b, side, top, bottom) {
-    if (bottom) FACES.push({ v: [a, a + 1, b + 1, b], m: bottom });
-    FACES.push({ v: [a + 1, a + 2, b + 2, b + 1], m: side });
-    if (top) FACES.push({ v: [a + 2, a + 3, b + 3, b + 2], m: top });
-    FACES.push({ v: [a + 3, a, b, b + 3], m: side });
-  }
-  function quad(i, m) { FACES.push({ v: i, m: m }); }
+     SPORT is the multiplier {1,1,1,1} — every number below is exactly what
+     the single hand-authored car used to be, so Sport is pixel-identical to
+     the car this game shipped with before the garage existed. */
+  var ARCHETYPES = {
+    compact: { length: 0.80, width: 0.94, height: 1.05, cabin: 1.16,
+               track: 0.90, wheelbase: 0.80, wheelR: 0.93 },
+    sport:   { length: 1.00, width: 1.00, height: 1.00, cabin: 1.00,
+               track: 1.00, wheelbase: 1.00, wheelR: 1.00 },
+    muscle:  { length: 1.18, width: 1.12, height: 0.88, cabin: 0.90,
+               track: 1.12, wheelbase: 1.18, wheelR: 1.06 }
+  };
 
-  (function buildMesh() {
-    // Lower body: six cross-sections from nose to tail.
-    // Long, low and wide. Height had been nearly a third of the length, which
-    // is a van; a sports car is closer to a fifth.
-    var r0 = ring( 48, 13,  4, 10);
-    var r1 = ring( 34, 24,  3, 14);
-    var r2 = ring( 14, 27,  3, 17);
-    var r3 = ring( -8, 27,  3, 17);
-    var r4 = ring(-30, 27,  4, 16);
-    var r5 = ring(-46, 22,  5, 13);
-    band(r0, r1, 'body', 'hood', 'under');
-    band(r1, r2, 'body', 'hood', 'under');
-    band(r2, r3, 'body', 'deck', 'under');
-    band(r3, r4, 'body', 'deck', 'under');
-    band(r4, r5, 'body', 'deck', 'under');
-    quad([r0, r0 + 1, r0 + 2, r0 + 3], 'body');       // nose
-    quad([r5 + 3, r5 + 2, r5 + 1, r5], 'tailpanel');  // tail
+  // The lower body (nose to tail) and the greenhouse, as (y, half-width,
+  // z-bottom, z-top) — the exact arguments the old fixed buildMesh() used to
+  // pass to ring() by hand. Keeping them as data is what makes scaling them
+  // per archetype possible.
+  var BODY_RINGS  = [[ 48, 13,  4, 10], [ 34, 24,  3, 14], [ 14, 27,  3, 17],
+                      [ -8, 27,  3, 17], [-30, 27,  4, 16], [-46, 22,  5, 13]];
+  var CABIN_RINGS = [[ 13, 18, 17, 18], [ -4, 16, 17, 28],
+                      [-19, 16, 17, 27], [-30, 18, 17, 19]];
+  // [x0, x1, y, z0, z1] — the stock lamp positions, scaled the same way.
+  var TAIL_LAMPS = [[-18, -8, -47.0, 8, 12], [8, 18, -47.0, 8, 12]];
+  var HEAD_LAMPS = [[-12, -4, 48.4, 6, 9], [4, 12, 48.4, 6, 9]];
 
-    // Greenhouse, sitting on top. No floor: it would fight the deck.
-    var c0 = ring( 13, 18, 17, 18);   // windscreen base, well forward
-    var c1 = ring( -4, 16, 17, 28);   // steeply raked up to the roof
-    var c2 = ring(-19, 16, 17, 27);
-    var c3 = ring(-30, 18, 17, 19);
-    band(c0, c1, 'glass', 'roof', null);
-    band(c1, c2, 'glass', 'roof', null);
-    band(c2, c3, 'glass', 'roof', null);
-    quad([c0, c0 + 1, c0 + 2, c0 + 3], 'glass');      // windscreen
-    quad([c3 + 3, c3 + 2, c3 + 1, c3], 'glass');      // rear screen
+  function buildMesh(m) {
+    var VX = [], FACES = [];
+    function ring(y, hw, zb, zt) {
+      var i = VX.length;
+      VX.push([-hw, y, zb], [hw, y, zb], [hw, y, zt], [-hw, y, zt]);
+      return i;                                   // bl, br, tr, tl
+    }
+    function band(a, b, side, top, bottom) {
+      if (bottom) FACES.push({ v: [a, a + 1, b + 1, b], m: bottom });
+      FACES.push({ v: [a + 1, a + 2, b + 2, b + 1], m: side });
+      if (top) FACES.push({ v: [a + 2, a + 3, b + 3, b + 2], m: top });
+      FACES.push({ v: [a + 3, a, b, b + 3], m: side });
+    }
+    function quad(i, mat) { FACES.push({ v: i, m: mat }); }
+
+    var r = [], i;
+    for (i = 0; i < BODY_RINGS.length; i++) {
+      var b = BODY_RINGS[i];
+      r.push(ring(b[0] * m.length, b[1] * m.width, b[2] * m.height, b[3] * m.height));
+    }
+    for (i = 0; i < 5; i++) band(r[i], r[i + 1], 'body', i < 2 ? 'hood' : 'deck', 'under');
+    quad([r[0], r[0] + 1, r[0] + 2, r[0] + 3], 'body');           // nose
+    quad([r[5] + 3, r[5] + 2, r[5] + 1, r[5]], 'tailpanel');      // tail
+
+    // The greenhouse's height gets the cabin multiplier on TOP of the
+    // general height one — that extra knob is what makes a tall, stubby
+    // cabin look genuinely different from a long, raked one instead of the
+    // whole car just being uniformly taller.
+    var c = [];
+    for (i = 0; i < CABIN_RINGS.length; i++) {
+      var g = CABIN_RINGS[i];
+      c.push(ring(g[0] * m.length, g[1] * m.width, g[2] * m.height, g[3] * m.height * m.cabin));
+    }
+    for (i = 0; i < 3; i++) band(c[i], c[i + 1], 'glass', 'roof', null);
+    quad([c[0], c[0] + 1, c[0] + 2, c[0] + 3], 'glass');          // windscreen
+    quad([c[3] + 3, c[3] + 2, c[3] + 1, c[3]], 'glass');          // rear screen
 
     // Lights, sitting just proud of the panels so they never z-fight.
-    function lamp(x0, x1, y, z0, z1, m) {
-      var i = VX.length;
+    function lamp(spec, mat) {
+      var x0 = spec[0] * m.width, x1 = spec[1] * m.width, y = spec[2] * m.length;
+      var z0 = spec[3] * m.height, z1 = spec[4] * m.height;
+      var i2 = VX.length;
       VX.push([x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1]);
-      quad([i, i + 1, i + 2, i + 3], m);
+      quad([i2, i2 + 1, i2 + 2, i2 + 3], mat);
     }
-    lamp(-18, -8, -47.0,  8, 12, 'tail');
-    lamp(  8,  18, -47.0,  8, 12, 'tail');
-    lamp(-12,  -4,  48.4,  6,  9, 'head');
-    lamp(  4,  12,  48.4,  6,  9, 'head');
-  })();
+    for (i = 0; i < TAIL_LAMPS.length; i++) lamp(TAIL_LAMPS[i], 'tail');
+    for (i = 0; i < HEAD_LAMPS.length; i++) lamp(HEAD_LAMPS[i], 'head');
+
+    return { VX: VX, FACES: FACES };
+  }
+
+  var MESHES = {};
+  for (var _arch in ARCHETYPES) MESHES[_arch] = buildMesh(ARCHETYPES[_arch]);
+
+  var VX = MESHES.sport.VX, FACES = MESHES.sport.FACES;
+  var WHEEL = { frontX: 29, frontY: 31, frontR: 11, rearX: 30, rearY: -29, rearR: 12 };
+  var curArchetype = 'sport';
+
+  // Swaps the mesh, the wheel mounts and the collision box to a named
+  // archetype. Sport reproduces the stock numbers exactly.
+  function setArchetype(name) {
+    var m = ARCHETYPES[name] || ARCHETYPES.sport;
+    curArchetype = ARCHETYPES[name] ? name : 'sport';
+    var mesh = MESHES[curArchetype];
+    VX = mesh.VX; FACES = mesh.FACES;
+    WHEEL.frontX = 29 * m.track;      WHEEL.rearX = 30 * m.track;
+    WHEEL.frontY = 31 * m.wheelbase;  WHEEL.rearY = -29 * m.wheelbase;
+    WHEEL.frontR = 11 * m.wheelR;     WHEEL.rearR = 12 * m.wheelR;
+    CAR_W = CAR_W_STOCK * m.width;
+    CAR_L = CAR_L_STOCK * m.length;
+    Car.W = CAR_W; Car.L = CAR_L;
+  }
+
+  // Every paint colour is one base (the body) plus a fixed offset — the exact
+  // difference between the stock red's panels, so setPalette with the stock
+  // red reproduces the stock car's colours exactly. under/glass/tyre/rim are
+  // not paint and never change with the car's colour.
+  var PAINT_DELTA = {
+    body:      [  0,   0,   0],
+    hood:      [ 22,  12,   8],
+    deck:      [-20,  -6,  -4],
+    roof:      [  8,   4,   4],
+    tailpanel: [-86, -12, -12]
+  };
+  var STOCK_BODY = [206, 26, 34];
+
+  function clamp255(n) { return n < 0 ? 0 : (n > 255 ? 255 : n | 0); }
 
   var MAT = {
-    body:      [206,  26,  34],
-    hood:      [228,  38,  42],
-    deck:      [186,  20,  30],
-    roof:      [214,  30,  38],
-    tailpanel: [120,  14,  22],
     under:     [ 28,  10,  16],
     glass:     [ 16,  16,  34],
     tyre:      [ 16,  15,  20],
     rim:       [130, 140, 162]
   };
+  for (var _pk in PAINT_DELTA) MAT[_pk] = STOCK_BODY.slice();
+
+  // A car's whole paint job from one base colour — a hex string or an
+  // [r,g,b] array. Called whenever the selected car or its colour changes.
+  function setPalette(base) {
+    var rgb = typeof base === 'string' ? hexToRgb(base) : base;
+    for (var k in PAINT_DELTA) {
+      var d = PAINT_DELTA[k];
+      MAT[k] = [clamp255(rgb[0] + d[0]), clamp255(rgb[1] + d[1]), clamp255(rgb[2] + d[2])];
+    }
+  }
+  function hexToRgb(hex) {
+    hex = hex.replace('#', '');
+    var n = parseInt(hex, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
   var EMISSIVE = { tail: '#ff4436', head: '#eaffff' };
 
   // Light from above, ahead and to the left.
@@ -333,10 +433,10 @@
 
     // --- wheels, built fresh because the fronts steer ---
     var steerAng = -Math.max(-1, Math.min(1, car.slip / SLIP_AT_LIMIT)) * 0.42;
-    buildWheel(view, car, cb, sb,  29,  31, 11, steerAng);
-    buildWheel(view, car, cb, sb, -29,  31, 11, steerAng);
-    buildWheel(view, car, cb, sb,  30, -29, 12, 0);
-    buildWheel(view, car, cb, sb, -30, -29, 12, 0);
+    buildWheel(view, car, cb, sb,  WHEEL.frontX, WHEEL.frontY, WHEEL.frontR, steerAng);
+    buildWheel(view, car, cb, sb, -WHEEL.frontX, WHEEL.frontY, WHEEL.frontR, steerAng);
+    buildWheel(view, car, cb, sb,  WHEEL.rearX,  WHEEL.rearY,  WHEEL.rearR, 0);
+    buildWheel(view, car, cb, sb, -WHEEL.rearX,  WHEEL.rearY,  WHEEL.rearR, 0);
 
     // --- furthest first, so nearer panels cover the ones behind ---
     var order = [];
@@ -470,6 +570,16 @@
 
   // A ghost is not a Car — it has no physics — but it draws like one.
   Car.drawGhost = function (ctx, view, g) { drawCar(ctx, view, g, GHOST_SKIN); };
+  // Same trick for the garage preview: a plain {x,y,bodyYaw,slip,roll} object,
+  // drawn in the car's real colours rather than the ghost's.
+  Car.drawStatic = function (ctx, view, obj) { drawCar(ctx, view, obj); };
+
+  // The garage's interface onto all of the above. cars.js is the only
+  // intended caller — it works out the numbers, this just applies them.
+  Car.setArchetype = setArchetype;
+  Car.setStats = setStats;
+  Car.setPalette = setPalette;
+  Car.archetype = function () { return curArchetype; };
 
   DR.Car = Car;
 })(window.DR = window.DR || {});

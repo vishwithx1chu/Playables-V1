@@ -134,7 +134,11 @@
   function tutorialDone() { return !!data.tutorialDone; }
   function setTutorialDone() { data.tutorialDone = true; persist(); }
 
-  // For a "reset my progress" option, and for tests.
+  // For a "reset my progress" option, and for tests. A genuine wipe, right
+  // down to the starter car grant — whoever calls this needs to follow it
+  // with ensureStarter() again (or a reload, which does the same thing),
+  // exactly like a real boot does. Left that way on purpose rather than
+  // re-granting the starter here, so this stays a true reset.
   function resetAll() {
     data = freshData();
     persist();

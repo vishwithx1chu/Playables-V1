@@ -70,6 +70,46 @@ you tap back), and the save survives — a genuine page reload, corrupted JSON
 sitting in storage, and storage that throws on every call all leave the game
 running, tested each way separately.
 
+**Phase 1 — the Garage.** Eight cars, three archetypes, real stats, real
+colours. The full roadmap — Terrain was inserted after this phase and before
+Currency, since AI opponents and the real city circuits both get built
+against whatever track model exists — is in
+[`docs/content-plan.md`](docs/content-plan.md#development-roadmap).
+
+- **One mesh, three archetypes.** [`src/car.js`](src/car.js) used to build a
+  single hand-authored car at load time. It now builds that same topology —
+  same rings, same bands, same face count, so the depth-sort and shading
+  code below is untouched — three times, each scaled on four independent
+  axes (length, width, height, and an extra one just for the greenhouse's
+  height) rather than one uniform stretch. Sport reproduces the exact
+  numbers the game already shipped with; Compact comes out short with a
+  tall cabin, Muscle long and low, from the same builder.
+- **One set of dials, scaled per car.** `MIN_RADIUS`, `SLIP_AT_LIMIT`, the
+  three drift taus in `car.js`, and `BASE_SPEED` plus the boost numbers in
+  `game.js`, are now STOCK values times a car's multipliers — never edited
+  per car by hand. [`src/cars.js`](src/cars.js) is the one place that knows
+  how a car's stats become those numbers, which is also the one place
+  upgrades (Phase 3) will plug into later.
+- **A real Garage screen**, not a stub: browse all 8 cars, a live 3D preview
+  in the car's actual colours turning slowly, four stat bars read straight
+  off the roster's real spread, and a curated colour palette rather than a
+  free colour wheel — a wide-open wheel risks a car that clashes with the
+  neon road and sky, which is worse for the game, not more expressive.
+  Locked cars show their cost and preview normally; buying just calls the
+  same `Save.buyCar` currency check the real economy will use in Phase 3, so
+  nothing here needs to change when that phase adds a real payout.
+- **Tutorial got its own door on the Title screen**, next to Story and
+  Garage, rather than living inside Quick Play — its home is ready for
+  Phase 8 to build into.
+
+Measured, not just claimed: on Velocity Ring, Warbird's first lap beat
+Nightrunner's despite a wider turning circle (22.85s vs 25.92s, min radius
+564 vs 504) — exactly the "fast, clumsy until tamed" the car is meant to be.
+Alleycat's own balance — a flat speed penalty the tighter turning circle
+doesn't yet make back on a technical circuit — is a real result, and a note
+for the difficulty-tuning pass in Phase 6, not a bug: first-draft numbers are
+supposed to need this.
+
 ## Current state, before career mode: Milestone 2.5
 
 Four modes, picked from the screen the game opens on:

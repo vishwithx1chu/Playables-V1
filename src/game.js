@@ -17,18 +17,40 @@
      The car's grip is derived from whatever the speed currently is (see
      MIN_RADIUS in car.js), so boosting into a corner never makes it
      impossible — it just gives you less time to get it right. */
-  var BASE_SPEED = 808;      // was 898, down 10%
+  // STOCK is Nightrunner, at no upgrades — the numbers this game already
+  // shipped with. Every other car in the garage (and every upgrade tier, once
+  // Phase 3 exists) is these multiplied, applied once by applyCarTuning
+  // below, never hand-edited per car — one set of dials, scaled.
+  var BASE_SPEED_STOCK = 808;      // was 898, down 10%
+  var BASE_SPEED = BASE_SPEED_STOCK;
 
   /* The boost envelope, in four parts: it lands on 40% instantly, holds there
      for a second, eases down to 30% over the next second, and then bleeds the
      last of it away over three. The step down to 30% is the point — a single
      long fade reads as one event, while a shove that settles into a shorter
      push reads as two, so the boost has a peak you can feel it come off. */
-  var BOOST_PEAK = 1.40;     // 40% faster the very frame you press it
-  var BOOST_HOLD = 1.0;      // seconds held at the full 40%
-  var BOOST_STEP = 1.30;     // then eased down to 30% ...
+  var BOOST_PEAK_STOCK = 1.40;     // 40% faster the very frame you press it
+  var BOOST_STEP_RATIO = 0.75;     // the eased-down step is always this much
+                                    // of the peak's excess over 1 — so a car
+                                    // with a bigger peak also gets a bigger
+                                    // step, and the shape never inverts
+  var BOOST_HOLD_STOCK = 1.0;      // seconds held at the full peak
+  var BOOST_PEAK = BOOST_PEAK_STOCK;
+  var BOOST_HOLD = BOOST_HOLD_STOCK;
+  var BOOST_STEP = 1 + (BOOST_PEAK - 1) * BOOST_STEP_RATIO;
   var BOOST_DROP = 1.0;      // ... over this long
   var BOOST_FADE = 3.0;      // and back to normal over this long again
+
+  // cars.js's only way to change how a car actually drives. Every multiplier
+  // defaults to 1, so calling this with {} reproduces the stock numbers
+  // exactly.
+  function applyCarTuning(m) {
+    m = m || {};
+    BASE_SPEED = BASE_SPEED_STOCK * (m.speedMult || 1);
+    BOOST_PEAK = 1 + (BOOST_PEAK_STOCK - 1) * (m.boostPeakMult || 1);
+    BOOST_STEP = 1 + (BOOST_PEAK - 1) * BOOST_STEP_RATIO;
+    BOOST_HOLD = BOOST_HOLD_STOCK * (m.boostHoldMult || 1);
+  }
 
   /* Boost also squares the car up. Lighting it mid-drift takes a little angle
      off at once and then straightens half again as fast as normal — but only
@@ -139,11 +161,41 @@
      'title' -> 'modes' -> 'select' -> 'racing' -> 'done' -> back to 'modes',
      with 'story' and 'garage' as dead-end rooms off 'title' for now. */
   var TITLE_ITEMS = [
-    { id: 'story',  name: 'STORY',      ready: false },
-    { id: 'quick',  name: 'QUICK PLAY', ready: true },
-    { id: 'garage', name: 'GARAGE',     ready: false }
+    { id: 'story',    name: 'STORY',      ready: false },
+    { id: 'quick',    name: 'QUICK PLAY', ready: true },
+    { id: 'garage',   name: 'GARAGE',     ready: true },
+    { id: 'tutorial', name: 'TUTORIAL',   ready: false }
   ];
-  var titleSel = 1;   // Quick Play — the only door that leads anywhere yet
+  var titleSel = 1;   // Quick Play — the default door
+
+  /* --------------------------------- GARAGE -------------------------------
+     Browsing is cheap, buying is not: setArchetype/setPalette touch shared
+     module state in car.js (the mesh and paint arrays), so they are only
+     called when the highlighted car or its colour actually changes — never
+     once a frame — matching the same no-allocation care the race loop uses
+     everywhere else. */
+  var garageSel = 0;
+  var garagePreviewFor = null, garagePreviewColor = null;
+  var _garagePreview = { x: 0, y: 320, h: 0, bodyYaw: 0.6, slip: 0, roll: 0 };
+
+  function rosterIndexOf(carId) {
+    var r = DR.Cars.roster();
+    for (var i = 0; i < r.length; i++) if (r[i].id === carId) return i;
+    return 0;
+  }
+
+  // Applies whichever car is highlighted to the shared mesh/paint state, but
+  // only when something actually changed since the last frame.
+  function ensureGaragePreview() {
+    var def = DR.Cars.roster()[garageSel];
+    var color = DR.Save.carColor(def.id) || def.color;
+    if (garagePreviewFor === def.id && garagePreviewColor === color) return def;
+    DR.Car.setArchetype(def.archetype);
+    DR.Car.setPalette(color);
+    garagePreviewFor = def.id;
+    garagePreviewColor = color;
+    return def;
+  }
 
   var phase = 'title';
   var selected = 2;
@@ -814,6 +866,139 @@
   // A dead end with a name on it: STORY and GARAGE lead here until their own
   // phases build them out for real. One function for both, since right now
   // the only thing that differs is the heading.
+  var GARAGE_LEFT_ARROW  = { x:  10, y: 260, w: 90, h: 380 };
+  var GARAGE_RIGHT_ARROW = { x: 620, y: 260, w: 90, h: 380 };
+  var GARAGE_ACTION_BTN  = { x: 110, y: 962, w: 500, h: 64 };
+  function garageSwatchBox(i, n) {
+    var sz = 48, gap = 14, total = n * sz + (n - 1) * gap;
+    var left = (LOGICAL_W - total) * 0.5;
+    return { x: left + i * (sz + gap), y: 1060, w: sz, h: sz };
+  }
+
+  function garageStep(dir) {
+    var n = DR.Cars.roster().length;
+    garageSel = ((garageSel + dir) % n + n) % n;
+  }
+
+  // Buying just calls Save.buyCar honestly — it fails quietly if currency is
+  // short, which right now it always is except for the starter car. That is
+  // deliberate: this code does not need to change when Phase 3 gives races a
+  // payout, it will simply start working.
+  function garageAction() {
+    var def = DR.Cars.roster()[garageSel];
+    if (DR.Save.selectedCar() === def.id) return;
+    if (DR.Save.ownsCar(def.id)) {
+      DR.Save.selectCar(def.id);
+    } else if (def.cost !== null) {
+      DR.Save.buyCar(def.id, def.cost);
+      if (DR.Save.ownsCar(def.id)) DR.Save.selectCar(def.id);
+    }
+  }
+
+  function garagePickColor(color) {
+    var def = DR.Cars.roster()[garageSel];
+    if (!DR.Save.ownsCar(def.id)) return;
+    DR.Save.setCarColor(def.id, color);
+    garagePreviewFor = null;   // ensureGaragePreview re-applies it next frame
+  }
+
+  function drawGarageArrow(ctx2, b, dir) {
+    var cx = b.x + b.w * 0.5, cy = b.y + b.h * 0.5, s = 22;
+    ctx2.globalAlpha = 0.55;
+    ctx2.beginPath();
+    ctx2.moveTo(cx - s * 0.5 * dir, cy - s);
+    ctx2.lineTo(cx + s * 0.5 * dir, cy);
+    ctx2.lineTo(cx - s * 0.5 * dir, cy + s);
+    ctx2.lineWidth = 6; ctx2.lineJoin = 'round'; ctx2.lineCap = 'round';
+    ctx2.strokeStyle = '#eaf6ff';
+    ctx2.stroke();
+    ctx2.globalAlpha = 1;
+  }
+
+  var GARAGE_STAT_ROWS = [['SPEED', 'speed'], ['GRIP', 'grip'],
+                           ['HANDLING', 'handling'], ['BOOST', 'boost']];
+
+  function drawGarage(ctx2, v) {
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var def = ensureGaragePreview();
+    var owned = DR.Save.ownsCar(def.id);
+    var isSelected = DR.Save.selectedCar() === def.id;
+    var i;
+
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '800 44px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText('GARAGE', v.W * 0.5, 118);
+
+    // One dot per car, so browsing the roster shows its own progress.
+    var n = DR.Cars.roster().length, dotGap = 22, dx = v.W * 0.5 - (n - 1) * dotGap * 0.5;
+    for (i = 0; i < n; i++) {
+      ctx2.beginPath();
+      ctx2.arc(dx + i * dotGap, 150, i === garageSel ? 5 : 3.5, 0, Math.PI * 2);
+      ctx2.fillStyle = i === garageSel ? '#41e0ff' : 'rgba(150,196,225,0.35)';
+      ctx2.fill();
+    }
+
+    // The car itself, turning slowly, in its real colours.
+    _garagePreview.bodyYaw = 0.55 + Math.sin(clock * 0.45) * 0.18;
+    DR.Car.drawStatic(ctx2, v, _garagePreview);
+    drawGarageArrow(ctx2, GARAGE_LEFT_ARROW, -1);
+    drawGarageArrow(ctx2, GARAGE_RIGHT_ARROW, 1);
+
+    ctx2.font = '800 44px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = '#eaf6ff';
+    fitText(ctx2, def.name, v.W * 0.5, 705, 560, 44, '800',
+            'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif');
+
+    ctx2.font = '700 20px ' + MONO;
+    ctx2.fillStyle = '#7dffb0';
+    ctx2.fillText(def.archetype.toUpperCase(), v.W * 0.5, 738);
+
+    ctx2.font = '500 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(180,206,226,0.85)';
+    ctx2.fillText(def.blurb, v.W * 0.5, 768);
+
+    // Four stat bars, always shown relative to the rest of the roster — the
+    // numbers behind them are cars.js's, this just draws whatever it says.
+    var barX = 180, barW = 420, rowY = 802, rowH = 40;
+    ctx2.textAlign = 'left';
+    for (i = 0; i < GARAGE_STAT_ROWS.length; i++) {
+      var y = rowY + i * rowH;
+      ctx2.font = '700 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = 'rgba(180,206,226,0.85)';
+      ctx2.fillText(GARAGE_STAT_ROWS[i][0], 60, y + 14);
+      ctx2.fillStyle = 'rgba(255,255,255,0.12)';
+      ctx2.fillRect(barX, y, barW, 10);
+      ctx2.fillStyle = isSelected ? '#41e0ff' : '#7dffb0';
+      ctx2.fillRect(barX, y, barW * DR.Cars.statFrac(def, GARAGE_STAT_ROWS[i][1]), 10);
+    }
+
+    var label = isSelected ? 'SELECTED'
+              : owned ? 'TAP TO SELECT'
+              : def.cost === null ? 'STORY REWARD ONLY'
+              : 'LOCKED — ' + def.cost + ' CR';
+    drawButton(ctx2, GARAGE_ACTION_BTN, label);
+
+    // Recolouring only makes sense for a car you actually have.
+    if (owned) {
+      var pal = DR.Cars.palette();
+      var curColor = (DR.Save.carColor(def.id) || def.color).toLowerCase();
+      for (i = 0; i < pal.length; i++) {
+        var b = garageSwatchBox(i, pal.length);
+        var on = pal[i].toLowerCase() === curColor;
+        ctx2.fillStyle = pal[i];
+        ctx2.fillRect(b.x, b.y, b.w, b.h);
+        ctx2.lineWidth = on ? 3 : 1;
+        ctx2.strokeStyle = on ? '#ffffff' : 'rgba(255,255,255,0.35)';
+        ctx2.strokeRect(b.x, b.y, b.w, b.h);
+      }
+    }
+
+    ctx2.textAlign = 'left';
+    drawButton(ctx2, BACK_BTN, '◂ BACK');
+  }
+
   function drawComingSoon(ctx2, v, heading, blurb) {
     // Below the horizon and the sun's halo (which sits centred on it), on the
     // plain grid, so the text never fights the artwork behind it.
@@ -1016,7 +1201,15 @@
     var it = TITLE_ITEMS[i];
     if (it.id === 'quick') phase = 'modes';
     else if (it.id === 'story') phase = 'story';
-    else if (it.id === 'garage') phase = 'garage';
+    else if (it.id === 'garage') {
+      garageSel = rosterIndexOf(DR.Save.selectedCar());
+      garagePreviewFor = null;   // force a re-check: a race may have left
+                                  // car.js's shared mesh/paint state on a
+                                  // different car than whatever this cache
+                                  // last remembered
+      phase = 'garage';
+    }
+    else if (it.id === 'tutorial') phase = 'tutorial';
   }
 
   // Menu presses. The boost button owns its own, so this only runs off-race.
@@ -1042,7 +1235,16 @@
           return;
         }
       }
-    } else if (phase === 'story' || phase === 'garage') {
+    } else if (phase === 'garage') {
+      if (inBox(lx, ly, BACK_BTN)) { phase = 'title'; return; }
+      if (inBox(lx, ly, GARAGE_LEFT_ARROW)) { garageStep(-1); return; }
+      if (inBox(lx, ly, GARAGE_RIGHT_ARROW)) { garageStep(1); return; }
+      if (inBox(lx, ly, GARAGE_ACTION_BTN)) { garageAction(); return; }
+      var pal = DR.Cars.palette();
+      for (i = 0; i < pal.length; i++) {
+        if (inBox(lx, ly, garageSwatchBox(i, pal.length))) { garagePickColor(pal[i]); return; }
+      }
+    } else if (phase === 'story' || phase === 'tutorial') {
       if (inBox(lx, ly, BACK_BTN)) { phase = 'title'; return; }
     } else if (phase === 'select') {
       if (inBox(lx, ly, BACK_BTN)) { phase = 'modes'; return; }
@@ -1081,6 +1283,9 @@
     DR.Input.releaseAll();
     DR.Input.clearTap();
     DR.Road.setTrack(i);
+    // Whichever car the garage has selected, not whatever a previous race
+    // happened to leave the physics constants set to.
+    DR.Cars.applyToCar(DR.Save.selectedCar());
     DR.Car.reset(); DR.FX.reset();
     camReady = false; hitCool = 0;
     lap = 1; lapFlash = 0; boostT = 1e9;
@@ -1457,6 +1662,9 @@
         selected = ((selected + st) % n + n) % n;
       }
       if (confirm) startRace(selected);
+    } else if (phase === 'garage') {
+      if (st) garageStep(st);
+      if (confirm) garageAction();
     } else if (phase === 'handoff') {
       if (confirm) startDuelLeg2();
     } else if (phase === 'done') {
@@ -1483,13 +1691,14 @@
     ctx.translate(sh.x, sh.y);
 
     if (phase === 'title' || phase === 'modes' || phase === 'select' ||
-        phase === 'story' || phase === 'garage') {
+        phase === 'story' || phase === 'garage' || phase === 'tutorial') {
       DR.Road.drawBackground(ctx, menuView());
       if (phase === 'title') drawTitle(ctx, v);
       else if (phase === 'modes') { drawModes(ctx, v); drawButton(ctx, BACK_BTN, '\u25C2 TITLE'); }
       else if (phase === 'select') { drawSelect(ctx, v); drawButton(ctx, BACK_BTN, '\u25C2 MODES'); }
+      else if (phase === 'garage') drawGarage(ctx, v);
       else if (phase === 'story') drawComingSoon(ctx, v, 'STORY MODE', 'Ten cities, one championship. Coming soon.');
-      else if (phase === 'garage') drawComingSoon(ctx, v, 'GARAGE', 'Cars, colours and upgrades. Coming soon.');
+      else if (phase === 'tutorial') drawComingSoon(ctx, v, 'TUTORIAL', 'A guided first drift. Coming soon.');
       ctx.restore();
       return;
     }
@@ -1561,6 +1770,7 @@
     // with whatever a returning player's save already has in it.
     DR.Save.load();
     DR.Save.ensureStarter('nightrunner');
+    DR.Cars.applyToCar(DR.Save.selectedCar());
     DR.Input.init(canvas);
     // The button is positioned in playfield units, so the hit test has to undo
     // the letterboxing to find out where a real finger landed.
@@ -1589,8 +1799,12 @@
   // Exposed so the drift can be measured and tuned from outside the game.
   DR.Game = {
     view: view,
-    SPEED: BASE_SPEED,
-    BASE_SPEED: BASE_SPEED,
+    // Getters, not snapshots — BASE_SPEED changes per car (see
+    // applyCarTuning), and a plain number copied in at export time would go
+    // stale the first time a test or the garage switched cars.
+    get SPEED() { return BASE_SPEED; },
+    get BASE_SPEED() { return BASE_SPEED; },
+    applyCarTuning: applyCarTuning,
     speed: currentSpeed,
     hitPenalty: function () { return hitPenalty; },
     boostAmount: boostAmount,
@@ -1626,8 +1840,13 @@
       if (kind === 'title') return titleBox(i);
       if (kind === 'back') return BACK_BTN;
       if (kind === 'exit') return EXIT_BTN;
+      if (kind === 'garageLeft') return GARAGE_LEFT_ARROW;
+      if (kind === 'garageRight') return GARAGE_RIGHT_ARROW;
+      if (kind === 'garageAction') return GARAGE_ACTION_BTN;
+      if (kind === 'garageSwatch') return garageSwatchBox(i, DR.Cars.palette().length);
       return null;
     },
+    garageSel: function () { return garageSel; },
     setMode: function (m) { mode = m; },
     modes: function () { return MODES; },
     modeSel: function () { return modeSel; },
@@ -1639,6 +1858,11 @@
     toTitle: function () { phase = 'title'; DR.Input.releaseAll(); DR.Input.clearTap(); },
     toSelect: function () { phase = 'select'; DR.Input.releaseAll(); DR.Input.clearTap(); },
     toModes: function () { phase = 'modes'; DR.Input.releaseAll(); DR.Input.clearTap(); },
+    toGarage: function () {
+      garageSel = rosterIndexOf(DR.Save.selectedCar());
+      garagePreviewFor = null;
+      phase = 'garage'; DR.Input.releaseAll(); DR.Input.clearTap();
+    },
     restart: function () {
       DR.Road.reset(); DR.Car.reset(); DR.FX.reset();
       camReady = false; hitCool = 0; lap = 1; lapFlash = 0; boostT = 1e9;

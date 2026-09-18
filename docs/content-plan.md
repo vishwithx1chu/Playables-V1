@@ -5,6 +5,26 @@ circuits and cities — written down now so the numbers agree with each other
 before any of them become code. It will change as we playtest; treat it as
 the current best draft, not a locked spec.
 
+## Development roadmap
+
+Each phase is built, tested and shown before the next one starts. Terrain
+was inserted after Garage and before Currency: both AI opponents (which
+follow the racing line) and the real city circuits get built against
+whatever track model exists, so hills and banking need to exist before
+either of those, not be retrofitted after.
+
+| Phase | What it is | Status |
+|---|---|---|
+| 0 | Foundations — the save file, the Title screen | Done |
+| 1 | Garage — 8 cars, real stats, colours | **Current** |
+| 2 | Terrain — hills and banking, visual first | Planned |
+| 3 | Currency & upgrades | Planned |
+| 4 | AI opponents | Planned |
+| 5 | Story structure — cities, gating, boss races | Planned |
+| 6 | Narrative & difficulty tuning | Planned |
+| 7 | Quick Play & flow polish | Planned |
+| 8 | Tutorial overhaul — its home on the Title screen exists since Phase 1 | Planned |
+
 ## The story
 
 **You start with nothing but a car and a reputation to make.** The Circuit
@@ -24,25 +44,38 @@ exist, without a wall of text between the player and the wheel.
 
 ## The cars
 
-Three hull archetypes (built once each in Phase 1, then reused with
-different proportions, colours and stats for all eight cars — see the
-[README](../README.md) for how the current car's mesh is actually built):
+Three hull archetypes, built once each (`src/car.js`) and reused with
+different hand-tuned proportions, colours and stats for all eight cars. Each
+archetype scales the SAME topology on four independent axes — length, width,
+height, and an extra boost just for the greenhouse's height — rather than
+uniformly stretching one shape, which is what lets "short with a tall cabin"
+and "long and low" both come out of one mesh:
 
 - **Compact** — short, tall greenhouse, tightest turning circle, lowest top
   speed. The technical-track specialist.
-- **Sport** — the proportions the game already has. The all-rounder.
+- **Sport** — the proportions the game already had. The all-rounder.
 - **Muscle** — long, low, wide. Highest top speed, widest turning circle.
   The straight-line specialist.
 
-| Car | Archetype | Personality | Cost | Notes |
-|---|---|---|---|---|
-| **Nightrunner** | Sport | The one you already have | — | Starter car, owned from the first launch |
-| **Alleycat** | Compact | Cheap, tight, forgiving | 500 | First city's easy unlock |
-| **Vantage** | Sport | A faster Nightrunner | 900 | The first real upgrade-or-replace choice |
-| **Ecliptic** | Compact | Boost-hungry | 1200 | Fills NOS faster, best synergy with NOS upgrades |
-| **Warbird** | Muscle | Fast, clumsy until tamed | 1400 | Needs Tyres before it's not a liability in corners |
-| **Ironclad** | Muscle | The tank | 1800 | Best base grip of the Muscle line; forgives contact |
-| **Specter** | Sport | Glass cannon | 2200 | Widest drift angle, twitchiest to catch |
+Every stat below is a multiplier on Nightrunner's numbers (1.00 across the
+board) — see `src/cars.js`. Measured, not just claimed: on Velocity Ring's
+long straights, Warbird's first lap beat Nightrunner's despite a wider
+turning circle (22.85s vs 25.92s, min radius 564 vs 504) — exactly the "fast,
+clumsy until tamed" it's meant to be.
+
+| Car | Archetype | Personality | Cost | Speed | Grip | Handling | Boost |
+|---|---|---|---|---|---|---|---|
+| **Nightrunner** | Sport | The one you already have | — (starter) | 1.00 | 1.00 | 1.00 | 1.00 |
+| **Alleycat** | Compact | Cheap, tight, forgiving | 500 | 0.92 | 0.90 | 1.00 | 1.00 |
+| **Vantage** | Sport | A faster Nightrunner | 900 | 1.06 | 1.00 | 0.95 | 1.00 |
+| **Ecliptic** | Compact | Boost-hungry | 1200 | 0.95 | 0.93 | 1.00 | 1.15 / 1.25 hold |
+| **Warbird** | Muscle | Fast, clumsy until tamed | 1400 | 1.14 | 1.12 | 1.08 | 1.00 |
+| **Ironclad** | Muscle | The tank | 1800 | 1.10 | 1.05 | 1.00 | 1.00 |
+| **Specter** | Sport | Glass cannon | 2200 | 1.04 | 1.00 | 0.85 | 1.00 |
+
+Grip and Handling are lower-is-better (a smaller turning circle, a snappier
+response), which the garage's stat bars invert so every bar simply reads
+"more filled is better."
 | **Apex** | Sport/Muscle hybrid | The best all-round spec in the game | *story reward only* | Never for sale — beating the final boss is the only way in |
 
 Every car can be recoloured for free once owned (Phase 1). Upgrades belong to
