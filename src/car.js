@@ -286,6 +286,18 @@
     Car.W = CAR_W; Car.L = CAR_L;
   }
 
+  // How much bigger or smaller this archetype's mesh is than Sport's, on
+  // average across the three axes that actually change its footprint. A
+  // fixed-distance preview (the Garage) draws every car at the same world
+  // point, so without this, Muscle — genuinely 12-18% bigger — projects
+  // visibly larger on screen than Compact and can run into the layout
+  // around it. Scaling the preview's distance by this factor keeps the
+  // apparent size roughly constant across archetypes instead.
+  function archetypeScale(name) {
+    var m = ARCHETYPES[name] || ARCHETYPES.sport;
+    return (m.length + m.width + m.height) / 3;
+  }
+
   // Every paint colour is one base (the body) plus a fixed offset — the exact
   // difference between the stock red's panels, so setPalette with the stock
   // red reproduces the stock car's colours exactly. under/glass/tyre/rim are
@@ -580,6 +592,7 @@
   Car.setStats = setStats;
   Car.setPalette = setPalette;
   Car.archetype = function () { return curArchetype; };
+  Car.archetypeScale = archetypeScale;
 
   DR.Car = Car;
 })(window.DR = window.DR || {});

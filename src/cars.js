@@ -63,33 +63,29 @@
   /* Stat bars for the garage. "Grip" and "Handling" are LOWER-is-better
      multipliers (a smaller turning circle, a snappier taus), so they are
      inverted here — the garage screen just draws four bars 0..1 and never
-     has to know which direction is good for which stat. Range is the actual
-     spread across the roster, not a guessed one, so Alleycat's grip bar is
-     full only because nothing else in the garage turns tighter. */
+     has to know which direction is good for which stat.
+
+     The range each bar is drawn against is fixed and hand-picked around
+     Nightrunner's stock 1.00 (which always reads as a 50%-filled bar on
+     every stat), not the roster's own current min/max. Normalizing against
+     the roster meant any car merely average, not worst, could still show a
+     literal empty bar — six of eight cars have a perfectly ordinary stock
+     boost, for instance, but only two values ever appear on that stat, so
+     the other six all pinned to 0%. A fixed range also leaves headroom
+     above today's best car for Phase 3's upgrade tiers to fill in, rather
+     than needing every bar re-based once upgrades exist. */
   var STAT_KEYS = {
-    speed:    { field: 'speedMult',      invert: false },
-    grip:     { field: 'gripMult',       invert: true  },
-    handling: { field: 'tauMult',        invert: true  },
-    boost:    { field: 'boostPeakMult',  invert: false }
+    speed:    { field: 'speedMult',      invert: false, lo: 0.70, hi: 1.30 },
+    grip:     { field: 'gripMult',       invert: true,  lo: 0.75, hi: 1.25 },
+    handling: { field: 'tauMult',        invert: true,  lo: 0.70, hi: 1.30 },
+    boost:    { field: 'boostPeakMult',  invert: false, lo: 0.65, hi: 1.35 }
   };
-  var RANGE = {};
-  (function computeRanges() {
-    for (var key in STAT_KEYS) {
-      var field = STAT_KEYS[key].field, lo = Infinity, hi = -Infinity;
-      for (var i = 0; i < ROSTER.length; i++) {
-        var v = ROSTER[i].stats[field];
-        if (v < lo) lo = v;
-        if (v > hi) hi = v;
-      }
-      RANGE[key] = { lo: lo, hi: hi };
-    }
-  })();
 
   function statFrac(def, key) {
-    var spec = STAT_KEYS[key], r = RANGE[key];
+    var spec = STAT_KEYS[key];
     if (!spec || !def) return 0;
     var v = def.stats[spec.field];
-    var f = r.hi > r.lo ? (v - r.lo) / (r.hi - r.lo) : 1;
+    var f = Math.max(0, Math.min(1, (v - spec.lo) / (spec.hi - spec.lo)));
     return spec.invert ? 1 - f : f;
   }
 

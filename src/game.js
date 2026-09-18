@@ -177,6 +177,12 @@
   var garageSel = 0;
   var garagePreviewFor = null, garagePreviewColor = null;
   var _garagePreview = { x: 0, y: 320, h: 0, bodyYaw: 0.6, slip: 0, roll: 0 };
+  // Measured, not guessed: at this preview depth the projected car's lowest
+  // pixel lands as far down as logical y~907 across the archetype range and
+  // the animated turntable angle, which reaches into the stat bars (they
+  // start at y=802). Shifting the draw up by this many pixels clears the
+  // name/tag/blurb block (which starts at y=705) with margin to spare.
+  var GARAGE_PREVIEW_SHIFT_Y = 250;
 
   function rosterIndexOf(carId) {
     var r = DR.Cars.roster();
@@ -192,6 +198,11 @@
     if (garagePreviewFor === def.id && garagePreviewColor === color) return def;
     DR.Car.setArchetype(def.archetype);
     DR.Car.setPalette(color);
+    // Push a bigger archetype further back (and a smaller one closer) so
+    // every car's preview reads as roughly the same size on screen — a
+    // fixed distance made Muscle project large enough to run into the
+    // stat bars below it.
+    _garagePreview.y = 320 * DR.Car.archetypeScale(def.archetype);
     garagePreviewFor = def.id;
     garagePreviewColor = color;
     return def;
@@ -940,9 +951,19 @@
       ctx2.fill();
     }
 
-    // The car itself, turning slowly, in its real colours.
+    // The car itself, turning slowly, in its real colours. The road camera's
+    // ground-plane perspective ties screen height directly to world depth —
+    // at a depth close enough to draw the car this size, that math lands it
+    // in the canvas's lower third by construction, on top of the name and
+    // stat bars, for every archetype (this was true of Nightrunner before
+    // the garage ever shipped an eighth car). Shifting the whole draw up in
+    // screen space, after projection, keeps that close/big look but moves
+    // it into the empty band the side arrows were already placed for.
     _garagePreview.bodyYaw = 0.55 + Math.sin(clock * 0.45) * 0.18;
+    ctx2.save();
+    ctx2.translate(0, -GARAGE_PREVIEW_SHIFT_Y);
     DR.Car.drawStatic(ctx2, v, _garagePreview);
+    ctx2.restore();
     drawGarageArrow(ctx2, GARAGE_LEFT_ARROW, -1);
     drawGarageArrow(ctx2, GARAGE_RIGHT_ARROW, 1);
 
