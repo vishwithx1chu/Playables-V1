@@ -129,7 +129,23 @@
   var mode = 'race';
   var modeSel = 0;
 
-  var phase = 'modes';
+  /* The screen the game opens on now sits ABOVE 'modes': three doors — Story,
+     Quick Play, Garage — with Quick Play leading into exactly what used to be
+     the whole game. Story and Garage are placeholders until their own phases
+     land; the point of building this now is that every later screen has
+     somewhere to hang, rather than bolting each one onto a flatter menu and
+     restructuring again later.
+
+     'title' -> 'modes' -> 'select' -> 'racing' -> 'done' -> back to 'modes',
+     with 'story' and 'garage' as dead-end rooms off 'title' for now. */
+  var TITLE_ITEMS = [
+    { id: 'story',  name: 'STORY',      ready: false },
+    { id: 'quick',  name: 'QUICK PLAY', ready: true },
+    { id: 'garage', name: 'GARAGE',     ready: false }
+  ];
+  var titleSel = 1;   // Quick Play — the only door that leads anywhere yet
+
+  var phase = 'title';
   var selected = 2;
   var raceTotal = 0;
   var FIXED = 1 / 60;    // physics rate, so the feel never changes with framerate
@@ -744,6 +760,75 @@
     ctx2.textAlign = 'left';
   }
 
+  // Same pitch/centring math as modeBox, generalised over how many rows there
+  // are — Title has 3, Modes has 4, and neither should have to know the other
+  // exists.
+  function vBoxAt(i, count, rowH, gap) {
+    var pitch = rowH + gap;
+    var top = 660 - (count * pitch - gap) * 0.5;
+    return { x: 64, y: top + i * pitch, w: 592, h: rowH };
+  }
+
+  var TITLE_ROW_H = 150, TITLE_GAP = 34;
+  function titleBox(i) { return vBoxAt(i, TITLE_ITEMS.length, TITLE_ROW_H, TITLE_GAP); }
+
+  function drawTitle(ctx2, v) {
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '800 78px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText('DRIFT RUN', v.W * 0.5, 190);
+    ctx2.font = '700 24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(180,214,236,0.8)';
+    ctx2.fillText('THE CIRCUIT', v.W * 0.5, 232);
+
+    for (var i = 0; i < TITLE_ITEMS.length; i++) {
+      var it = TITLE_ITEMS[i], b = titleBox(i), on = i === titleSel;
+      ctx2.globalAlpha = it.ready ? 1 : 0.55;
+      ctx2.fillStyle = on ? 'rgba(34,120,150,0.28)' : 'rgba(10,8,24,0.55)';
+      ctx2.fillRect(b.x, b.y, b.w, b.h);
+      ctx2.lineWidth = on ? 3 : 1.5;
+      ctx2.strokeStyle = on ? '#41e0ff' : 'rgba(150,196,225,0.35)';
+      ctx2.strokeRect(b.x, b.y, b.w, b.h);
+
+      ctx2.textAlign = 'left';
+      ctx2.fillStyle = on ? '#eaf6ff' : 'rgba(226,240,250,0.8)';
+      fitText(ctx2, it.name, b.x + 30, b.y + b.h * 0.5 + 14, 340, 46, '800',
+              'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif');
+
+      ctx2.textAlign = 'right';
+      ctx2.font = '700 21px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      if (!it.ready) {
+        ctx2.fillStyle = 'rgba(190,214,235,0.5)';
+        ctx2.fillText('COMING SOON', b.x + b.w - 26, b.y + b.h * 0.5 + 7);
+      } else {
+        ctx2.fillStyle = on ? '#ffd76a' : 'rgba(190,214,235,0.45)';
+        ctx2.fillText(on ? 'TAP AGAIN ▸' : 'TAP TO SELECT', b.x + b.w - 26, b.y + b.h * 0.5 + 7);
+      }
+      ctx2.globalAlpha = 1;
+    }
+    drawControlsLine(ctx2, v, titleBox(TITLE_ITEMS.length - 1).y + TITLE_ROW_H + 62);
+    ctx2.textAlign = 'left';
+  }
+
+  // A dead end with a name on it: STORY and GARAGE lead here until their own
+  // phases build them out for real. One function for both, since right now
+  // the only thing that differs is the heading.
+  function drawComingSoon(ctx2, v, heading, blurb) {
+    // Below the horizon and the sun's halo (which sits centred on it), on the
+    // plain grid, so the text never fights the artwork behind it.
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '800 56px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText(heading, v.W * 0.5, 720);
+    ctx2.font = '600 24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(180,214,236,0.85)';
+    ctx2.fillText(blurb, v.W * 0.5, 766);
+    ctx2.textAlign = 'left';
+    drawButton(ctx2, BACK_BTN, '◂ BACK');
+  }
+
   function drawModes(ctx2, v) {
     var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     ctx2.textAlign = 'center';
@@ -925,13 +1010,31 @@
     ctx2.textAlign = 'left';
   }
 
+  // Which room a Title door leads to. Both unbuilt rooms are still reachable
+  // — they just have nothing in them yet but a name and a way back.
+  function enterTitleItem(i) {
+    var it = TITLE_ITEMS[i];
+    if (it.id === 'quick') phase = 'modes';
+    else if (it.id === 'story') phase = 'story';
+    else if (it.id === 'garage') phase = 'garage';
+  }
+
   // Menu presses. The boost button owns its own, so this only runs off-race.
   function handleMenuTap() {
     var t = DR.Input.takeTap();
     if (!t) return;
     var lx = (t.x - offX) / scale, ly = (t.y - offY) / scale;
     var i, b;
-    if (phase === 'modes') {
+    if (phase === 'title') {
+      for (i = 0; i < TITLE_ITEMS.length; i++) {
+        if (inBox(lx, ly, titleBox(i))) {
+          if (titleSel === i) enterTitleItem(i);
+          else titleSel = i;
+          return;
+        }
+      }
+    } else if (phase === 'modes') {
+      if (inBox(lx, ly, BACK_BTN)) { phase = 'title'; return; }
       for (i = 0; i < MODES.length; i++) {
         if (inBox(lx, ly, modeBox(i))) {
           if (modeSel === i) { mode = MODES[i].id; phase = 'select'; }
@@ -939,6 +1042,8 @@
           return;
         }
       }
+    } else if (phase === 'story' || phase === 'garage') {
+      if (inBox(lx, ly, BACK_BTN)) { phase = 'title'; return; }
     } else if (phase === 'select') {
       if (inBox(lx, ly, BACK_BTN)) { phase = 'modes'; return; }
       for (i = 0; i < DR.Road.tracks().length; i++) {
@@ -1336,7 +1441,12 @@
     var st = DR.Input.takeMenuStep();
     var confirm = DR.Input.takeBoost();
 
-    if (phase === 'modes') {
+    if (phase === 'title') {
+      if (st) {
+        titleSel = ((titleSel + st) % TITLE_ITEMS.length + TITLE_ITEMS.length) % TITLE_ITEMS.length;
+      }
+      if (confirm) enterTitleItem(titleSel);
+    } else if (phase === 'modes') {
       if (st) {
         modeSel = ((modeSel + st) % MODES.length + MODES.length) % MODES.length;
       }
@@ -1372,10 +1482,14 @@
     ctx.clip();
     ctx.translate(sh.x, sh.y);
 
-    if (phase === 'modes' || phase === 'select') {
+    if (phase === 'title' || phase === 'modes' || phase === 'select' ||
+        phase === 'story' || phase === 'garage') {
       DR.Road.drawBackground(ctx, menuView());
-      if (phase === 'modes') drawModes(ctx, v);
-      else { drawSelect(ctx, v); drawButton(ctx, BACK_BTN, '\u25C2 MODES'); }
+      if (phase === 'title') drawTitle(ctx, v);
+      else if (phase === 'modes') { drawModes(ctx, v); drawButton(ctx, BACK_BTN, '\u25C2 TITLE'); }
+      else if (phase === 'select') { drawSelect(ctx, v); drawButton(ctx, BACK_BTN, '\u25C2 MODES'); }
+      else if (phase === 'story') drawComingSoon(ctx, v, 'STORY MODE', 'Ten cities, one championship. Coming soon.');
+      else if (phase === 'garage') drawComingSoon(ctx, v, 'GARAGE', 'Cars, colours and upgrades. Coming soon.');
       ctx.restore();
       return;
     }
@@ -1442,6 +1556,11 @@
     DR.Road.reset();
     DR.Car.reset();
     DR.FX.reset();
+    // Loaded before anything else touches it. The starter car's id is fixed
+    // ahead of the garage existing for real, so Phase 1's car data lines up
+    // with whatever a returning player's save already has in it.
+    DR.Save.load();
+    DR.Save.ensureStarter('nightrunner');
     DR.Input.init(canvas);
     // The button is positioned in playfield units, so the hit test has to undo
     // the letterboxing to find out where a real finger landed.
@@ -1504,6 +1623,7 @@
     uiBox: function (kind, i) {
       if (kind === 'mode') return modeBox(i);
       if (kind === 'track') return cardBox(i);
+      if (kind === 'title') return titleBox(i);
       if (kind === 'back') return BACK_BTN;
       if (kind === 'exit') return EXIT_BTN;
       return null;
@@ -1511,9 +1631,12 @@
     setMode: function (m) { mode = m; },
     modes: function () { return MODES; },
     modeSel: function () { return modeSel; },
+    titleItems: function () { return TITLE_ITEMS; },
+    titleSel: function () { return titleSel; },
     startRace: startRace,
     RACE_LAPS: RACE_LAPS,
     raceTotal: function () { return raceTotal; },
+    toTitle: function () { phase = 'title'; DR.Input.releaseAll(); DR.Input.clearTap(); },
     toSelect: function () { phase = 'select'; DR.Input.releaseAll(); DR.Input.clearTap(); },
     toModes: function () { phase = 'modes'; DR.Input.releaseAll(); DR.Input.clearTap(); },
     restart: function () {

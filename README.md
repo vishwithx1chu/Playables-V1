@@ -36,7 +36,41 @@ touchscreen.
 
 ---
 
-## Current state: Milestone 2.5
+## Current state: Milestone 3.0 — career mode, phase 0
+
+The game is growing from four standalone modes into a career: ten cities, a
+garage of cars, upgrades, and a story running through all of it. That's a big
+enough change that it's being built in phases, each one small enough to test
+on its own — see [`docs/content-plan.md`](docs/content-plan.md) for the full
+map of cars, upgrades, circuits and cities everything after this is built
+against.
+
+**Phase 0 — foundations.** No new gameplay yet; this is the floor everything
+else stands on.
+
+- **A save file.** [`src/save.js`](src/save.js) — currency, owned cars, their
+  upgrades and colours, unlocked races, best results, all in one small local
+  file with no account and no server, per the Playables rules. Every read and
+  write is wrapped: if `localStorage` is unavailable or throws — a real
+  possibility inside a sandboxed embed — the game falls back to memory only
+  rather than crashing. A version number on the saved data means a shape it
+  doesn't recognise is discarded rather than fed into code that expects
+  something newer.
+- **A Title screen above everything that existed before.** Three doors —
+  **STORY**, **QUICK PLAY**, **GARAGE**. Quick Play leads into exactly what
+  used to be the whole game — Race, Practice, Rush, Duel, all unchanged.
+  Story and Garage are real, reachable rooms with nothing built in them yet;
+  putting the door in now means every later phase has somewhere to open onto,
+  instead of each one bolting onto a flatter menu and forcing another
+  restructure later.
+
+Checked with 24 new tests: the game boots on the title screen, every door
+does what it says (including that a "coming soon" room is a dead end until
+you tap back), and the save survives — a genuine page reload, corrupted JSON
+sitting in storage, and storage that throws on every call all leave the game
+running, tested each way separately.
+
+## Current state, before career mode: Milestone 2.5
 
 Four modes, picked from the screen the game opens on:
 
@@ -657,7 +691,9 @@ actually playing. Geometry in code is the only kind of 3D that ships here.
 ## Files
 
 ```
-index.html      the page: one canvas, six scripts
+index.html      the page: one canvas, seven scripts
+docs/content-plan.md   the map for career mode: cars, upgrades, circuits, cities
+src/save.js     the save file: currency, cars, upgrades, unlocks, best results
 style.css       stops the page scrolling, zooming or selecting text
 src/input.js    touch, mouse and keyboard  ->  one number: -1, 0 or +1
 src/road.js     the track, and how the road is drawn
