@@ -91,13 +91,27 @@ against whatever track model exists — is in
   how a car's stats become those numbers, which is also the one place
   upgrades (Phase 3) will plug into later.
 - **A real Garage screen**, not a stub: browse all 8 cars, a live 3D preview
-  in the car's actual colours turning slowly, four stat bars read straight
-  off the roster's real spread, and a curated colour palette rather than a
-  free colour wheel — a wide-open wheel risks a car that clashes with the
-  neon road and sky, which is worse for the game, not more expressive.
-  Locked cars show their cost and preview normally; buying just calls the
-  same `Save.buyCar` currency check the real economy will use in Phase 3, so
-  nothing here needs to change when that phase adds a real payout.
+  in the car's actual colours turning slowly, four stat bars, and a curated
+  colour palette rather than a free colour wheel — a wide-open wheel risks a
+  car that clashes with the neon road and sky, which is worse for the game,
+  not more expressive. Locked cars show their cost and preview normally;
+  buying just calls the same `Save.buyCar` currency check the real economy
+  will use in Phase 3, so nothing here needs to change when that phase adds
+  a real payout.
+- **Two Garage bugs, found after shipping, now fixed.** The stat bars were
+  first drawn normalized against the roster's own current min/max, so any
+  car merely average on a stat (not worst) could still read as a literal
+  empty bar — six of eight cars share an identical stock boost value, so
+  the other six all showed 0%. They now read against a fixed range centred
+  on Nightrunner's stock 1.00, which always fills to ~50%, with headroom
+  above today's best car for Phase 3's upgrades. Separately, the 3D preview
+  overlapped the name and stat text for every car, not just big ones — the
+  road camera's ground-plane perspective ties screen height straight to
+  world depth, and the depth needed to draw the car this size always lands
+  in the canvas's lower third. The draw is now shifted up in screen space
+  after projection to clear that text, and each archetype's preview depth
+  is scaled by its own size so Muscle no longer projects visibly larger
+  than Compact at the same distance.
 - **Tutorial got its own door on the Title screen**, next to Story and
   Garage, rather than living inside Quick Play — its home is ready for
   Phase 8 to build into.
