@@ -9,6 +9,16 @@
 </head>
 <body>
 <canvas id="stage" tabindex="0"></canvas>
+<!-- Vendored once, checked into lib/ like any other file — not fetched from
+     a CDN at runtime, so it doesn't touch the "no external network calls"
+     rule. A plain classic script (not type="module") on purpose: modules
+     are blocked by CORS when the page is opened as a local file:// URL,
+     which is how this project gets opened for a quick look — a classic
+     <script src> has no such restriction. Three.js is MIT-licensed code, a
+     tool, not game content, so vendoring it doesn't touch "own all rights
+     to every asset" — that rule is about models/textures/audio we didn't
+     make, not the renderer we build them with. -->
+<script src="lib/three.min.js"></script>
 <script src="src/save.js"></script>
 <script src="src/input.js"></script>
 <script src="src/road.js"></script>
@@ -16,6 +26,7 @@
 <script src="src/cars.js"></script>
 <script src="src/ghost.js"></script>
 <script src="src/fx.js"></script>
+<script src="src/car3d.js"></script>
 <script src="src/game.js"></script>
 </body>
 </html>

@@ -951,19 +951,19 @@
       ctx2.fill();
     }
 
-    // The car itself, turning slowly, in its real colours. The road camera's
-    // ground-plane perspective ties screen height directly to world depth —
-    // at a depth close enough to draw the car this size, that math lands it
-    // in the canvas's lower third by construction, on top of the name and
-    // stat bars, for every archetype (this was true of Nightrunner before
-    // the garage ever shipped an eighth car). Shifting the whole draw up in
-    // screen space, after projection, keeps that close/big look but moves
-    // it into the empty band the side arrows were already placed for.
+    // The car itself, turning slowly, in its real colours — a real WebGL
+    // model (car3d.js) on a transparent canvas laid over this one, with the
+    // hand-rolled Canvas 2D car (car.js) kept only as the fallback for a
+    // device that can't do WebGL. The in-race car is untouched either way.
     _garagePreview.bodyYaw = 0.55 + Math.sin(clock * 0.45) * 0.18;
-    ctx2.save();
-    ctx2.translate(0, -GARAGE_PREVIEW_SHIFT_Y);
-    DR.Car.drawStatic(ctx2, v, _garagePreview);
-    ctx2.restore();
+    var previewColor = DR.Save.carColor(def.id) || def.color;
+    var drew3D = DR.Car3D && DR.Car3D.render({ archetype: def.archetype, color: previewColor, yaw: _garagePreview.bodyYaw });
+    if (!drew3D) {
+      ctx2.save();
+      ctx2.translate(0, -GARAGE_PREVIEW_SHIFT_Y);
+      DR.Car.drawStatic(ctx2, v, _garagePreview);
+      ctx2.restore();
+    }
     drawGarageArrow(ctx2, GARAGE_LEFT_ARROW, -1);
     drawGarageArrow(ctx2, GARAGE_RIGHT_ARROW, 1);
 
@@ -1698,6 +1698,12 @@
     var v = view();
     var sh = DR.FX.shakeOffset();
 
+    // Checked every frame rather than at each phase-transition call site, so
+    // there is exactly one place that can ever get this out of sync with
+    // what's on screen — leaving the WebGL layer showing (or hidden) behind
+    // is a whole class of bug this avoids for free.
+    if (DR.Car3D) DR.Car3D.show(phase === 'garage');
+
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#05040a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -1820,6 +1826,11 @@
   // Exposed so the drift can be measured and tuned from outside the game.
   DR.Game = {
     view: view,
+    // The same letterbox numbers the 2D canvas draws through, in CSS pixels
+    // (not device pixels) — so anything positioned in a second, overlaid
+    // canvas (the Garage's WebGL preview) lines up with the logical 720x1280
+    // playfield exactly, on any aspect ratio, without duplicating resize().
+    viewportRect: function () { return { scale: scale, offX: offX, offY: offY }; },
     // Getters, not snapshots — BASE_SPEED changes per car (see
     // applyCarTuning), and a plain number copied in at export time would go
     // stale the first time a test or the garage switched cars.
