@@ -81,33 +81,118 @@
     boost:    { field: 'boostPeakMult',  invert: false, lo: 0.65, hi: 1.35 }
   };
 
+  /* Upgrades converge cars toward a shared ceiling instead of applying the
+     same flat percentage to everyone. A flat percentage preserves the exact
+     ratio between cars forever — equal treatment, but not what "some
+     difference, not too much once maxed" actually asks for. Instead, each
+     tier closes part of the gap between a car's OWN stock value and a
+     fixed cap per field (the same cap for every car), so a car that starts
+     further behind gains more per tier than one that starts close to the
+     cap already. TIER_FRACTION never reaches 1.0, so a real gap — smaller,
+     not zero — still exists at tier 3. Caps sit at or beyond today's best
+     roster value on every field, so an upgrade never makes a car worse. */
+  var CONVERGE_CAP = {
+    speedMult: 1.30, gripMult: 0.75, tauMult: 0.68,
+    boostPeakMult: 1.35, boostHoldMult: 1.35
+  };
+  var TIER_FRACTION = [0, 0.30, 0.55, 0.75];
+  var MAX_TIER = 3;
+
+  // system -> which stat field(s) it converges, and the label/cost bucket
+  // used by the Garage's upgrade screen.
+  var UPGRADE_SYSTEMS = [
+    { id: 'tires', name: 'TYRES', fields: ['gripMult'] },
+    { id: 'engine', name: 'ENGINE', fields: ['speedMult'] },
+    { id: 'transmission', name: 'TRANSMISSION', fields: ['tauMult'] },
+    { id: 'nos', name: 'NOS', fields: ['boostPeakMult', 'boostHoldMult'] }
+  ];
+  var TIER_COST_FRACTION = [0, 0.22, 0.30, 0.40];   // incremental, per tier
+
+  function upgradeSystems() { return UPGRADE_SYSTEMS; }
+
+  function convergedValue(base, field, tier) {
+    var cap = CONVERGE_CAP[field];
+    return base + (cap - base) * TIER_FRACTION[tier || 0];
+  }
+
+  // The stats a car actually races with right now: stock numbers plus
+  // whatever's been bought for it. Nothing here changes the ROSTER's own
+  // stock stats.js/game.js/car.js read — a car's upgrades live entirely in
+  // save.js, exactly like its colour does.
+  function effectiveStats(def) {
+    var out = {}, field;
+    for (field in def.stats) out[field] = def.stats[field];
+    for (var i = 0; i < UPGRADE_SYSTEMS.length; i++) {
+      var sys = UPGRADE_SYSTEMS[i];
+      var tier = DR.Save.upgradeLevel(def.id, sys.id);
+      for (var j = 0; j < sys.fields.length; j++) {
+        field = sys.fields[j];
+        out[field] = convergedValue(def.stats[field], field, tier);
+      }
+    }
+    return out;
+  }
+
+  // A car with no price (the starter, or a story-exclusive) still needs a
+  // reference point to scale upgrade costs against — roughly where it
+  // would sit if it were sold, not zero and not free.
+  function refCost(def) {
+    if (def.cost) return def.cost;
+    return def.id === 'nightrunner' ? 600 : 2400;
+  }
+
+  // The cost to go from tier-1 to `tier` (1..3) on one system for one car.
+  function tierCost(def, tier) {
+    return Math.round(refCost(def) * TIER_COST_FRACTION[tier]);
+  }
+
+  function upgradeMaxed(carId, systemId) {
+    return DR.Save.upgradeLevel(carId, systemId) >= MAX_TIER;
+  }
+
+  // Spends the currency and raises the tier in one step, or does nothing
+  // and reports failure — the same shape as Save.buyCar, so the Garage
+  // screen handles both the same way.
+  function buyUpgrade(carId, systemId) {
+    var def = get(carId);
+    if (!def || !DR.Save.ownsCar(carId)) return false;
+    var tier = DR.Save.upgradeLevel(carId, systemId);
+    if (tier >= MAX_TIER) return false;
+    var cost = tierCost(def, tier + 1);
+    if (!DR.Save.spendCurrency(cost)) return false;
+    DR.Save.setUpgradeLevel(carId, systemId, tier + 1);
+    return true;
+  }
+
   function statFrac(def, key) {
     var spec = STAT_KEYS[key];
     if (!spec || !def) return 0;
-    var v = def.stats[spec.field];
+    var v = effectiveStats(def)[spec.field];
     var f = Math.max(0, Math.min(1, (v - spec.lo) / (spec.hi - spec.lo)));
     return spec.invert ? 1 - f : f;
   }
 
   // The only function that actually changes how the car feels. Called once
-  // whenever the selected car (or its colour) changes — at boot, and any
-  // time the garage saves a new choice. Upgrade tiers (Phase 3) are read
-  // here too, once they exist; until then every car's upgrades are stock,
-  // which multiplies everything by exactly 1.
+  // whenever the selected car (or its colour, or an upgrade) changes — at
+  // boot, any time the garage saves a new choice, and right after a
+  // purchase so the car you're about to drive matches what you just paid
+  // for immediately, not on the next restart.
   function applyToCar(carId) {
     var def = get(carId) || get('nightrunner');
+    var stats = effectiveStats(def);
     DR.Car.setArchetype(def.archetype);
-    DR.Car.setStats(def.stats);
+    DR.Car.setStats(stats);
     DR.Car.setPalette(DR.Save.carColor(def.id) || def.color);
     if (DR.Game && DR.Game.applyCarTuning) {
       DR.Game.applyCarTuning({
-        speedMult: def.stats.speedMult,
-        boostPeakMult: def.stats.boostPeakMult,
-        boostHoldMult: def.stats.boostHoldMult
+        speedMult: stats.speedMult,
+        boostPeakMult: stats.boostPeakMult,
+        boostHoldMult: stats.boostHoldMult
       });
     }
   }
 
   DR.Cars = { roster: roster, get: get, palette: palette, applyToCar: applyToCar,
-              statFrac: statFrac };
+              statFrac: statFrac, upgradeSystems: upgradeSystems, tierCost: tierCost,
+              upgradeMaxed: upgradeMaxed, buyUpgrade: buyUpgrade, MAX_TIER: MAX_TIER };
 })(window.DR = window.DR || {});

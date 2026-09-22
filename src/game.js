@@ -110,6 +110,8 @@
   var SPIKE_SECS      = 3.0;   // ...for this long
   var PIT_LOSS        = 0.12;  // a pothole costs this much speed, like a wall
 
+  var doneAward = 0;   // credits just earned, for the results screen to show
+
   var rushTime = 0, rushScore = 0, rushBest = 0;
   var cpIndex = 0, cpClean = true, cpFlash = 0, cpFlashText = '';
   var spikeT = 0, rushGates = 0;
@@ -450,7 +452,7 @@
       lapFlash = 1;
       // Only a race has a last lap. Practice runs until you leave; Rush runs
       // until the clock beats you.
-      if (mode === 'race' && lapTimes.length >= RACE_LAPS) { phase = 'done'; lapFlash = 0; }
+      if (mode === 'race' && lapTimes.length >= RACE_LAPS) { phase = 'done'; lapFlash = 0; awardRaceCurrency(); }
       if (mode === 'duel' && lapTimes.length >= DUEL_LAPS) { finishDuelLeg(); }
     }
     if (lapFlash > 0) lapFlash = Math.max(0, lapFlash - dt / 1.6);
@@ -473,6 +475,30 @@
     duelGap = (was === null) ? null : duelElapsed - was;
   }
 
+  /* Currency, as a starting point (docs/content-plan.md). AI races and boss
+     races don't exist yet (Phase 4/5), so Quick Play is the only place
+     currency is earned right now — graded on how well you did, but never
+     zero, so a rough run still pays for the next attempt. First real
+     numbers; expect these to move once Phase 5 makes a city's real
+     difficulty measurable instead of guessed. */
+  function awardRaceCurrency() {
+    var target = DR.Road.tracks()[DR.Road.currentTrack()].targetSecs * RACE_LAPS;
+    var ratio = target / Math.max(1, raceTotal);
+    doneAward = Math.round(Math.max(40, Math.min(130, 80 * ratio)));
+    DR.Save.addCurrency(doneAward);
+  }
+  function awardDuelCurrency() {
+    var target = DR.Road.tracks()[DR.Road.currentTrack()].targetSecs * DUEL_LAPS;
+    var winTime = Math.min(duelTimes[0], duelTimes[1]);
+    var ratio = target / Math.max(1, winTime);
+    doneAward = Math.round(Math.max(35, Math.min(110, 70 * ratio)));
+    DR.Save.addCurrency(doneAward);
+  }
+  function awardRushCurrency() {
+    doneAward = Math.round(Math.max(30, Math.min(150, rushScore * 0.6)));
+    DR.Save.addCurrency(doneAward);
+  }
+
   function finishDuelLeg() {
     lapFlash = 0;
     if (duelStage === 1) {
@@ -482,6 +508,7 @@
     } else {
       duelTimes[1] = raceTotal;
       phase = 'done';
+      awardDuelCurrency();
     }
   }
 
@@ -525,6 +552,7 @@
       rushTime = 0;
       if (rushScore > rushBest) rushBest = rushScore;
       phase = 'done';
+      awardRushCurrency();
     }
   }
 
@@ -879,16 +907,24 @@
   // the only thing that differs is the heading.
   var GARAGE_LEFT_ARROW  = { x:  10, y: 260, w: 90, h: 380 };
   var GARAGE_RIGHT_ARROW = { x: 620, y: 260, w: 90, h: 380 };
-  var GARAGE_ACTION_BTN  = { x: 110, y: 962, w: 500, h: 64 };
+  var GARAGE_ACTION_BTN  = { x: 110, y: 1140, w: 500, h: 64 };
+  var GARAGE_TAB_BTN     = { x: 260, y: 786, w: 200, h: 34 };
+  var garageTab = 'stats';   // 'stats' | 'upgrades' — reset whenever the browsed car changes
   function garageSwatchBox(i, n) {
     var sz = 48, gap = 14, total = n * sz + (n - 1) * gap;
     var left = (LOGICAL_W - total) * 0.5;
-    return { x: left + i * (sz + gap), y: 1060, w: sz, h: sz };
+    return { x: left + i * (sz + gap), y: 1030, w: sz, h: sz };
+  }
+  function garageUpgradeRowBox(i) { return { x: 40, y: 830 + i * 72, w: 640, h: 64 }; }
+  function garageUpgradeBtnBox(i) {
+    var r = garageUpgradeRowBox(i);
+    return { x: r.x + r.w - 190, y: r.y + 8, w: 190, h: 48 };
   }
 
   function garageStep(dir) {
     var n = DR.Cars.roster().length;
     garageSel = ((garageSel + dir) % n + n) % n;
+    garageTab = 'stats';
   }
 
   // Buying just calls Save.buyCar honestly — it fails quietly if currency is
@@ -904,6 +940,16 @@
       DR.Save.buyCar(def.id, def.cost);
       if (DR.Save.ownsCar(def.id)) DR.Save.selectCar(def.id);
     }
+  }
+
+  function garageBuyUpgrade(systemId) {
+    var def = DR.Cars.roster()[garageSel];
+    if (!DR.Save.ownsCar(def.id)) return;
+    if (!DR.Cars.buyUpgrade(def.id, systemId)) return;
+    // Only refreshes the shared physics state if the car being upgraded is
+    // the one actually selected to race — browsing another owned car's
+    // upgrades shouldn't touch what's currently loaded into car.js/game.js.
+    if (DR.Save.selectedCar() === def.id) DR.Cars.applyToCar(def.id);
   }
 
   function garagePickColor(color) {
@@ -941,6 +987,12 @@
     ctx2.font = '800 44px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx2.fillStyle = '#ffd76a';
     ctx2.fillText('GARAGE', v.W * 0.5, 118);
+
+    ctx2.textAlign = 'right';
+    ctx2.font = '700 22px ' + MONO;
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText(DR.Save.currency().toLocaleString() + ' CR', v.W - 24, 44);
+    ctx2.textAlign = 'center';
 
     // One dot per car, so browsing the roster shows its own progress.
     var n = DR.Cars.roster().length, dotGap = 22, dx = v.W * 0.5 - (n - 1) * dotGap * 0.5;
@@ -980,19 +1032,44 @@
     ctx2.fillStyle = 'rgba(180,206,226,0.85)';
     ctx2.fillText(def.blurb, v.W * 0.5, 768);
 
-    // Four stat bars, always shown relative to the rest of the roster — the
-    // numbers behind them are cars.js's, this just draws whatever it says.
-    var barX = 180, barW = 420, rowY = 802, rowH = 40;
-    ctx2.textAlign = 'left';
-    for (i = 0; i < GARAGE_STAT_ROWS.length; i++) {
-      var y = rowY + i * rowH;
-      ctx2.font = '700 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx2.fillStyle = 'rgba(180,206,226,0.85)';
-      ctx2.fillText(GARAGE_STAT_ROWS[i][0], 60, y + 14);
-      ctx2.fillStyle = 'rgba(255,255,255,0.12)';
-      ctx2.fillRect(barX, y, barW, 10);
-      ctx2.fillStyle = isSelected ? '#41e0ff' : '#7dffb0';
-      ctx2.fillRect(barX, y, barW * DR.Cars.statFrac(def, GARAGE_STAT_ROWS[i][1]), 10);
+    // Browsing an owned car can look at either its stats or its upgrades —
+    // a locked car has no upgrades to show yet, so it only ever gets the
+    // stats view, and the toggle itself doesn't appear.
+    if (owned) drawButton(ctx2, GARAGE_TAB_BTN, garageTab === 'stats' ? 'UPGRADES ▸' : '◂ STATS');
+
+    if (garageTab === 'upgrades' && owned) {
+      drawGarageUpgrades(ctx2, def);
+    } else {
+      // Four stat bars, always shown relative to the rest of the roster —
+      // the numbers behind them are cars.js's (stock plus any upgrades
+      // already bought), this just draws whatever it says.
+      var barX = 180, barW = 420, rowY = 830, rowH = 40;
+      ctx2.textAlign = 'left';
+      for (i = 0; i < GARAGE_STAT_ROWS.length; i++) {
+        var y = rowY + i * rowH;
+        ctx2.font = '700 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx2.fillStyle = 'rgba(180,206,226,0.85)';
+        ctx2.fillText(GARAGE_STAT_ROWS[i][0], 60, y + 14);
+        ctx2.fillStyle = 'rgba(255,255,255,0.12)';
+        ctx2.fillRect(barX, y, barW, 10);
+        ctx2.fillStyle = isSelected ? '#41e0ff' : '#7dffb0';
+        ctx2.fillRect(barX, y, barW * DR.Cars.statFrac(def, GARAGE_STAT_ROWS[i][1]), 10);
+      }
+
+      // Recolouring only makes sense for a car you actually have.
+      if (owned) {
+        var pal = DR.Cars.palette();
+        var curColor = (DR.Save.carColor(def.id) || def.color).toLowerCase();
+        for (i = 0; i < pal.length; i++) {
+          var b = garageSwatchBox(i, pal.length);
+          var on = pal[i].toLowerCase() === curColor;
+          ctx2.fillStyle = pal[i];
+          ctx2.fillRect(b.x, b.y, b.w, b.h);
+          ctx2.lineWidth = on ? 3 : 1;
+          ctx2.strokeStyle = on ? '#ffffff' : 'rgba(255,255,255,0.35)';
+          ctx2.strokeRect(b.x, b.y, b.w, b.h);
+        }
+      }
     }
 
     var label = isSelected ? 'SELECTED'
@@ -1001,23 +1078,50 @@
               : 'LOCKED — ' + def.cost + ' CR';
     drawButton(ctx2, GARAGE_ACTION_BTN, label);
 
-    // Recolouring only makes sense for a car you actually have.
-    if (owned) {
-      var pal = DR.Cars.palette();
-      var curColor = (DR.Save.carColor(def.id) || def.color).toLowerCase();
-      for (i = 0; i < pal.length; i++) {
-        var b = garageSwatchBox(i, pal.length);
-        var on = pal[i].toLowerCase() === curColor;
-        ctx2.fillStyle = pal[i];
-        ctx2.fillRect(b.x, b.y, b.w, b.h);
-        ctx2.lineWidth = on ? 3 : 1;
-        ctx2.strokeStyle = on ? '#ffffff' : 'rgba(255,255,255,0.35)';
-        ctx2.strokeRect(b.x, b.y, b.w, b.h);
-      }
-    }
-
     ctx2.textAlign = 'left';
     drawButton(ctx2, BACK_BTN, '◂ BACK');
+  }
+
+  // Four rows, one per upgrade system — every car is upgradable to the same
+  // max tier, at a cost scaled off its own price, so a cheap car costs less
+  // to fully max than an expensive one, same as buying it in the first
+  // place did.
+  function drawGarageUpgrades(ctx2, def) {
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var systems = DR.Cars.upgradeSystems();
+    for (var i = 0; i < systems.length; i++) {
+      var sys = systems[i], r = garageUpgradeRowBox(i);
+      var tier = DR.Save.upgradeLevel(def.id, sys.id);
+      var maxed = DR.Cars.upgradeMaxed(def.id, sys.id);
+
+      ctx2.textAlign = 'left';
+      ctx2.font = '700 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = 'rgba(226,240,250,0.92)';
+      ctx2.fillText(sys.name, r.x, r.y + 26);
+
+      // Tier pips: filled dots for what's already bought, hollow for what
+      // isn't — the same "progress at a glance" idea as the roster dots.
+      for (var t = 0; t < DR.Cars.MAX_TIER; t++) {
+        ctx2.beginPath();
+        ctx2.arc(r.x + 10 + t * 22, r.y + 48, 6, 0, Math.PI * 2);
+        ctx2.fillStyle = t < tier ? '#7dffb0' : 'rgba(150,196,225,0.30)';
+        ctx2.fill();
+      }
+
+      var b = garageUpgradeBtnBox(i);
+      var btnLabel = maxed ? 'MAXED' : DR.Cars.tierCost(def, tier + 1) + ' CR';
+      ctx2.fillStyle = maxed ? 'rgba(255,255,255,0.06)' : 'rgba(10,8,24,0.62)';
+      ctx2.fillRect(b.x, b.y, b.w, b.h);
+      ctx2.lineWidth = 1.5;
+      ctx2.strokeStyle = maxed ? 'rgba(150,196,225,0.20)' : 'rgba(150,196,225,0.40)';
+      ctx2.strokeRect(b.x, b.y, b.w, b.h);
+      ctx2.textAlign = 'center';
+      ctx2.textBaseline = 'middle';
+      ctx2.font = '700 20px ' + MONO;
+      ctx2.fillStyle = maxed ? 'rgba(190,214,235,0.5)' : '#ffd76a';
+      ctx2.fillText(btnLabel, b.x + b.w * 0.5, b.y + b.h * 0.5 + 1);
+      ctx2.textBaseline = 'alphabetic';
+    }
   }
 
   function drawComingSoon(ctx2, v, heading, blurb) {
@@ -1162,6 +1266,10 @@
     ctx2.fillText(rushGates + ' GATES', v.W * 0.5, 664);
     ctx2.fillText(rushLapsDone() + (rushLapsDone() === 1 ? ' LAP' : ' LAPS'), v.W * 0.5, 706);
 
+    ctx2.font = '700 26px ' + MONO;
+    ctx2.fillStyle = '#7dffb0';
+    ctx2.fillText('+' + doneAward + ' CR', v.W * 0.5, 776);
+
     ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx2.fillStyle = '#ffd76a';
     ctx2.fillText('TAP TO GO AGAIN', v.W * 0.5, 860);
@@ -1210,6 +1318,10 @@
     }
 
     ctx2.textAlign = 'center';
+    ctx2.font = '700 26px ' + MONO;
+    ctx2.fillStyle = '#7dffb0';
+    ctx2.fillText('+' + doneAward + ' CR', v.W * 0.5, 820);
+
     ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx2.fillStyle = '#ffd76a';
     ctx2.fillText('TAP TO RACE AGAIN', v.W * 0.5, 880);
@@ -1261,6 +1373,18 @@
       if (inBox(lx, ly, GARAGE_LEFT_ARROW)) { garageStep(-1); return; }
       if (inBox(lx, ly, GARAGE_RIGHT_ARROW)) { garageStep(1); return; }
       if (inBox(lx, ly, GARAGE_ACTION_BTN)) { garageAction(); return; }
+      var ownedNow = DR.Save.ownsCar(DR.Cars.roster()[garageSel].id);
+      if (ownedNow && inBox(lx, ly, GARAGE_TAB_BTN)) {
+        garageTab = garageTab === 'stats' ? 'upgrades' : 'stats';
+        return;
+      }
+      if (ownedNow && garageTab === 'upgrades') {
+        var systems = DR.Cars.upgradeSystems();
+        for (i = 0; i < systems.length; i++) {
+          if (inBox(lx, ly, garageUpgradeBtnBox(i))) { garageBuyUpgrade(systems[i].id); return; }
+        }
+        return;
+      }
       var pal = DR.Cars.palette();
       for (i = 0; i < pal.length; i++) {
         if (inBox(lx, ly, garageSwatchBox(i, pal.length))) { garagePickColor(pal[i]); return; }
@@ -1625,6 +1749,10 @@
     }
 
     ctx2.textAlign = 'center';
+    ctx2.font = '700 26px ' + MONO;
+    ctx2.fillStyle = '#7dffb0';
+    ctx2.fillText('+' + doneAward + ' CR', v.W * 0.5, 780);
+
     ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx2.fillStyle = '#ffd76a';
     ctx2.fillText('TAP TO GO AGAIN', v.W * 0.5, 850);
@@ -1876,9 +2004,12 @@
       if (kind === 'garageRight') return GARAGE_RIGHT_ARROW;
       if (kind === 'garageAction') return GARAGE_ACTION_BTN;
       if (kind === 'garageSwatch') return garageSwatchBox(i, DR.Cars.palette().length);
+      if (kind === 'garageTab') return GARAGE_TAB_BTN;
+      if (kind === 'garageUpgrade') return garageUpgradeBtnBox(i);
       return null;
     },
     garageSel: function () { return garageSel; },
+    garageTab: function () { return garageTab; },
     setMode: function (m) { mode = m; },
     modes: function () { return MODES; },
     modeSel: function () { return modeSel; },
@@ -1893,6 +2024,7 @@
     toGarage: function () {
       garageSel = rosterIndexOf(DR.Save.selectedCar());
       garagePreviewFor = null;
+      garageTab = 'stats';
       phase = 'garage'; DR.Input.releaseAll(); DR.Input.clearTap();
     },
     restart: function () {

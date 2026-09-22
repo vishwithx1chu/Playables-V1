@@ -71,10 +71,11 @@ sitting in storage, and storage that throws on every call all leave the game
 running, tested each way separately.
 
 **Phase 1 — the Garage.** Eight cars, three archetypes, real stats, real
-colours. The full roadmap — Terrain was inserted after this phase and before
-Currency, since AI opponents and the real city circuits both get built
-against whatever track model exists — is in
-[`docs/content-plan.md`](docs/content-plan.md#development-roadmap).
+colours. The full roadmap — Currency ended up shipping before Terrain (it
+needed none of Terrain's track-model work, and answers the original
+engagement problem more directly); Terrain still comes before AI opponents
+and the real city circuits, which do need whatever track model exists — is
+in [`docs/content-plan.md`](docs/content-plan.md#development-roadmap).
 
 - **One mesh, three archetypes.** [`src/car.js`](src/car.js) used to build a
   single hand-authored car at load time. It now builds that same topology —
@@ -115,6 +116,18 @@ against whatever track model exists — is in
 - **Tutorial got its own door on the Title screen**, next to Story and
   Garage, rather than living inside Quick Play — its home is ready for
   Phase 8 to build into.
+- **A real WebGL preview.** The Garage's car is now [`src/car3d.js`](src/car3d.js),
+  a genuine lit 3D scene (Three.js, vendored as a plain classic script so
+  it still works when the page is opened as a local file — see the file's
+  own comment) on a transparent canvas over the 2D one, with real reflective
+  clearcoat paint via a procedural (hand-drawn gradient, no downloaded
+  HDRI) reflection environment. The car you actually drive is untouched;
+  this is the showcase preview only. After a sculpted-per-car-silhouette
+  pass didn't land well, the shape settled on the original box car with its
+  edges lightly rounded (a subdivided box with every vertex pulled onto a
+  rounded-box surface) rather than a re-sculpted body — same proportions,
+  softer corners. Falls back to the original 2D preview if WebGL is ever
+  unavailable.
 
 Measured, not just claimed: on Velocity Ring, Warbird's first lap beat
 Nightrunner's despite a wider turning circle (22.85s vs 25.92s, min radius
@@ -123,6 +136,32 @@ Alleycat's own balance — a flat speed penalty the tighter turning circle
 doesn't yet make back on a technical circuit — is a real result, and a note
 for the difficulty-tuning pass in Phase 6, not a bug: first-draft numbers are
 supposed to need this.
+
+**Phase 3 — currency & upgrades.** `save.js`'s currency and upgrade
+functions, built in Phase 0 but unused until now, do real work: Quick Play
+pays out on a graded curve (better than the track's target time, or more
+Rush distance, pays more; a rough run is never worth zero) since AI races
+and boss races don't exist to pay out yet, and the Garage's stats view gets
+an UPGRADES tab — four systems (Tyres/Engine/Transmission/NOS), three
+tiers each, every car upgradable to the same max.
+
+- **Convergence, not a flat percentage.** Each tier closes part (30% / 55%
+  / 75%, never 100%) of the gap between a car's own stock value and a
+  fixed cap shared by every car on that stat — so a cheap car gains more
+  per tier than an expensive one already close to the cap, closing the
+  distance between them without erasing it. Verified by measurement, not
+  just claimed: buying one Engine tier moves Alleycat's speed stat bar by
+  19 percentage points against Specter's 13, from the identical purchase.
+  The full design is in
+  [`docs/content-plan.md`](docs/content-plan.md#the-upgrades).
+- **Cost scales off the car's own price** (or a reference value for the
+  starter and story-exclusive cars), so maxing every system on a cheap car
+  is a realistic goal and maxing every car is not — matching "you need a
+  different car for this city."
+- Upgrades belong to the car being *upgraded*, not necessarily the one
+  selected to race: buying a tier only touches the shared physics state
+  (`car.js`/`game.js`) immediately if you're upgrading the car you'd
+  actually drive next.
 
 ## Current state, before career mode: Milestone 2.5
 
