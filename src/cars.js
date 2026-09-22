@@ -41,8 +41,40 @@
       color: '#ff2f8e', blurb: 'Glass cannon.',
       stats: { speedMult: 1.04, gripMult: 1.00, slipMult: 1.12, tauMult: 0.85,
                 boostPeakMult: 1.00, boostHoldMult: 1.00 } },
-    { id: 'apex', name: 'Apex', archetype: 'sport', cost: null,
-      color: '#ffd76a', blurb: 'Story-exclusive. Never for sale.',
+    /* Boss cars. Never for sale: beating a city's boss is the only way to
+       get one (story.js hands it over). Each one sits a notch above what
+       you could have bought by the time you reach its city, and each has
+       a lean — grip, speed or handling — so taking it over upgrading the
+       car you already have is a real choice, not an obvious one. `value`
+       stands in for a price when working out what its upgrades cost. */
+    { id: 'harbormaster', name: 'Harbormaster', archetype: 'sport', cost: null, value: 1000,
+      color: '#3fa9f5', blurb: 'Fender’s dock runner. Quick and forgiving.',
+      unlock: 'BEAT FENDER — PORTSIDE',
+      stats: { speedMult: 1.04, gripMult: 0.96, slipMult: 1.00, tauMult: 0.95,
+                boostPeakMult: 1.05, boostHoldMult: 1.10 } },
+    { id: 'riptide', name: 'Riptide', archetype: 'sport', cost: null, value: 1500,
+      color: '#1de9b6', blurb: 'Built for the cliff road. Loves a long sweeper.',
+      unlock: 'BEAT RIPTIDE — COASTAL RUN',
+      stats: { speedMult: 1.09, gripMult: 0.97, slipMult: 1.00, tauMult: 0.92,
+                boostPeakMult: 1.08, boostHoldMult: 1.15 } },
+    { id: 'foundry', name: 'Foundry', archetype: 'muscle', cost: null, value: 1900,
+      color: '#ff5a36', blurb: 'Heavy, hot, and relentless on a straight.',
+      unlock: 'BEAT FOUNDRY — STEEL DISTRICT',
+      stats: { speedMult: 1.17, gripMult: 1.05, slipMult: 1.00, tauMult: 1.00,
+                boostPeakMult: 1.00, boostHoldMult: 1.10 } },
+    { id: 'glacier', name: 'Glacier', archetype: 'compact', cost: null, value: 2000,
+      color: '#bfefff', blurb: 'Grips like it’s bolted to the road.',
+      unlock: 'BEAT GLACIER — HIGH PASS',
+      stats: { speedMult: 1.07, gripMult: 0.84, slipMult: 1.00, tauMult: 0.90,
+                boostPeakMult: 1.10, boostHoldMult: 1.15 } },
+    { id: 'undertow', name: 'Undertow', archetype: 'sport', cost: null, value: 2400,
+      color: '#2a5cff', blurb: 'Slippery, fast, and very sharp.',
+      unlock: 'BEAT UNDERTOW — THE UNDERPASS',
+      stats: { speedMult: 1.13, gripMult: 0.93, slipMult: 1.05, tauMult: 0.86,
+                boostPeakMult: 1.12, boostHoldMult: 1.20 } },
+    { id: 'apex', name: 'Apex', archetype: 'sport', cost: null, value: 3000,
+      color: '#ffd76a', blurb: 'The best all-round car in the league.',
+      unlock: 'BEAT APEX — THE CIRCUIT',
       stats: { speedMult: 1.16, gripMult: 0.88, slipMult: 1.08, tauMult: 0.85,
                 boostPeakMult: 1.20, boostHoldMult: 1.20 } }
   ];
@@ -138,6 +170,7 @@
   // would sit if it were sold, not zero and not free.
   function refCost(def) {
     if (def.cost) return def.cost;
+    if (def.value) return def.value;
     return def.id === 'nightrunner' ? 600 : 2400;
   }
 

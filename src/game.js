@@ -154,7 +154,7 @@
   var duelGap = null;        // + means player two is behind
   var _ghostPos = { x: 0, y: 0, bodyYaw: 0, slip: 0, roll: 0, done: false };
 
-  function lapsFor(m) { return m === 'duel' ? DUEL_LAPS : RACE_LAPS; }
+  function lapsFor(m) { return m === 'duel' ? DUEL_LAPS : m === 'time' ? timeLaps : RACE_LAPS; }
 
   /* 'modes' -> 'select' -> 'racing' -> 'done' -> back to 'modes'.
      A mode decides what the race is FOR; the track screen is the same either
@@ -182,12 +182,25 @@
      'title' -> 'modes' -> 'select' -> 'racing' -> 'done' -> back to 'modes',
      with 'story' and 'garage' as dead-end rooms off 'title' for now. */
   var TITLE_ITEMS = [
-    { id: 'story',    name: 'STORY',      ready: false },
+    { id: 'story',    name: 'STORY',      ready: true },
     { id: 'quick',    name: 'QUICK PLAY', ready: true },
     { id: 'garage',   name: 'GARAGE',     ready: true },
     { id: 'tutorial', name: 'TUTORIAL',   ready: false }
   ];
   var titleSel = 1;   // Quick Play — the default door
+
+  /* --------------------------------- STORY --------------------------------
+     'title' -> 'story' (the ten cities) -> 'city' (one city's events) ->
+     'racing' -> 'done' -> back to 'city'. The data and the rules (what
+     clears what, what it pays, what it unlocks) all live in story.js; this
+     file only draws the screens and runs the races it describes. */
+  var storySel = 0;          // highlighted city on the map
+  var citySel = 0;           // highlighted event inside a city
+  var storyEvent = null;     // Story.setup() for the event being raced
+  var storyResult = null;    // Story.resolve() for the results screen
+  var timeLaps = 2, timeTarget = 0;   // a time attack's length and target
+  var doneSel = 1;           // story results: 0 = retry, 1 = continue
+  var garageReturn = 'title';
 
   /* --------------------------------- GARAGE -------------------------------
      Browsing is cheap, buying is not: setArchetype/setPalette touch shared
@@ -475,6 +488,7 @@
       // Only a race has a last lap. Practice runs until you leave; Rush runs
       // until the clock beats you.
       if (mode === 'race' && lapTimes.length >= RACE_LAPS) { finishRace(); }
+      if (mode === 'time' && lapTimes.length >= timeLaps) { finishRace(); }
       if (mode === 'duel' && lapTimes.length >= DUEL_LAPS) { finishDuelLeg(); }
     }
     if (lapFlash > 0) lapFlash = Math.max(0, lapFlash - dt / 1.6);
@@ -549,7 +563,22 @@
                                         clock: raceClock, finishS: finishLineS() });
       for (var i = 0; i < standings.length; i++) if (standings[i].isPlayer) finishPos = i + 1;
     }
-    awardRaceCurrency();
+    if (storyEvent) {
+      storyResult = DR.Story.resolve(storyEvent.city, storyEvent.event,
+                                     { pos: raceRivals ? finishPos : 0, total: raceTotal });
+      doneAward = storyResult.award;
+      // Failing puts RETRY under your thumb; clearing puts CONTINUE there.
+      doneSel = storyResult.ok ? 1 : 0;
+    } else {
+      awardRaceCurrency();
+    }
+  }
+
+  function startStoryEvent(ci, ei) {
+    var st = DR.Story.setup(ci, ei);
+    storySel = ci; citySel = ei;
+    if (st.mode === 'time') { timeLaps = st.laps; timeTarget = st.target; }
+    startRace(st.track, st.mode, false, { rivals: st.rivals, story: st });
   }
   function awardDuelCurrency() {
     var target = DR.Road.tracks()[DR.Road.currentTrack()].targetSecs * DUEL_LAPS;
@@ -1139,7 +1168,7 @@
 
     var label = isSelected ? 'SELECTED'
               : owned ? 'TAP TO SELECT'
-              : def.cost === null ? 'STORY REWARD ONLY'
+              : def.cost === null ? (def.unlock || 'STORY REWARD ONLY')
               : 'LOCKED — ' + def.cost + ' CR';
     drawButton(ctx2, GARAGE_ACTION_BTN, label);
 
@@ -1202,6 +1231,215 @@
     ctx2.fillText(blurb, v.W * 0.5, 766);
     ctx2.textAlign = 'left';
     drawButton(ctx2, BACK_BTN, '◂ BACK');
+  }
+
+  // ---------------------------------------------------------------- STORY UI
+
+  function storyRowBox(i) { return { x: 40, y: 214 + i * 100, w: 640, h: 90 }; }
+  function cityEventBox(i) { return { x: 40, y: 336 + i * 162, w: 640, h: 148 }; }
+  var CITY_GARAGE_BTN = { x: 40, y: 1164, w: 300, h: 64 };
+  var DONE_RETRY_BTN  = { x: 60, y: 1120, w: 280, h: 74 };
+  var DONE_CONT_BTN   = { x: 380, y: 1120, w: 280, h: 74 };
+
+  // Words wrapped to a width, for the one or two lines of city flavour.
+  function wrapText(ctx2, text, x, y, maxW, lineH) {
+    var words = text.split(' '), line = '', n = 0;
+    for (var i = 0; i < words.length; i++) {
+      var test = line ? line + ' ' + words[i] : words[i];
+      if (ctx2.measureText(test).width > maxW && line) {
+        ctx2.fillText(line, x, y + n * lineH); n++; line = words[i];
+      } else line = test;
+    }
+    if (line) ctx2.fillText(line, x, y + n * lineH);
+  }
+
+  function drawCurrency(ctx2, v) {
+    ctx2.textAlign = 'right';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '700 22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText(DR.Save.currency().toLocaleString() + ' CR', v.W - 24, 44);
+  }
+
+  /* The map: all ten cities in order. Every row says in words whether it's
+     open, how much of it is cleared, and what its boss pays — so the state
+     of the championship is readable without knowing what the colours mean. */
+  function drawStory(ctx2, v) {
+    var SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    var cities = DR.Story.cities(), i;
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '800 52px ' + SANS;
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText('THE CIRCUIT', v.W * 0.5, 146);
+    ctx2.font = '700 22px ' + SANS;
+    ctx2.fillStyle = 'rgba(180,214,236,0.85)';
+    ctx2.fillText('TEN CITIES  •  TEN BOSSES  •  ONE CHAMPION', v.W * 0.5, 186);
+
+    for (i = 0; i < cities.length; i++) {
+      var c = cities[i], b = storyRowBox(i), st = DR.Story.cityState(i), on = i === storySel;
+      ctx2.globalAlpha = st.unlocked ? 1 : 0.5;
+      ctx2.fillStyle = on ? 'rgba(34,120,150,0.30)' : 'rgba(10,8,24,0.62)';
+      ctx2.fillRect(b.x, b.y, b.w, b.h);
+      ctx2.lineWidth = on ? 3 : 1.5;
+      ctx2.strokeStyle = on ? '#41e0ff' : 'rgba(150,196,225,0.32)';
+      ctx2.strokeRect(b.x, b.y, b.w, b.h);
+
+      ctx2.textAlign = 'center';
+      ctx2.font = '800 34px ' + SANS;
+      ctx2.fillStyle = st.bossBeaten ? '#7dffb0' : '#eaf6ff';
+      ctx2.fillText(String(i + 1), b.x + 36, b.y + 58);
+
+      ctx2.textAlign = 'left';
+      ctx2.fillStyle = on ? '#eaf6ff' : 'rgba(226,240,250,0.9)';
+      fitText(ctx2, c.name, b.x + 76, b.y + 42, 330, 30, '800', SANS);
+      ctx2.font = '600 18px ' + SANS;
+      ctx2.fillStyle = 'rgba(180,206,226,0.85)';
+      var sub = !st.unlocked ? 'LOCKED — BEAT ' + cities[i - 1].boss
+              : st.bossBeaten ? 'BOSS BEATEN  •  ' + st.cleared + '/' + st.total + ' CLEARED'
+              : 'BOSS: ' + c.boss + '  •  ' + st.cleared + '/' + st.total + ' CLEARED';
+      ctx2.fillText(sub, b.x + 76, b.y + 72);
+
+      ctx2.textAlign = 'right';
+      ctx2.font = '700 17px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      ctx2.fillStyle = c.reward.car ? '#ffd76a' : 'rgba(125,255,176,0.9)';
+      ctx2.fillText(c.reward.car ? 'PRIZE: CAR' : 'PRIZE: CASH', b.x + b.w - 20, b.y + 38);
+      ctx2.font = '700 18px ' + SANS;
+      ctx2.fillStyle = st.bossBeaten ? '#7dffb0' : (st.unlocked ? (on ? '#ffd76a' : 'rgba(190,214,235,0.6)') : 'rgba(190,214,235,0.5)');
+      ctx2.fillText(st.bossBeaten ? 'DONE ✓' : (!st.unlocked ? 'LOCKED' : (on ? 'TAP AGAIN ▸' : 'OPEN')),
+                    b.x + b.w - 20, b.y + 70);
+      ctx2.globalAlpha = 1;
+    }
+    drawCurrency(ctx2, v);
+    ctx2.textAlign = 'left';
+    drawButton(ctx2, BACK_BTN, '◂ TITLE');
+  }
+
+  function bestText(ci, ei) {
+    var id = DR.Story.eventId(ci, ei), b = DR.Save.bestResult('story:' + id);
+    if (!b) return '';
+    var ev = DR.Story.cities()[ci].events[ei];
+    return ev.type === 'race' ? 'BEST ' + ordinal(b.value) : 'BEST ' + fmt(b.value);
+  }
+
+  function drawCity(ctx2, v) {
+    var SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var ci = storySel, c = DR.Story.cities()[ci], i;
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '700 18px ' + SANS;
+    ctx2.fillStyle = 'rgba(180,214,236,0.8)';
+    ctx2.fillText('CITY ' + (ci + 1) + ' OF 10', v.W * 0.5, 118);
+    ctx2.fillStyle = '#ffd76a';
+    fitText(ctx2, c.name, v.W * 0.5, 170, 600, 54, '800', SANS);
+    ctx2.font = '700 22px ' + SANS;
+    ctx2.fillStyle = '#eaf6ff';
+    ctx2.fillText('BOSS: ' + c.boss, v.W * 0.5, 206);
+    ctx2.font = '500 21px ' + SANS;
+    ctx2.fillStyle = 'rgba(190,214,235,0.9)';
+    wrapText(ctx2, c.intro, v.W * 0.5, 242, 620, 27);
+    ctx2.font = '600 18px ' + SANS;
+    ctx2.fillStyle = 'rgba(125,255,176,0.85)';
+    ctx2.fillText('RECOMMENDED: ' + c.spec, v.W * 0.5, 312);
+
+    var ev = c.events;
+    for (i = 0; i < ev.length; i++) {
+      var b = cityEventBox(i), st = DR.Story.setup(ci, i), on = i === citySel;
+      var locked = DR.Story.eventLocked(ci, i), done = DR.Story.cleared(ci, i);
+      var boss = ev[i].type === 'boss';
+      ctx2.globalAlpha = locked ? 0.5 : 1;
+      ctx2.fillStyle = on ? 'rgba(34,120,150,0.30)' : (boss ? 'rgba(60,40,10,0.55)' : 'rgba(10,8,24,0.62)');
+      ctx2.fillRect(b.x, b.y, b.w, b.h);
+      ctx2.lineWidth = on ? 3 : 1.5;
+      ctx2.strokeStyle = on ? '#41e0ff' : (boss ? 'rgba(255,215,106,0.55)' : 'rgba(150,196,225,0.32)');
+      ctx2.strokeRect(b.x, b.y, b.w, b.h);
+
+      ctx2.textAlign = 'left';
+      ctx2.font = '800 30px ' + SANS;
+      ctx2.fillStyle = boss ? '#ffd76a' : '#eaf6ff';
+      ctx2.fillText(st.label, b.x + 24, b.y + 44);
+      ctx2.font = '600 20px ' + SANS;
+      ctx2.fillStyle = 'rgba(200,222,240,0.92)';
+      ctx2.fillText(st.requirement, b.x + 24, b.y + 82);
+      ctx2.font = '700 19px ' + MONO;
+      ctx2.fillStyle = '#7dffb0';
+      ctx2.fillText(st.reward, b.x + 24, b.y + 118);
+
+      ctx2.textAlign = 'right';
+      ctx2.font = '800 20px ' + SANS;
+      var status = done ? 'CLEARED ✓' : locked ? 'LOCKED' : on ? 'TAP AGAIN ▸' : 'TAP TO SELECT';
+      ctx2.fillStyle = done ? '#7dffb0' : locked ? 'rgba(190,214,235,0.6)' : (on ? '#ffd76a' : 'rgba(190,214,235,0.6)');
+      ctx2.fillText(status, b.x + b.w - 22, b.y + 44);
+      ctx2.font = '600 17px ' + SANS;
+      ctx2.fillStyle = 'rgba(190,214,235,0.75)';
+      if (locked && boss) ctx2.fillText('CLEAR THE OTHERS FIRST', b.x + b.w - 22, b.y + 82);
+      else ctx2.fillText(bestText(ci, i), b.x + b.w - 22, b.y + 82);
+      ctx2.globalAlpha = 1;
+    }
+
+    // What you're driving, and where to go to make it quicker.
+    var car = DR.Cars.get(DR.Save.selectedCar());
+    ctx2.textAlign = 'left';
+    ctx2.font = '600 19px ' + SANS;
+    ctx2.fillStyle = 'rgba(180,206,226,0.85)';
+    ctx2.fillText('CIRCUIT: ' + DR.Road.tracks()[c.track].name, 40, 1000);
+    ctx2.fillText('DRIVING: ' + (car ? car.name.toUpperCase() : ''), 40, 1030);
+    drawButton(ctx2, CITY_GARAGE_BTN, 'GARAGE ▸');
+    drawCurrency(ctx2, v);
+    ctx2.textAlign = 'left';
+    drawButton(ctx2, BACK_BTN, '◂ MAP');
+  }
+
+  // A time attack's own read-out: the target, and how much of it is left.
+  // "LEFT" and "OVER" are written out, not just coloured.
+  function drawTimeHud(ctx2, v) {
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var used = timing ? raceTotal + lapTimer : 0;
+    var left = timeTarget - used;
+    var cx2 = v.W * 0.5;
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '700 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(150,196,225,0.85)';
+    ctx2.fillText('TARGET ' + fmt(timeTarget), cx2, 70);
+    ctx2.font = '800 50px ' + MONO;
+    ctx2.lineWidth = 7;
+    ctx2.strokeStyle = 'rgba(4,2,10,0.88)';
+    var txt = left >= 0 ? fmt(left) : '+' + fmt(-left);
+    ctx2.strokeText(txt, cx2, 124);
+    ctx2.fillStyle = left >= 0 ? '#eaf6ff' : '#ff8a6a';
+    ctx2.fillText(txt, cx2, 124);
+    ctx2.font = '800 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = left >= 0 ? '#7dffb0' : '#ff8a6a';
+    ctx2.fillText(left >= 0 ? 'LEFT' : 'OVER', cx2, 148);
+    ctx2.textAlign = 'left';
+  }
+
+  function drawTimeDone(ctx2, v) {
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    var ok = raceTotal <= timeTarget;
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '800 64px ' + SANS;
+    ctx2.fillStyle = ok ? '#ffd76a' : '#eaf6ff';
+    ctx2.fillText(ok ? 'TARGET BEATEN' : 'TOO SLOW', v.W * 0.5, 280);
+    ctx2.font = '700 24px ' + SANS;
+    ctx2.fillStyle = 'rgba(180,214,236,0.9)';
+    ctx2.fillText(resultsSubtitle(), v.W * 0.5, 322);
+    ctx2.font = '800 80px ' + MONO;
+    ctx2.fillStyle = '#eaf6ff';
+    ctx2.fillText(fmt(raceTotal), v.W * 0.5, 430);
+    ctx2.font = '700 26px ' + MONO;
+    ctx2.fillStyle = ok ? '#7dffb0' : '#ff8a6a';
+    ctx2.fillText('TARGET ' + fmt(timeTarget), v.W * 0.5, 474);
+    for (var i = 0; i < lapTimes.length; i++) {
+      ctx2.font = '700 26px ' + MONO;
+      ctx2.fillStyle = 'rgba(228,242,252,0.9)';
+      ctx2.fillText('LAP ' + (i + 1) + '   ' + fmt(lapTimes[i]), v.W * 0.5, 540 + i * 40);
+    }
+    drawResultsFooter(ctx2, v, 560 + lapTimes.length * 40 + 30);
   }
 
   function drawModes(ctx2, v) {
@@ -1344,6 +1582,12 @@
   function drawDone(ctx2, v) {
     if (mode === 'rush') { drawRushDone(ctx2, v); return; }
     if (mode === 'duel') { drawDuelDone(ctx2, v); return; }
+    if (mode === 'time') {
+      ctx2.fillStyle = 'rgba(6,4,16,0.78)';
+      ctx2.fillRect(0, 0, v.W, v.H);
+      drawTimeDone(ctx2, v);
+      return;
+    }
     var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     ctx2.fillStyle = 'rgba(6,4,16,0.74)';
     ctx2.fillRect(0, 0, v.W, v.H);
@@ -1460,21 +1704,54 @@
   }
 
   function resultsSubtitle() {
+    if (storyEvent) {
+      return DR.Story.cities()[storyEvent.city].name + '  •  ' + storyEvent.label;
+    }
     return DR.Road.tracks()[DR.Road.currentTrack()].name;
   }
 
   // Currency earned, and the way back in. Story mode adds its own lines
-  // (unlocks, rewards) through the same footer, so every results screen
-  // reads the same way.
+  // (cleared or not, a car won, a city opened) through the same footer, so
+  // every results screen reads the same way.
   function drawResultsFooter(ctx2, v, y) {
     var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx2.textAlign = 'center';
+    if (storyResult) {
+      for (var i = 0; i < storyResult.lines.length; i++) {
+        var first = i === 0;
+        ctx2.font = (first ? '800 28px ' : '700 24px ') + SANS;
+        ctx2.fillStyle = first ? (storyResult.ok ? '#7dffb0' : '#ffb24d') : '#ffd76a';
+        fitText(ctx2, storyResult.lines[i], v.W * 0.5, y + i * 38, 640, first ? 28 : 24,
+                first ? '800' : '700', SANS);
+      }
+      y += storyResult.lines.length * 38 + 16;
+    }
     ctx2.font = '700 28px ' + MONO;
     ctx2.fillStyle = '#7dffb0';
     ctx2.fillText('+' + doneAward + ' CR', v.W * 0.5, y);
-    ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    if (storyResult) {
+      drawDoneButton(ctx2, DONE_RETRY_BTN, 'RETRY', doneSel === 0);
+      drawDoneButton(ctx2, DONE_CONT_BTN, 'CONTINUE', doneSel === 1);
+      return;
+    }
+    ctx2.font = '700 30px ' + SANS;
     ctx2.fillStyle = '#ffd76a';
     ctx2.fillText('TAP TO RACE AGAIN', v.W * 0.5, Math.max(y + 70, 880));
+  }
+
+  function drawDoneButton(ctx2, b, text, on) {
+    ctx2.fillStyle = on ? 'rgba(34,120,150,0.40)' : 'rgba(10,8,24,0.70)';
+    ctx2.fillRect(b.x, b.y, b.w, b.h);
+    ctx2.lineWidth = on ? 3 : 1.5;
+    ctx2.strokeStyle = on ? '#41e0ff' : 'rgba(150,196,225,0.40)';
+    ctx2.strokeRect(b.x, b.y, b.w, b.h);
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'middle';
+    ctx2.font = '800 28px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = on ? '#ffd76a' : 'rgba(214,234,248,0.9)';
+    ctx2.fillText(text, b.x + b.w * 0.5, b.y + b.h * 0.5 + 1);
+    ctx2.textBaseline = 'alphabetic';
   }
 
   // Which room a Title door leads to. Both unbuilt rooms are still reachable
@@ -1482,8 +1759,9 @@
   function enterTitleItem(i) {
     var it = TITLE_ITEMS[i];
     if (it.id === 'quick') phase = 'modes';
-    else if (it.id === 'story') phase = 'story';
+    else if (it.id === 'story') { phase = 'story'; storySel = DR.Story.currentCity(); }
     else if (it.id === 'garage') {
+      garageReturn = 'title';
       garageSel = rosterIndexOf(DR.Save.selectedCar());
       garagePreviewFor = null;   // force a re-check: a race may have left
                                   // car.js's shared mesh/paint state on a
@@ -1518,7 +1796,7 @@
         }
       }
     } else if (phase === 'garage') {
-      if (inBox(lx, ly, BACK_BTN)) { phase = 'title'; return; }
+      if (inBox(lx, ly, BACK_BTN)) { phase = garageReturn; return; }
       if (inBox(lx, ly, GARAGE_LEFT_ARROW)) { garageStep(-1); return; }
       if (inBox(lx, ly, GARAGE_RIGHT_ARROW)) { garageStep(1); return; }
       if (inBox(lx, ly, GARAGE_ACTION_BTN)) { garageAction(); return; }
@@ -1538,7 +1816,27 @@
       for (i = 0; i < pal.length; i++) {
         if (inBox(lx, ly, garageSwatchBox(i, pal.length))) { garagePickColor(pal[i]); return; }
       }
-    } else if (phase === 'story' || phase === 'tutorial') {
+    } else if (phase === 'story') {
+      if (inBox(lx, ly, BACK_BTN)) { phase = 'title'; return; }
+      for (i = 0; i < DR.Story.cities().length; i++) {
+        if (inBox(lx, ly, storyRowBox(i))) {
+          if (storySel === i) enterCity(i);
+          else storySel = i;
+          return;
+        }
+      }
+    } else if (phase === 'city') {
+      if (inBox(lx, ly, BACK_BTN)) { phase = 'story'; return; }
+      if (inBox(lx, ly, CITY_GARAGE_BTN)) { openGarage('city'); return; }
+      var evs = DR.Story.cities()[storySel].events;
+      for (i = 0; i < evs.length; i++) {
+        if (inBox(lx, ly, cityEventBox(i))) {
+          if (citySel === i) tryStoryEvent(storySel, i);
+          else citySel = i;
+          return;
+        }
+      }
+    } else if (phase === 'tutorial') {
       if (inBox(lx, ly, BACK_BTN)) { phase = 'title'; return; }
     } else if (phase === 'select') {
       if (inBox(lx, ly, BACK_BTN)) { phase = 'modes'; return; }
@@ -1553,10 +1851,63 @@
     } else if (phase === 'handoff') {
       startDuelLeg2();
     } else if (phase === 'done') {
+      if (storyEvent) {
+        // Story results have two real choices, so they get two buttons; a
+        // tap anywhere else just continues.
+        if (inBox(lx, ly, DONE_RETRY_BTN)) { retryStoryEvent(); return; }
+        leaveStoryResults();
+        return;
+      }
       // Going again should be one tap, not three. Back to the tracks, with
       // the mode you were already playing still chosen.
       phase = 'select';
     }
+  }
+
+  function enterCity(ci) {
+    if (!DR.Story.cityUnlocked(ci)) return;
+    storySel = ci;
+    // Land on the first thing still to do, so returning to a city puts
+    // the next event under your thumb.
+    var ev = DR.Story.cities()[ci].events;
+    citySel = 0;
+    for (var i = 0; i < ev.length; i++) {
+      if (!DR.Story.cleared(ci, i) && !DR.Story.eventLocked(ci, i)) { citySel = i; break; }
+    }
+    phase = 'city';
+  }
+
+  function tryStoryEvent(ci, ei) {
+    if (DR.Story.eventLocked(ci, ei)) return;
+    startStoryEvent(ci, ei);
+  }
+
+  function retryStoryEvent() {
+    var ev = storyEvent;
+    startStoryEvent(ev.city, ev.event);
+  }
+
+  function leaveStoryResults() {
+    var ev = storyEvent;
+    storyEvent = null; storyResult = null;
+    // Beating a boss sends you to the map, where the next city has just
+    // opened; anything else goes back to the city you were in.
+    var boss = ev && DR.Story.cities()[ev.city].events[ev.event].type === 'boss';
+    if (boss && DR.Story.bossBeaten(ev.city) && ev.city + 1 < DR.Story.cities().length) {
+      storySel = ev.city + 1;
+      phase = 'story';
+    } else {
+      enterCity(ev ? ev.city : storySel);
+    }
+    DR.Input.releaseAll(); DR.Input.clearTap();
+  }
+
+  function openGarage(from) {
+    garageReturn = from;
+    garageSel = rosterIndexOf(DR.Save.selectedCar());
+    garagePreviewFor = null;
+    garageTab = 'stats';
+    phase = 'garage';
   }
 
   // Practice never ends on its own, so it needs a way out. Handled here
@@ -1597,6 +1948,8 @@
     }
     raceTotal = 0; hintAlpha = 1;
     raceClock = 0; standings = null; finishPos = 0; bumpFlash = 0;
+    storyEvent = (opts && opts.story) || null;
+    storyResult = null;
     raceRivals = mode === 'race' ? ((opts && opts.rivals) || QUICK_RIVALS) : null;
     if (raceRivals && raceRivals.length) DR.Rivals.start(raceRivals);
     else { raceRivals = null; DR.Rivals.clear(); }
@@ -2016,10 +2369,23 @@
     } else if (phase === 'garage') {
       if (st) garageStep(st);
       if (confirm) garageAction();
+    } else if (phase === 'story') {
+      if (st) {
+        var nc = DR.Story.cities().length;
+        storySel = ((storySel + st) % nc + nc) % nc;
+      }
+      if (confirm) enterCity(storySel);
+    } else if (phase === 'city') {
+      var ne = DR.Story.cities()[storySel].events.length;
+      if (st) citySel = ((citySel + st) % ne + ne) % ne;
+      if (confirm) tryStoryEvent(storySel, citySel);
     } else if (phase === 'handoff') {
       if (confirm) startDuelLeg2();
     } else if (phase === 'done') {
-      if (confirm) startRace(selected);
+      if (storyEvent) {
+        if (st) doneSel = st < 0 ? 0 : 1;
+        if (confirm) { if (doneSel === 0) retryStoryEvent(); else leaveStoryResults(); }
+      } else if (confirm) startRace(selected);
     }
     handleMenuTap();
   }
@@ -2033,6 +2399,12 @@
     // what's on screen — leaving the WebGL layer showing (or hidden) behind
     // is a whole class of bug this avoids for free.
     if (DR.Car3D) DR.Car3D.show(phase === 'garage');
+    // Same idea for the city look: worked out from what's on screen every
+    // frame, so a city's colours can never leak into Quick Play.
+    var themeCity = -1;
+    if (phase === 'city') themeCity = storySel;
+    else if (storyEvent && (phase === 'racing' || phase === 'done')) themeCity = storyEvent.city;
+    DR.Road.setTheme(themeCity >= 0 ? DR.Story.themeFor(themeCity) : null);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#05040a';
@@ -2047,14 +2419,15 @@
     ctx.clip();
     ctx.translate(sh.x, sh.y);
 
-    if (phase === 'title' || phase === 'modes' || phase === 'select' ||
+    if (phase === 'title' || phase === 'modes' || phase === 'select' || phase === 'city' ||
         phase === 'story' || phase === 'garage' || phase === 'tutorial') {
       DR.Road.drawBackground(ctx, menuView());
       if (phase === 'title') drawTitle(ctx, v);
       else if (phase === 'modes') { drawModes(ctx, v); drawButton(ctx, BACK_BTN, '\u25C2 TITLE'); }
       else if (phase === 'select') { drawSelect(ctx, v); drawButton(ctx, BACK_BTN, '\u25C2 MODES'); }
       else if (phase === 'garage') drawGarage(ctx, v);
-      else if (phase === 'story') drawComingSoon(ctx, v, 'STORY MODE', 'Ten cities, one championship. Coming soon.');
+      else if (phase === 'story') drawStory(ctx, v);
+      else if (phase === 'city') drawCity(ctx, v);
       else if (phase === 'tutorial') drawComingSoon(ctx, v, 'TUTORIAL', 'A guided first drift. Coming soon.');
       ctx.restore();
       return;
@@ -2092,6 +2465,7 @@
       else if (mode === 'rush') drawRushHud(ctx, v);
       else { drawHud(ctx, v); drawHint(ctx, v); }
       if (mode === 'duel') drawDuelHud(ctx, v);
+      if (mode === 'time') drawTimeHud(ctx, v);
     }
     if (phase === 'handoff') drawHandoff(ctx, v);
     if (phase === 'done') drawDone(ctx, v);
@@ -2209,6 +2583,11 @@
       if (kind === 'garageAction') return GARAGE_ACTION_BTN;
       if (kind === 'garageSwatch') return garageSwatchBox(i, DR.Cars.palette().length);
       if (kind === 'garageTab') return GARAGE_TAB_BTN;
+      if (kind === 'storyRow') return storyRowBox(i);
+      if (kind === 'cityEvent') return cityEventBox(i);
+      if (kind === 'cityGarage') return CITY_GARAGE_BTN;
+      if (kind === 'doneRetry') return DONE_RETRY_BTN;
+      if (kind === 'doneContinue') return DONE_CONT_BTN;
       if (kind === 'garageUpgrade') return garageUpgradeBtnBox(i);
       return null;
     },
@@ -2218,6 +2597,15 @@
     // drive whole races in milliseconds rather than minutes.
     step: function (dt) { update(dt || FIXED); },
     standings: function () { return standings; },
+    toStory: function () { phase = 'story'; storySel = DR.Story.currentCity(); DR.Input.releaseAll(); DR.Input.clearTap(); },
+    enterCity: enterCity,
+    startStoryEvent: startStoryEvent,
+    storySel: function () { return storySel; },
+    citySel: function () { return citySel; },
+    storyEvent: function () { return storyEvent; },
+    storyResult: function () { return storyResult; },
+    doneSel: function () { return doneSel; },
+    garageReturn: function () { return garageReturn; },
     finishPos: function () { return finishPos; },
     doneAward: function () { return doneAward; },
     raceClock: function () { return raceClock; },
@@ -2233,6 +2621,7 @@
     toSelect: function () { phase = 'select'; DR.Input.releaseAll(); DR.Input.clearTap(); },
     toModes: function () { phase = 'modes'; DR.Input.releaseAll(); DR.Input.clearTap(); },
     toGarage: function () {
+      garageReturn = 'title';
       garageSel = rosterIndexOf(DR.Save.selectedCar());
       garagePreviewFor = null;
       garageTab = 'stats';

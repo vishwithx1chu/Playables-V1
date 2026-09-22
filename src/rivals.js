@@ -358,24 +358,40 @@
       pick.push(r);
     }
     pick.sort(function (a, b) { return b.s - a.s; });
+    var tags = [];
     for (i = 0; i < pick.length; i++) {
       r = pick[i];
       DR.Car.drawRival(ctx, view, r, r.skin);
-      // A name over a rival that's close enough to read, so a boss is
-      // recognisably a boss and not just another car.
       DR.Road.project3(r.x, r.y, 48, view, _p);
-      if (!_p.vis || _p.sc < 0.30 || _p.sc > 2.6) continue;
-      var size = Math.round(Math.max(14, Math.min(26, 13 * _p.sc)));
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'alphabetic';
+      if (_p.vis && _p.sc >= 0.30 && _p.sc <= 2.6) tags.push({ r: r, x: _p.x, y: _p.y, sc: _p.sc });
+    }
+    // A name over a rival that's close enough to read, so a boss is
+    // recognisably a boss and not just another car. Nearest first, and a
+    // name that would overlap one already written is left off rather than
+    // printed on top of it — two names mashed together read as neither.
+    tags.sort(function (a, b) { return b.sc - a.sc; });
+    var boxes = [];
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    for (i = 0; i < tags.length; i++) {
+      var t = tags[i];
+      var size = Math.round(Math.max(14, Math.min(26, 13 * t.sc)));
       ctx.font = '800 ' + size + 'px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      var w = ctx.measureText(t.r.name).width + 8, x0 = t.x - w * 0.5, y0 = t.y - 6 - size;
+      var clash = false;
+      for (var q = 0; q < boxes.length; q++) {
+        var bx = boxes[q];
+        if (x0 < bx.x + bx.w && x0 + w > bx.x && y0 < bx.y + bx.h && y0 + size + 4 > bx.y) { clash = true; break; }
+      }
+      if (clash) continue;
+      boxes.push({ x: x0, y: y0, w: w, h: size + 4 });
       ctx.lineWidth = 4;
       ctx.strokeStyle = 'rgba(4,2,10,0.85)';
-      ctx.strokeText(r.name, _p.x, _p.y - 6);
-      ctx.fillStyle = r.boss ? '#ffd76a' : '#eaf6ff';
-      ctx.fillText(r.name, _p.x, _p.y - 6);
-      ctx.textAlign = 'left';
+      ctx.strokeText(t.r.name, t.x, t.y - 6);
+      ctx.fillStyle = t.r.boss ? '#ffd76a' : '#eaf6ff';
+      ctx.fillText(t.r.name, t.x, t.y - 6);
     }
+    ctx.textAlign = 'left';
   }
 
   // For the minimap: where each rival is round the lap, 0..1.

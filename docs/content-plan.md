@@ -18,9 +18,9 @@ of that existed.
 | 1 | Foundations — the save file, the Title screen | Done |
 | 2 | Garage — 8 cars, real stats, colours, a WebGL preview | Done |
 | 3 | Currency & upgrades — Quick Play payouts, 4 upgrade systems | Done |
-| 4 | **Rivals** — AI cars on track, race position, bumping, pay by finishing place | Next |
-| 5 | **Story mode** — 10 cities, their events, unlocks, boss races, boss-car rewards, and a distinct look for every city | Planned |
-| 6 | **Tutorial** — a guided run that shows which side to press, how long to hold, and when to let go | Planned |
+| 4 | **Rivals** — AI cars on track, race position, bumping, pay by finishing place | Done |
+| 5 | **Story mode** — 10 cities, their events, unlocks, boss races, boss-car rewards, and a distinct look for every city | Done |
+| 6 | **Tutorial** — a guided run that shows which side to press, how long to hold, and when to let go | Next |
 | 7 | **New circuits** — Coastal Run, Underpass and the finale lap | Planned |
 | 8 | **Terrain** — hills and banking, visual only | Planned |
 | 9 | Balance & polish — difficulty measured per city with bots, payout tuning | Planned |
@@ -148,9 +148,21 @@ more interesting reward there. This adds five new boss-exclusive cars
 (Fender's, Riptide's, Foundry's, Glacier's, Undertow's) on top of Apex,
 bringing the eventual full roster to 13 — cheap to add, since each one
 reuses one of the three archetypes and just needs its own stats, blurb,
-colour and (per Stage 1's WebGL work) its own silhouette. Not built yet:
-these five don't have stats or a boss fight to award them in until Phase 5
-gives the game actual city races to win them from.
+colour and (per Stage 1's WebGL work) its own silhouette. All six are built
+(Phase 5). You can't buy them: the garage shows the boss to beat instead of
+a price.
+
+| Car | Archetype | From | Speed | Grip | Handling | Boost peak / hold |
+|---|---|---|---|---|---|---|
+| **Harbormaster** | Sport | Fender, Portside | 1.04 | 0.96 | 0.95 | 1.05 / 1.10 |
+| **Riptide** | Sport | Riptide, Coastal Run | 1.09 | 0.97 | 0.92 | 1.08 / 1.15 |
+| **Foundry** | Muscle | Foundry, Steel District | 1.17 | 1.05 | 1.00 | 1.00 / 1.10 |
+| **Glacier** | Compact | Glacier, High Pass | 1.07 | 0.84 | 0.90 | 1.10 / 1.15 |
+| **Undertow** | Sport | Undertow, The Underpass | 1.13 | 0.93 | 0.86 | 1.12 / 1.20 |
+| **Apex** | Sport | Apex, The Circuit | 1.16 | 0.88 | 0.85 | 1.20 / 1.20 |
+
+Each boss races in the car they hand over, so you've already seen what it
+can do before you get it.
 
 ## The upgrades
 
@@ -203,9 +215,19 @@ plan actually costs to build: 6 layouts total, not 30.
 
 ## The cities
 
-Each city runs 3-4 races: 1-2 AI races, 1-2 Time Attacks (Rush's engine —
-clock, gates, hazards — aimed at a target time instead of survival), and one
-boss race to open the next city.
+Each city runs 3-4 events: 1-2 races against the city's crew of three,
+1-2 Time Attacks, and one boss race. A Time Attack is you alone on the
+city's track, 2 or 3 laps, against a target time (simpler than the Rush
+engine first planned here, and it teaches the lines the boss will use).
+The boss stays locked until every other event in the city is cleared;
+beating the boss opens the next city. Every city has its own colours:
+sky, sun, ground, neon, walls, fog, and a skyline or mountain ridge on
+the horizon (`THEMES` in `src/story.js`).
+
+Until Phase 7 builds kits D, E and F, the cities that need them run on the
+closest existing track, recoloured: Old Quarter and The Underpass on
+Harbour Maze, Coastal Run and Skyline Ave on Velocity Ring, The Circuit on
+Grand Circuit.
 
 | # | City | Kit | Theme | Boss | Recommended spec | Reward |
 |---|---|---|---|---|---|---|
@@ -220,33 +242,58 @@ boss race to open the next city.
 | 9 | Skyline Ave | D (harder) | Bridge crossing, tallest skyline | Halo | NOS T2-3, Ironclad or Warbird | Cash |
 | 10 | The Circuit | F | Every theme, mixed | **Apex** | Best available car and upgrades | Apex's car |
 
-"Recommended spec" is guidance shown on the city map, not a hard lock —
-exact thresholds get tuned once AI opponents exist and we can actually
-measure a city's real difficulty (Phase 5), rather than guessed here.
+"Recommended spec" is guidance shown on the city screen, not a hard lock.
 
-## Currency, implemented in Quick Play
+**The difficulty curve (Phase 5, `curve` in `src/story.js`).** For city
+number d (0-9): the crew's middle car has skill 0.80 + 0.028·d, the boss
+0.88 + 0.03·d, and a Time Attack target is the track's target time ×
+(1.17 − 0.028·d), 1% tighter again over 3 laps. Measured with the
+racing-line bot, boosting on straights:
 
-AI races and boss races don't exist yet (Phase 4/5), so Quick Play — the
-only place currency can be earned today — pays out on a graded curve
-instead of the flat numbers first guessed here: better than the track's
-target time (or, for Rush, more distance) pays more, but a rough run is
-never worth zero, so a bad attempt still funds the next one.
+- **Stock Nightrunner** (no upgrades): beats the bosses of cities 1-6, by
+  13.7s down to 0.2s; loses cities 7-10. Passes Time Attacks through city
+  8. So the back half of the story needs a better car or upgrades, which
+  is the point.
+- **Maxed Nightrunner or maxed Warbird**: wins everything, beating Apex by
+  7.2s / 9.7s. Nothing in the story needs a specific car.
+
+The bot is a clean driver, not a perfect one; a human still drifts,
+hits walls and misses boosts, so these margins are an upper bound.
+
+## Currency
+
+Quick Play pays on a graded curve: better than the track's target time (or,
+for Rush, more distance) pays more, but a rough run is never worth zero, so
+a bad attempt still funds the next one. A race against rivals pays by
+finishing place instead.
 
 | Mode | Formula | Floor | Ceiling |
 |---|---|---|---|
-| Lap race | 80 × (target time ÷ your total) | 40 | 130 |
+| Race vs rivals | 120 / 90 / 70 / 50 by place | 50 | 120 |
+| Lap race, solo | 80 × (target time ÷ your total) | 40 | 130 |
 | Duel | 70 × (target time ÷ winner's total) | 35 | 110 |
 | Rush | 0.6 × distance (m) | 30 | 150 |
 
-"Target time" is each track's existing `targetSecs`, scaled to the mode's
-lap count. Once AI races and boss races exist (Phase 4/5), those get their
-own payout — likely close to the 80-120 / 250-400 first guessed here — and
-this table gets a row added, not replaced.
+Story pays more, and more in later cities (d = city number, 0-9):
+
+| Story event | Pays |
+|---|---|
+| Race | (60 + 12·d) × 1 / 0.75 / 0.55 / 0.4 by place, +50% the first time you clear it |
+| Time Attack | 50 + 10·d if you beat the target (+50% the first time), 30% of that if you miss |
+| Boss, car city | The car + (100 + 15·d) |
+| Boss, cash city | 300 + 45·d |
+| Boss, replayed | 90 + 15·d |
+| Boss, lost | 30 + 5·d |
+
+"Target time" is each track's existing `targetSecs`, scaled to the lap
+count.
 
 | Purchase | Cost |
 |---|---|
 | Upgrade tier | 22% / 30% / 40% of the car's price, per tier (see above) |
 | A new car | 500-2200, per the roster table above |
 
-First real numbers, expect these to move once Phase 5 makes a city's real
-difficulty measurable instead of guessed.
+Probably too generous: first-clear payouts alone add up to about 2,700 CR
+by the end of city 5 (7,000 over the whole story), more than the roughly
+2,200 CR it costs to max every system on a Nightrunner. To be checked with
+real play in Phase 9.

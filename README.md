@@ -36,7 +36,7 @@ touchscreen.
 
 ---
 
-## Current state: Milestone 3.0 — career mode, phase 0
+## Current state: Milestone 3.0 — career mode
 
 The game is growing from four standalone modes into a career: ten cities, a
 garage of cars, upgrades, and a story running through all of it. That's a big
@@ -162,6 +162,35 @@ tiers each, every car upgradable to the same max.
   selected to race: buying a tier only touches the shared physics state
   (`car.js`/`game.js`) immediately if you're upgrading the car you'd
   actually drive next.
+
+**Phase 4 — rivals.** Quick Play's RACE now has three AI cars on the grid
+([`src/rivals.js`](src/rivals.js)): VOLT, ONYX and SCARLET. They follow the
+racing line at a pace worked out per track, swing out through corners like
+they're drifting, pass each other on the roomier side, and bump you apart
+sideways (never into a wall). A rival that falls far behind gets a little
+help; one ahead of you never does. You see your place on screen, a
+standings table at the end, and you're paid by finishing place. Measured:
+a clean driver without boost finishes 2nd; with good boost use, 1st. The
+details are in
+[`docs/content-plan.md`](docs/content-plan.md#rivals).
+
+**Phase 5 — story mode.** The STORY door opens a map of ten cities
+([`src/story.js`](src/story.js)). Each city has 3-4 events: races against
+its crew of three, Time Attacks (you alone against a target time), and a
+boss race that stays locked until the rest of the city is cleared. Beat
+the boss and the next city opens; six bosses hand over their own car
+(five new boss-only cars plus Apex, 13 cars in all), the other four pay a
+big cash prize. Every city has its own colours and a skyline or mountain
+ridge on the horizon. Opponents get quicker and targets tighter city by
+city; measured with a bot, a stock Nightrunner gets through about six
+cities before it needs upgrades, and a maxed car wins everything. The
+curve, payouts and boss cars are in
+[`docs/content-plan.md`](docs/content-plan.md#the-cities).
+
+To test it: open the game, tap STORY, tap PORTSIDE, then the first event.
+Finish in the top 3 to clear it; clear the Time Attack; then FENDER's boss
+race unlocks. Beat Fender and the Harbormaster is in your garage and
+Sundown Strip is open on the map.
 
 ## Current state, before career mode: Milestone 2.5
 
@@ -784,13 +813,17 @@ actually playing. Geometry in code is the only kind of 3D that ships here.
 ## Files
 
 ```
-index.html      the page: one canvas, seven scripts
+index.html      the page: one canvas, the scripts below plus lib/three.min.js
 docs/content-plan.md   the map for career mode: cars, upgrades, circuits, cities
 src/save.js     the save file: currency, cars, upgrades, unlocks, best results
 style.css       stops the page scrolling, zooming or selecting text
 src/input.js    touch, mouse and keyboard  ->  one number: -1, 0 or +1
 src/road.js     the track, and how the road is drawn
 src/car.js      the drift physics and the car
+src/cars.js     the 13 cars, their stats, and the upgrade maths
+src/rivals.js   the AI cars: pace, lines, passing, bumping, standings
+src/story.js    the ten cities, their events, colours, pay and unlocks
+src/car3d.js    the lit WebGL car in the Garage
 src/ghost.js    records a run, and plays it back as a car that is not there
 src/fx.js       smoke, skid marks, screen shake, edge flash, crash sparks
 src/game.js     the loop, and the responsive fairness rule
