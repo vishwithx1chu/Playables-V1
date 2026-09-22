@@ -110,18 +110,99 @@
     return target.texture;
   }
 
-  // A rounded body via a lathe of small chamfer segments would look nicer
-  // than a box, but the placeholder proves the pipeline (lighting, paint,
-  // layout, perf) before the real per-archetype sculpting work. Real curved
-  // bodywork per archetype is the next step once the design direction for
-  // the actual cars is locked in.
+  // Every cross-section is a "squircle" — a superellipse, rounder than a
+  // rectangle and boxier than an ellipse — rather than a true rounded-rect
+  // with explicit corner arcs. One exponent gives a convincing rounded
+  // panel shape with far less code, and because every ring shares its
+  // vertices with its neighbours (both around the ring and along the car's
+  // length), Three's computeVertexNormals produces genuinely smooth,
+  // curved-looking shading — the thing a box, however well lit, can't do.
+  function squirclePoint(hw, midY, halfH, t) {
+    var ct = Math.cos(t), st = Math.sin(t);
+    var ex = Math.sign(ct) * Math.pow(Math.abs(ct), 0.55) * hw;
+    var ey = midY + Math.sign(st) * Math.pow(Math.abs(st), 0.55) * halfH;
+    return [ex, ey];
+  }
+
+  // sections: [{z, hw, y0, y1}, ...] from one end of the car to the other.
+  // Builds a capped loft: a ring of `segs` points per section, smoothly
+  // shaded, with a small fan closing off each end.
+  function loftGeometry(THREE, sections, segs) {
+    var positions = [], indices = [];
+    var rings = sections.map(function (s) {
+      var midY = (s.y0 + s.y1) * 0.5, halfH = (s.y1 - s.y0) * 0.5;
+      var base = positions.length / 3;
+      for (var i = 0; i < segs; i++) {
+        var t = (i / segs) * Math.PI * 2;
+        var p = squirclePoint(s.hw, midY, halfH, t);
+        positions.push(p[0], p[1], s.z);
+      }
+      return base;
+    });
+    for (var r = 0; r < rings.length - 1; r++) {
+      for (var i = 0; i < segs; i++) {
+        var i2 = (i + 1) % segs;
+        var a = rings[r] + i, b = rings[r] + i2, c = rings[r + 1] + i2, d = rings[r + 1] + i;
+        indices.push(a, b, d, b, c, d);
+      }
+    }
+    // End caps: a centre point per end, fanned to that ring.
+    function cap(ringIndex, z, flip) {
+      var centre = positions.length / 3;
+      positions.push(0, sections[ringIndex].y0 * 0.5 + sections[ringIndex].y1 * 0.5, z);
+      for (var i = 0; i < segs; i++) {
+        var i2 = (i + 1) % segs;
+        var a = rings[ringIndex] + i, b = rings[ringIndex] + i2;
+        if (flip) indices.push(centre, b, a); else indices.push(centre, a, b);
+      }
+    }
+    cap(0, sections[0].z, true);
+    cap(sections.length - 1, sections[sections.length - 1].z, false);
+
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  // One hand-authored silhouette (a sport coupe: low nose, cab-back
+  // greenhouse, short tail), reused for every archetype by scaling length,
+  // width and height — the same STOCK-times-multiplier idea car.js already
+  // uses for the physics, applied to geometry instead of numbers.
+  var BODY_SECTIONS = [
+    { z: 1.95, hw: 0.10, y0: 0.30, y1: 0.34 },
+    { z: 1.75, hw: 0.45, y0: 0.24, y1: 0.42 },
+    { z: 1.35, hw: 0.80, y0: 0.20, y1: 0.46 },
+    { z: 0.85, hw: 0.86, y0: 0.19, y1: 0.48 },
+    { z: 0.35, hw: 0.84, y0: 0.19, y1: 0.50 },
+    { z: -0.15, hw: 0.84, y0: 0.19, y1: 0.50 },
+    { z: -0.65, hw: 0.85, y0: 0.19, y1: 0.49 },
+    { z: -1.05, hw: 0.87, y0: 0.19, y1: 0.47 },
+    { z: -1.55, hw: 0.62, y0: 0.22, y1: 0.40 },
+    { z: -1.90, hw: 0.12, y0: 0.28, y1: 0.34 }
+  ];
+  var CABIN_SECTIONS = [
+    { z: 0.60, hw: 0.68, y0: 0.48, y1: 0.55 },
+    { z: 0.15, hw: 0.72, y0: 0.55, y1: 0.86 },
+    { z: -0.25, hw: 0.72, y0: 0.58, y1: 0.88 },
+    { z: -0.65, hw: 0.66, y0: 0.52, y1: 0.78 },
+    { z: -0.95, hw: 0.52, y0: 0.48, y1: 0.58 }
+  ];
+
+  function scaleSections(src, m) {
+    return src.map(function (s) {
+      return { z: s.z * m.l, hw: s.hw * m.w, y0: s.y0 * m.h, y1: s.y1 * m.h };
+    });
+  }
+
   function buildCar(archetype) {
     var THREE = window.THREE;
     while (carGroup.children.length) carGroup.remove(carGroup.children[0]);
     bodyMats.length = 0;
 
-    var m = archetype === 'compact' ? { l: 0.82, w: 0.95, h: 1.05 }
-          : archetype === 'muscle'  ? { l: 1.16, w: 1.1,  h: 0.9  }
+    var m = archetype === 'compact' ? { l: 0.80, w: 0.94, h: 1.10 }
+          : archetype === 'muscle'  ? { l: 1.18, w: 1.10, h: 0.90 }
           : { l: 1.0, w: 1.0, h: 1.0 };
 
     // Physical, not Standard: clearcoat is the difference between "flat
@@ -133,34 +214,45 @@
       clearcoat: 1.0, clearcoatRoughness: 0.06, envMapIntensity: 1.3
     });
     bodyMats.push(bodyMat);
-    var body = new THREE.Mesh(new THREE.BoxGeometry(1.78 * m.w, 0.5 * m.h, 3.7 * m.l), bodyMat);
-    body.position.y = 0.46 * m.h;
+    var body = new THREE.Mesh(loftGeometry(THREE, scaleSections(BODY_SECTIONS, m), 20), bodyMat);
     carGroup.add(body);
 
     var cabinMat = new THREE.MeshPhysicalMaterial({
       color: 0x0c0a16, metalness: 0.3, roughness: 0.05,
       clearcoat: 1.0, clearcoatRoughness: 0.05, envMapIntensity: 1.4
     });
-    var cabin = new THREE.Mesh(new THREE.BoxGeometry(1.32 * m.w, 0.42 * m.h, 1.62 * m.l), cabinMat);
-    cabin.position.set(0, 0.86 * m.h, 0.1);
+    var cabin = new THREE.Mesh(loftGeometry(THREE, scaleSections(CABIN_SECTIONS, m), 16), cabinMat);
     carGroup.add(cabin);
 
     var wheelMat = new THREE.MeshPhysicalMaterial({ color: 0x121216, metalness: 0.3, roughness: 0.7, envMapIntensity: 0.6 });
-    var wheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.28, 18);
-    var wx = 0.88 * m.w, wy = 0.34, wz = 1.2 * m.l;
+    var rimMat = new THREE.MeshPhysicalMaterial({ color: 0xb9c2d4, metalness: 0.9, roughness: 0.25, envMapIntensity: 1.2 });
+    var wheelGeo = new THREE.CylinderGeometry(0.24, 0.24, 0.22, 20);
+    var rimGeo = new THREE.CylinderGeometry(0.14, 0.14, 0.24, 6);
+    var wx = 0.78 * m.w, wy = 0.24 * m.h, wz = 1.25 * m.l;
     [[-wx, wy, wz], [wx, wy, wz], [-wx, wy, -wz], [wx, wy, -wz]].forEach(function (p) {
       var w = new THREE.Mesh(wheelGeo, wheelMat);
       w.rotation.z = Math.PI / 2;
       w.position.set(p[0], p[1], p[2]);
       carGroup.add(w);
+      var rim = new THREE.Mesh(rimGeo, rimMat);
+      rim.rotation.z = Math.PI / 2;
+      rim.position.set(p[0], p[1], p[2]);
+      carGroup.add(rim);
     });
 
     var lampMat = new THREE.MeshStandardMaterial({ color: 0xfff3c2, emissive: 0xffdd88, emissiveIntensity: 1.4 });
-    var lampGeo = new THREE.BoxGeometry(0.3 * m.w, 0.12, 0.06);
-    [[-0.55 * m.w, 0.5 * m.h, 1.85 * m.l], [0.55 * m.w, 0.5 * m.h, 1.85 * m.l]].forEach(function (p) {
+    var lampGeo = new THREE.BoxGeometry(0.28 * m.w, 0.10 * m.h, 0.06);
+    [[-0.5 * m.w, 0.40 * m.h, 1.78 * m.l], [0.5 * m.w, 0.40 * m.h, 1.78 * m.l]].forEach(function (p) {
       var lp = new THREE.Mesh(lampGeo, lampMat);
       lp.position.set(p[0], p[1], p[2]);
       carGroup.add(lp);
+    });
+    var tailMat = new THREE.MeshStandardMaterial({ color: 0xff3b3b, emissive: 0xff2020, emissiveIntensity: 1.6 });
+    var tailGeo = new THREE.BoxGeometry(0.22 * m.w, 0.10 * m.h, 0.05);
+    [[-0.45 * m.w, 0.36 * m.h, -1.86 * m.l], [0.45 * m.w, 0.36 * m.h, -1.86 * m.l]].forEach(function (p) {
+      var tl = new THREE.Mesh(tailGeo, tailMat);
+      tl.position.set(p[0], p[1], p[2]);
+      carGroup.add(tl);
     });
 
     curArchetype = archetype;
