@@ -4,21 +4,28 @@
    (the same one Practice paints on the road) at a speed worked out ahead of
    time for each track, and their bodies swing out through corners by the
    same angle a player's car would need to make that turn. So they look like
-   they're drifting, and they arrive where a real drift would put them, but
-   they can't spin out, hit a wall, or get stuck.
+   they're drifting, and they arrive where a real drift would put them.
 
-   Why not simulate them properly: a physics car that can make mistakes has
-   to be taught how to recover from them, and every one of those recoveries
-   is a new way for a race to feel random. A rival on rails with a
-   well-shaped speed profile is predictable in the good sense — you can
-   learn where it's quick and where it isn't, which is the whole point of a
-   rival.
+   What makes a race a race, on top of that:
+   - Boost. Each rival fills a meter (faster through corners, like a drift
+     does for you) and fires it on a straight, with the same flame you get.
+   - Slipstream. Any car tucked in close behind another is pulled along a
+     little faster. That goes for you too, so a pass is something you can
+     set up, and a rival you've just passed can hang on and come back.
+   - Comeback pace. A rival that falls well behind you drives a little
+     harder until it's back in the fight. Only ever one way: a rival AHEAD
+     of you never gets help, so beating one always means actually being
+     faster than it.
+   - Mistakes. Now and then a rival runs wide out of a corner and loses a
+     moment: a chance to pounce.
+   - Defending. A rival with you right on its bumper moves across to cover
+     the inside.
+   - Contact. Cars are solid, both ways round: see contact() below.
 
    Pace: a rival with skill 1.0 laps in exactly the track's target time (the
-   same targetSecs shown on the track card). 0.9 is ten percent slower. The
-   speed profile is normalised so the lap average comes out right however
-   it's shaped — quick on straights, slower into corners, a short burst on
-   the way out of them. */
+   same targetSecs shown on the track card) before boost and slipstream,
+   which it earns on top. 0.9 is ten percent slower. The speed profile is
+   normalised so the lap average comes out right however it's shaped. */
 
 (function (DR) {
   'use strict';
@@ -26,17 +33,33 @@
   var MOD_STRAIGHT = 1.08;    // relative pace on a straight...
   var MOD_TIGHT    = 0.90;    // ...and in the tightest corner, before normalising
   var BRAKE_LEAD   = 180;     // start easing off this far before a corner bites
-  var BURST        = 0.10;    // extra pace coming out of a corner, like a boost
+  var BURST        = 0.10;    // extra pace coming out of a corner
   var BURST_LEN    = 520;     // ...for this far down the straight
   var LANE_TAU     = 0.42;    // how quickly a rival changes lane
   var SLIP_TAU     = 0.22;    // how quickly its body swings out
   var PASS_LOOK    = 340;     // how far ahead it looks for a car to go round
   var PASS_GAP     = 26;      // side-by-side clearance it aims for
   var EDGE_MARGIN  = 12;      // how close to the barrier it will run
-  var CATCHUP_GAP  = 1400;    // a rival this far behind you...
-  var CATCHUP_MAX  = 0.04;    // ...gets up to this much extra pace
+  var CATCHUP_GAP  = 600;     // a rival this far behind you...
+  var CATCHUP_RAMP = 10000;   // ...gets extra pace growing over this distance...
+  var CATCHUP_MAX  = 0.08;    // ...up to this much
   var MIN_R        = 504;     // the stock car's tightest circle, for the drift angle
   var SLIP_LIMIT   = 52 * Math.PI / 180;
+
+  // Boost: the same shape as yours, a touch softer.
+  var RB_PEAK = 1.30, RB_STEP = 1.12;
+  var RB_HOLD = 0.9, RB_DROP = 0.8, RB_FADE = 2.0;
+  var RB_FILL = 0.07;         // meter per second on a straight...
+  var RB_FILL_CORNER = 0.07;  // ...plus this much more in a full corner
+  // Slipstream.
+  var DRAFT_NEAR = 40, DRAFT_FAR = 460, DRAFT_W = 70, DRAFT_GAIN = 0.06;
+  // Defending.
+  var BLOCK_NEAR = 60, BLOCK_FAR = 320, BLOCK = 0.35, BLOCK_BOSS = 0.55;
+  // Mistakes.
+  var MISTAKE_CHANCE = 0.3, MISTAKE_CHANCE_BOSS = 0.15, MISTAKE_T = 0.9;
+  // Contact.
+  var SPIN_T = 1.4;           // how long a spun rival is out of it
+  var SPIN_CLOSING = 40;      // closing speed a rear-quarter hit needs to spin a car
 
   var list = [];
   var profile = null, profileTrack = -1;
@@ -118,6 +141,10 @@
         s: g[0], d: g[1], v: 0, dd: 0,
         x: 0, y: 0, h: 0, slip: 0, bodyYaw: 0, roll: 0,
         slow: 1, bumpCool: 0,
+        meter: hash(i * 13 + 5) * 0.6, boostT: 1e9, boosts: 0,
+        draft: 1, kickD: 0,
+        wobT: 0, wobAmp: 0, spinT: 0, spinDir: 0, spins: 0,
+        mistLap: -99, mistS: -1, mistT: 0, mistDir: 0,
         finished: false, finishT: 0
       });
     }
@@ -139,6 +166,35 @@
     }
   }
 
+  function boostMult(r) {
+    var t = r.boostT;
+    if (t < RB_HOLD) return RB_PEAK;
+    t -= RB_HOLD;
+    if (t < RB_DROP) return RB_PEAK + (RB_STEP - RB_PEAK) * (t / RB_DROP);
+    t -= RB_DROP;
+    if (t < RB_FADE) return RB_STEP + (1 - RB_STEP) * (t / RB_FADE);
+    return 1;
+  }
+
+  // How much a car at (s, d) is pulled along by whatever it's tucked in
+  // behind. `self` is left out, so a rival doesn't draft itself.
+  function draftAt(s, d, self, playerS, playerDev) {
+    var best = 0, i, o, ds;
+    function consider(os, od) {
+      ds = os - s;
+      if (ds < DRAFT_NEAR || ds > DRAFT_FAR || Math.abs(od - d) > DRAFT_W) return;
+      var f = 1 - (ds - DRAFT_NEAR) / (DRAFT_FAR - DRAFT_NEAR);
+      if (f > best) best = f;
+    }
+    for (i = 0; i < list.length; i++) {
+      o = list[i];
+      if (o === self || o.spinT > 0) continue;
+      consider(o.s, o.d);
+    }
+    if (playerS !== undefined) consider(playerS, playerDev);
+    return 1 + DRAFT_GAIN * best;
+  }
+
   /* ctx: { playerS, playerDev, playerHW, playerDone, clock, finishS } */
   function update(dt, ctx) {
     if (!list.length) return;
@@ -146,20 +202,52 @@
     var pace = DR.Road.tracks()[DR.Road.currentTrack()].pace;
     var L = DR.Road.lapLength();
     var i, j, r;
+    var kd = Math.exp(-dt / 0.25);
 
     for (i = 0; i < list.length; i++) {
       r = list[i];
       var idx = profIndex(r.s);
       var lapNo = Math.floor((r.s - DR.Road.INTRO_LEN) / L);
       var jitter = 1 + (hash(r.id * 31 + lapNo * 7 + 3) - 0.5) * 0.03;
-      var v = pace * r.skill * P.mod[idx] * jitter * r.slow;
+
+      // Boost: fill, and fire it down a straight.
+      var kHere = Math.abs(DR.Road.centreAt(r.s, _c).k);
+      r.meter = Math.min(1, r.meter + dt * (RB_FILL + RB_FILL_CORNER * Math.min(1, kHere * 600)));
+      if (r.boostT < 1e9) r.boostT += dt;
+      if (r.meter >= 1 && r.spinT <= 0 && r.s > DR.Road.INTRO_LEN &&
+          DR.Road.dirAt(r.s + 60) === 0 && DR.Road.dirAt(r.s + 500) === 0) {
+        r.meter = 0; r.boostT = 0; r.boosts++;
+      }
+      var bm = boostMult(r);
+
+      // A mistake, now and then: once a lap at most, somewhere random.
+      if (lapNo !== r.mistLap) {
+        r.mistLap = lapNo;
+        var chance = r.boss ? MISTAKE_CHANCE_BOSS : MISTAKE_CHANCE;
+        r.mistS = hash(r.id * 17 + lapNo * 5 + 11) < chance
+          ? DR.Road.INTRO_LEN + (lapNo + 0.1 + 0.8 * hash(r.id * 7 + lapNo * 3)) * L : -1;
+      }
+      if (r.mistS > 0 && r.s >= r.mistS) {
+        r.mistS = -1; r.mistT = MISTAKE_T;
+        var dirHere = DR.Road.dirAt(r.s);
+        r.mistDir = dirHere ? -dirHere : (hash(r.id + lapNo) < 0.5 ? -1 : 1);
+      }
+      var mist = 1;
+      if (r.mistT > 0) { r.mistT = Math.max(0, r.mistT - dt); mist = 0.86; }
+
+      r.draft = draftAt(r.s, r.d, r, ctx.playerDone ? undefined : ctx.playerS, ctx.playerDev);
+      var v = pace * r.skill * P.mod[idx] * jitter * r.slow * bm * r.draft * mist;
       if (!ctx.playerDone) {
         var gap = ctx.playerS - r.s;
-        if (gap > CATCHUP_GAP) v *= 1 + Math.min(CATCHUP_MAX, (gap - CATCHUP_GAP) / 10000);
+        if (gap > CATCHUP_GAP) v *= 1 + Math.min(CATCHUP_MAX, (gap - CATCHUP_GAP) / CATCHUP_RAMP * CATCHUP_MAX * 6);
+      }
+      if (r.spinT > 0) {
+        r.spinT = Math.max(0, r.spinT - dt);
+        v *= 0.45 + 0.55 * (1 - r.spinT / SPIN_T);
       }
       r.v = v;
-      r.skin.boost = P.glow[idx] * 0.75;
-      if (r.slow < 1) r.slow = Math.min(1, r.slow + dt * 0.12);
+      r.skin.boost = Math.max(P.glow[idx] * 0.75, (bm - 1) / (RB_PEAK - 1));
+      if (r.slow < 1) r.slow = Math.min(1, r.slow + dt * 0.15);
       if (r.bumpCool > 0) r.bumpCool = Math.max(0, r.bumpCool - dt);
 
       // Where it wants to be across the road: on the line, nudged by its own
@@ -193,21 +281,44 @@
         if (leftOk && rightOk) want = Math.abs(left - want) < Math.abs(right - want) ? left : right;
         else if (leftOk) want = left;
         else if (rightOk) want = right;
+      } else if (!ctx.playerDone) {
+        // Nobody to get round: if you're right on its bumper, cover you.
+        var behind = r.s - ctx.playerS;
+        if (behind > BLOCK_NEAR && behind < BLOCK_FAR) {
+          want += (ctx.playerDev - want) * (r.boss ? BLOCK_BOSS : BLOCK);
+        }
       }
+      if (r.mistT > 0) want += r.mistDir * 90 * (r.mistT / MISTAKE_T);
       if (want > limit) want = limit;
       if (want < -limit) want = -limit;
 
-      var nd = r.d + (want - r.d) * (1 - Math.exp(-dt / LANE_TAU));
+      // A spinning car isn't steering; it just slides where it was knocked.
+      var nd = r.spinT > 0 ? r.d : r.d + (want - r.d) * (1 - Math.exp(-dt / LANE_TAU));
+      nd += r.kickD * dt;
+      r.kickD *= kd;
+      if (nd > limit + EDGE_MARGIN) { nd = limit + EDGE_MARGIN; scrape(r, 1); }
+      if (nd < -limit - EDGE_MARGIN) { nd = -limit - EDGE_MARGIN; scrape(r, -1); }
       r.dd = (nd - r.d) / dt;
       r.d = nd;
       r.s += v * dt;
 
       // The body swings out by the angle the stock car would need to hold
-      // this bend — so a rival drifts as hard as you would have to.
+      // this bend, plus any wobble or spin a knock has given it.
       DR.Road.centreAt(r.s + 60, _c);
       var sn = Math.max(-0.95, Math.min(0.95, _c.k * MIN_R * Math.sin(SLIP_LIMIT)));
       var slipT = Math.asin(sn);
-      r.slip += (slipT - r.slip) * (1 - Math.exp(-dt / SLIP_TAU));
+      if (r.wobT > 0) {
+        r.wobT = Math.max(0, r.wobT - dt);
+        slipT += r.wobAmp * Math.sin(r.wobT * 18) * (r.wobT / 0.6);
+      }
+      if (r.spinT > 0) {
+        // A big fishtail: round, and back.
+        var ph = 1 - r.spinT / SPIN_T;
+        slipT = r.spinDir * 1.5 * Math.sin(ph * Math.PI);
+        r.slip = slipT;
+      } else {
+        r.slip += (slipT - r.slip) * (1 - Math.exp(-dt / SLIP_TAU));
+      }
 
       if (!r.finished && r.s >= ctx.finishS) {
         r.finished = true;
@@ -219,96 +330,200 @@
     place();
   }
 
+  // Pushed into the barrier: sparks, and it costs speed.
+  function scrape(r, side) {
+    if (r.bumpCool > 0.3) return;
+    r.slow = Math.min(r.slow, 0.9);
+    r.kickD = 0;
+    DR.Road.centreAt(r.s, _c);
+    var nx = Math.cos(_c.h), ny = -Math.sin(_c.h);
+    if (DR.FX && DR.FX.wallSparks) {
+      DR.FX.wallSparks(r.x + nx * side * 30, r.y + ny * side * 30, nx * side, ny * side, 10, 0.8);
+    }
+    r.bumpCool = Math.max(r.bumpCool, 0.4);
+  }
+
   function laneLimit(r) {
     return Math.max(0, DR.Road.halfWidthAt(r.s) - DR.Car.halfWidthFor(r.arch, r.slip) - EDGE_MARGIN);
   }
 
-  /* Two rivals never occupy the same bit of road: if the steering didn't
-     open enough of a gap in time, they're eased apart sideways, half each —
-     unless one is already against the barrier, in which case the other one
-     takes the whole push. A few passes, because easing one pair apart can
-     nudge a car into a third. */
+  /* Contact. Cars are solid boxes on the road (length along it, width
+     across it), and an overlap is pushed out along whichever way is
+     shallower:
+     - SIDE by side: both are shoved apart sideways and knocked off line a
+       little. If one of them has the barrier right beside it, the other
+       one takes the whole push, and the pinned one scrapes the wall.
+     - NOSE to TAIL: the car behind is stopped dead against the one in
+       front and has to drop to its speed. You can't drive through a car,
+       and you can't drive through one that's defending either.
+     - A fast hit on a car's back corner spins it out. That works both ways
+       round: rivals can do it to you. */
+  function halfLen(arch) { return DR.Car.lengthFor(arch) * 0.45; }
+
   function separate() {
     for (var pass = 0; pass < 3; pass++) {
       var moved = false;
       for (var i = 0; i < list.length; i++) {
         for (var j = i + 1; j < list.length; j++) {
           var a = list[i], b = list[j];
-          if (Math.abs(a.s - b.s) > (DR.Car.lengthFor(a.arch) + DR.Car.lengthFor(b.arch)) * 0.45) continue;
+          var ox = halfLen(a.arch) + halfLen(b.arch) - Math.abs(a.s - b.s);
+          if (ox <= 0) continue;
           var need = DR.Car.halfWidthFor(a.arch, a.slip) + DR.Car.halfWidthFor(b.arch, b.slip) + 4;
           var gapD = b.d - a.d;
-          if (Math.abs(gapD) >= need) continue;
-          var dir = gapD >= 0 ? 1 : -1;
-          var over = need - Math.abs(gapD);
-          var la = laneLimit(a), lb = laneLimit(b);
-          // How far each can actually move away from the other.
-          var roomA = dir > 0 ? a.d + la : la - a.d;
-          var roomB = dir > 0 ? lb - b.d : b.d + lb;
-          var pa = Math.min(roomA, over * 0.5), pb = Math.min(roomB, over - pa);
-          pa = Math.min(roomA, over - pb);
-          a.d -= dir * pa; b.d += dir * pb;
+          var oy = need - Math.abs(gapD);
+          if (oy <= 0) continue;
           moved = true;
+          if (oy <= ox * 0.8) {
+            var dir = gapD >= 0 ? 1 : -1;
+            var la = laneLimit(a), lb = laneLimit(b);
+            var roomA = dir > 0 ? a.d + la : la - a.d;
+            var roomB = dir > 0 ? lb - b.d : b.d + lb;
+            var pa = Math.min(Math.max(0, roomA), oy * 0.5), pb = Math.min(Math.max(0, roomB), oy - pa);
+            pa = Math.min(Math.max(0, roomA), oy - pb);
+            a.d -= dir * pa; b.d += dir * pb;
+            if (pass === 0 && a.bumpCool <= 0 && b.bumpCool <= 0) {
+              a.kickD = -dir * 60; b.kickD = dir * 60;
+              wobble(a, 0.12); wobble(b, 0.12);
+              a.slow = Math.min(a.slow, 0.97); b.slow = Math.min(b.slow, 0.97);
+              a.bumpCool = b.bumpCool = 0.5;
+            }
+          } else {
+            // The one behind stops against the one in front.
+            var back = a.s < b.s ? a : b, front = back === a ? b : a;
+            back.s = front.s - (halfLen(a.arch) + halfLen(b.arch));
+            if (back.v > front.v) back.slow = Math.min(back.slow, (front.v / back.v) * 0.99 * back.slow);
+          }
         }
       }
       if (!moved) break;
     }
     for (var k = 0; k < list.length; k++) {
-      var lim = laneLimit(list[k]);
+      var lim = laneLimit(list[k]) + EDGE_MARGIN;
       if (list[k].d > lim) list[k].d = lim;
       if (list[k].d < -lim) list[k].d = -lim;
     }
   }
 
-  /* Rubbing with the player. Kept gentle on purpose: a bump costs a little
-     speed to whoever was behind and pushes both cars apart sideways, but it
-     can never cost a race the way a wall can. Returns what the game needs
-     to apply to the player, or null. */
-  var _hit = { shift: 0, playerBehind: false, fresh: false, x: 0, y: 0, side: 0 };
-  function contact(playerS, playerDev, playerHW, playerLen, playerLimit) {
-    var hitAny = false, dev = playerDev;
-    _hit.shift = 0; _hit.playerBehind = false; _hit.fresh = false;
+  function wobble(r, amp) {
+    if (r.spinT > 0) return;
+    r.wobAmp = r.wobT > 0 ? Math.max(r.wobAmp, amp) : amp;
+    r.wobT = 0.6;
+  }
+
+  function spin(r, dir) {
+    r.spinT = SPIN_T; r.spinDir = dir; r.spins++;
+    r.slow = Math.min(r.slow, 0.8);
+    r.boostT = 1e9;
+    if (DR.FX && DR.FX.labelAt) DR.FX.labelAt('SPUN OUT', '#ffd76a', r.x, r.y, 1.2);
+  }
+
+  /* Contact with the player. p: { s, dev, hw, len, limit, v } — where you
+     are, how wide and long your car is, how far you can move across before
+     the barrier, and how fast you're going. Returns what the game should do
+     to your car, or null:
+       shiftD  sideways shove        shiftS  pushed back along the road
+       cap     most of your current speed you can keep (1 = no loss)
+       knock   a shove to the body's angle (a rival hitting your back corner)
+       fresh   a new impact this frame (for sparks, shake, words)
+       kind    'side' | 'rear' (you ran into it) | 'rammed' (it ran into you)
+       severity 0..1, x/y where, side which side it was on */
+  var _hit = { shiftD: 0, shiftS: 0, cap: 1, knock: 0, fresh: false, kind: '', severity: 0,
+               x: 0, y: 0, side: 0, spun: null, pinned: false };
+  function contact(p) {
+    var hitAny = false, dev = p.dev, pullS = 0;
+    _hit.shiftD = 0; _hit.shiftS = 0; _hit.cap = 1; _hit.knock = 0; _hit.fresh = false;
+    _hit.kind = ''; _hit.severity = 0; _hit.spun = null; _hit.pinned = false;
+    var hlP = p.len * 0.45;
     // Two passes, with the rivals re-separated in between: shoving one
     // rival off you can push it into another, which pushes back into you.
     for (var pass = 0; pass < 2; pass++) {
+      var any = false;
       for (var i = 0; i < list.length; i++) {
         var r = list[i];
-        var ds = r.s - playerS;
-        var lenR = DR.Car.lengthFor(r.arch);
-        if (Math.abs(ds) > (lenR + playerLen) * 0.45) continue;
+        var ds = r.s - (p.s + pullS);
+        var hlR = halfLen(r.arch);
+        var ox = hlR + hlP - Math.abs(ds);
+        if (ox <= 0) continue;
         var hwR = DR.Car.halfWidthFor(r.arch, r.slip);
         var dd = r.d - dev;
-        var need = hwR + playerHW;
-        if (Math.abs(dd) >= need) continue;
-        var overlap = need - Math.abs(dd);
-        var side = dd >= 0 ? 1 : -1;          // rival is to the player's right
-        // Split the overlap: half each, so neither car is a wall — and if
-        // one of the two is already at the barrier, the other moves instead.
-        var rlim = laneLimit(r);
-        var roomR = side > 0 ? rlim - r.d : r.d + rlim;
-        var roomP = side > 0 ? dev + playerLimit : playerLimit - dev;
-        var pr = Math.min(Math.max(0, roomR), overlap * 0.5);
-        var pp = Math.min(Math.max(0, roomP), overlap - pr);
-        pr = Math.min(Math.max(0, roomR), overlap - pp);
-        r.d += side * pr;
-        dev -= side * pp;
+        var oy = hwR + p.hw - Math.abs(dd);
+        if (oy <= 0) continue;
+        any = hitAny = true;
+        var side = dd >= 0 ? 1 : -1;          // the rival is on your right
+        var fresh = r.bumpCool <= 0;
+        var closing = p.v - r.v;              // + you're catching it
         _hit.side = side;
-        if (r.bumpCool <= 0) {
-          r.bumpCool = 0.6;
-          _hit.fresh = true;
-          if (ds > 0) _hit.playerBehind = true;
-          else r.slow = Math.min(r.slow, 0.93);
-          _hit.x = (r.x + DR.Car.x) * 0.5;
-          _hit.y = (r.y + DR.Car.y) * 0.5;
+        _hit.x = (r.x + DR.Car.x) * 0.5;
+        _hit.y = (r.y + DR.Car.y) * 0.5;
+
+        if (oy <= ox * 0.8) {
+          // Side by side: split the shove, unless one of you is on the wall.
+          var rlim = laneLimit(r) + EDGE_MARGIN;
+          var roomR = side > 0 ? rlim - r.d : r.d + rlim;
+          var roomP = side > 0 ? dev + p.limit : p.limit - dev;
+          var pr = Math.min(Math.max(0, roomR), oy * 0.5);
+          var pp = Math.min(Math.max(0, roomP), oy - pr);
+          pr = Math.min(Math.max(0, roomR), oy - pp);
+          r.d += side * pr;
+          dev -= side * pp;
+          if (pr + pp < oy - 0.5) _hit.pinned = true;
+          if (roomR <= 0.5 && fresh) scrape(r, side);
+          if (fresh) {
+            var sev = Math.min(1, oy / 24 + Math.abs(closing) / 300);
+            _hit.kind = 'side'; _hit.fresh = true;
+            _hit.severity = Math.max(_hit.severity, sev);
+            r.bumpCool = 0.5;
+            if (ds > hlR * 0.35 && closing > SPIN_CLOSING) {
+              // Your nose into its back corner, faster than it: it goes round.
+              spin(r, -side);
+              _hit.spun = r.name;
+              _hit.cap = Math.min(_hit.cap, 0.94);
+            } else if (ds < -hlP * 0.35 && -closing > SPIN_CLOSING) {
+              // Its nose into YOUR back corner: you get knocked sideways.
+              _hit.knock = side * 0.42;
+              _hit.cap = Math.min(_hit.cap, 0.88);
+              r.slow = Math.min(r.slow, 0.95);
+            } else {
+              r.kickD = side * 110 * sev;
+              wobble(r, 0.1 + 0.15 * sev);
+              r.slow = Math.min(r.slow, 0.97);
+              _hit.cap = Math.min(_hit.cap, 0.97);
+            }
+          }
+        } else if (ds > 0) {
+          // You've run into the back of it. You stop against it, and you
+          // can't keep more speed than it has.
+          pullS -= ox;
+          if (closing > 0) _hit.cap = Math.min(_hit.cap, (r.v / Math.max(1, p.v)) * 0.97);
+          r.s += 2;                            // a little shove forward
+          if (fresh) {
+            _hit.kind = 'rear'; _hit.fresh = true;
+            _hit.severity = Math.max(_hit.severity, Math.min(1, 0.25 + Math.max(0, closing) / 250));
+            wobble(r, 0.08);
+            r.bumpCool = 0.5;
+          }
+        } else {
+          // It's run into the back of you: it stops against you.
+          r.s = p.s + pullS - (hlR + hlP);
+          if (r.v > p.v) r.slow = Math.min(r.slow, (p.v / Math.max(1, r.v)) * 0.97 * r.slow);
+          if (fresh) {
+            _hit.kind = 'rammed'; _hit.fresh = true;
+            _hit.severity = Math.max(_hit.severity, Math.min(1, 0.2 + Math.max(0, -closing) / 250));
+            r.bumpCool = 0.5;
+          }
         }
-        hitAny = true;
       }
-      if (!hitAny) break;
+      if (!any) break;
       separate();
     }
-    _hit.shift = dev - playerDev;
+    _hit.shiftD = dev - p.dev;
+    _hit.shiftS = pullS;
     if (hitAny) place();
     return hitAny ? _hit : null;
   }
+
+  // Your slipstream: how much the cars ahead of you are pulling you along.
+  function draftFor(playerS, playerDev) { return draftAt(playerS, playerDev, null); }
 
   /* Where the player stands right now. Anyone who has finished ranks by
      when; everyone still out there ranks by how far round they are. */
@@ -408,7 +623,7 @@
   }
 
   DR.Rivals = {
-    start: start, clear: clear, all: all, update: update, contact: contact,
+    start: start, clear: clear, all: all, update: update, contact: contact, draftFor: draftFor,
     position: position, standings: standings, draw: draw, lapFractions: lapFractions,
     profileFor: function (t) { return buildProfile(t); }
   };

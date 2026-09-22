@@ -236,11 +236,20 @@
   ];
 
   // ---- The difficulty curve, in one place ------------------------------
-  function crewSkill(d)  { return 0.80 + 0.028 * d; }    // middle of the field
-  function bossSkill(d)  { return 0.88 + 0.030 * d; }    // city 1 .88, city 10 1.15
-  // Time attack: the target is the track's own target lap time, times the
-  // lap count, times this — generous in city 1, beyond a stock car by 10.
-  function timeFactor(d, laps) { return (1.17 - 0.028 * d) * (laps >= 3 ? 0.99 : 1); }
+  /* Each city asks for a car of a certain speed. Written as a table, not a
+     formula, because the steps aren't even: the first city is a warm-up
+     the starter car wins, the second is a real fight, and from the third
+     on each city needs roughly one more round of upgrades (or a better
+     car) than the last. Numbers are the boss's skill; 1.0 laps in the
+     track's target time before boost and slipstream. Measured against the
+     racing-line bot in docs/content-plan.md. */
+  var BOSS_SKILL = [0.93, 0.99, 1.05, 1.08, 1.11, 1.14, 1.16, 1.175, 1.18, 1.16];
+  function bossSkill(d)  { return BOSS_SKILL[Math.max(0, Math.min(9, d))]; }
+  function crewSkill(d)  { return bossSkill(d) - 0.08; }  // middle of the field
+  // Time attack: asks for about what the crew races do. A stock car laps a
+  // little under the target time with good boost use, so the target is the
+  // track's target lap scaled by how much faster than stock the city wants.
+  function timeFactor(d, laps) { return 0.98 / (bossSkill(d) - 0.05) * (laps >= 3 ? 0.995 : 1); }
 
   // ---- Payouts ----------------------------------------------------------
   function racePay(d)  { return 60 + 12 * d; }

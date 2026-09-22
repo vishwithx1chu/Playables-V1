@@ -222,6 +222,23 @@ never moves on screen. Details in
 To test it: race Coastal Run or High Pass and watch the road ahead rise
 and dip; lap times are unchanged.
 
+**After the first playtest.** Four fixes from real play:
+- **Harder, with upgrades that matter.** The starter car now wins cities
+  1-2 and loses city 3. Each city after needs about one more round of
+  upgrades, and the finale needs a better car fully upgraded. Measured
+  per city in [`docs/content-plan.md`](docs/content-plan.md#the-cities).
+- **Rivals boost**, with the same flame you get, about every 10 seconds.
+- **More action.** Slipstream for everyone (SLIPSTREAM shows when you're
+  being towed), comeback pace for rivals you've dropped, the odd rival
+  mistake, and rivals that defend when you're on their bumper.
+- **Real contact.** You can't drive through a car any more: run into one's
+  back and you stop against it at its speed. Side hits shove both cars
+  and can pin a rival into the wall. A fast hit on a back corner spins a
+  car out (TAKEDOWN!), and rivals can do it to you (KNOCKED).
+
+To test it: Quick Play → Race → Velocity Ring. Sit behind a rival to feel
+the slipstream, then try to pass. Hitting its back corner spins it.
+
 ## Current state, before career mode: Milestone 2.5
 
 Four modes, picked from the screen the game opens on:

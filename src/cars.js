@@ -127,7 +127,7 @@
     speedMult: 1.30, gripMult: 0.75, tauMult: 0.68,
     boostPeakMult: 1.35, boostHoldMult: 1.35
   };
-  var TIER_FRACTION = [0, 0.30, 0.55, 0.75];
+  var TIER_FRACTION = [0, 0.25, 0.45, 0.62];
   var MAX_TIER = 3;
 
   // system -> which stat field(s) it converges, and the label/cost bucket

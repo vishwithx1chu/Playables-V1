@@ -120,9 +120,9 @@
      from a stock car, less so from an upgraded one. That gap closing as you
      upgrade is the point of upgrading. */
   var QUICK_RIVALS = [
-    { name: 'VOLT',    color: '#22e6ff', arch: 'compact', skill: 0.86, bias: -30 },
-    { name: 'ONYX',    color: '#8b3dff', arch: 'sport',   skill: 0.91, bias:  30 },
-    { name: 'SCARLET', color: '#ff2f8e', arch: 'muscle',  skill: 0.96, bias:   0 }
+    { name: 'VOLT',    color: '#22e6ff', arch: 'compact', skill: 0.90, bias: -30 },
+    { name: 'ONYX',    color: '#8b3dff', arch: 'sport',   skill: 0.95, bias:  30 },
+    { name: 'SCARLET', color: '#ff2f8e', arch: 'muscle',  skill: 1.00, bias:   0 }
   ];
   var POS_PAY = [120, 90, 70, 50];     // Quick Play race payout by finishing place
   var raceClock = 0;      // seconds since the lights, shared by every car
@@ -256,6 +256,7 @@
   var last = 0, acc = 0;
   var hintAlpha = 1;
   var hitCool = 0;
+  var draftMult = 1;          // slipstream: > 1 while tucked in behind a rival
   var wallHitCount = 0;       // every wall hit this run; the tutorial grades on it
   var lastWallSide = 0;       // and which side of the road the last one was on
   var lap = 1, lapFlash = 0;
@@ -304,7 +305,7 @@
 
   function currentSpeed() {
     var pace = mode === 'tutorial' ? DR.Tutorial.pace() : 1;
-    return BASE_SPEED * pace * boostMult() * hitPenalty * slipDrag() * spikeMult();
+    return BASE_SPEED * pace * boostMult() * hitPenalty * slipDrag() * spikeMult() * draftMult;
   }
 
   // Where the next gate is, in world arc length.
@@ -459,6 +460,9 @@
     if (mode === 'duel') updateDuel(dt);
 
     if (hitPenalty < 1) hitPenalty = Math.min(1, hitPenalty + HIT_RECOVER_PER_SEC * dt);
+    // Slipstream: tucked in behind a rival, you're pulled along too.
+    var draftWant = raceRivals ? DR.Rivals.draftFor(DR.Car.roadS, DR.Car.dev) : 1;
+    draftMult += (draftWant - draftMult) * (1 - Math.exp(-dt / 0.35));
     var speed = currentSpeed();
     // Eased off with the boost rather than switched off at the end of it, so
     // there is no moment where the car suddenly stops squaring up.
@@ -552,20 +556,32 @@
     // Pushed sideways along the road, but never INTO the barrier: being
     // leaned on by a rival shouldn't be able to cost you a wall hit too.
     var limit = Math.max(0, DR.Road.halfWidthAt(DR.Car.roadS) - DR.Car.halfWidth() - 2);
-    var hit = DR.Rivals.contact(DR.Car.roadS, DR.Car.dev, DR.Car.halfWidth(), DR.Car.L, limit);
+    var speedNow = currentSpeed();
+    var hit = DR.Rivals.contact({ s: DR.Car.roadS, dev: DR.Car.dev, hw: DR.Car.halfWidth(),
+                                  len: DR.Car.L, limit: limit, v: speedNow });
     if (!hit) return;
     var c = DR.Road.centreAt(DR.Car.roadS);
-    var nx = Math.cos(c.h), ny = -Math.sin(c.h);
-    var nd = Math.max(-limit, Math.min(limit, DR.Car.dev + hit.shift));
+    var nx = Math.cos(c.h), ny = -Math.sin(c.h);      // across the road, to the right
+    var fx = Math.sin(c.h), fy = Math.cos(c.h);       // along it
+    var nd = Math.max(-limit, Math.min(limit, DR.Car.dev + hit.shiftD));
     var shift = nd - DR.Car.dev;
-    DR.Car.x += nx * shift; DR.Car.y += ny * shift;
+    DR.Car.x += nx * shift + fx * hit.shiftS;
+    DR.Car.y += ny * shift + fy * hit.shiftS;
     DR.Car.dev = nd;
+    // Contact costs speed: running into the back of a car drops you to its
+    // pace, a rub costs a little, a knock costs more.
+    if (hit.cap < 1) hitPenalty = Math.max(HIT_FLOOR, Math.min(hitPenalty, hit.cap * hitPenalty));
+    if (hit.pinned && hit.fresh) hitPenalty = Math.max(HIT_FLOOR, Math.min(hitPenalty, 0.97 * hitPenalty));
+    if (hit.knock) DR.Car.nudgeBody(hit.knock);
     if (hit.fresh) {
-      DR.Car.jolt(-hit.side * 2.2);
-      DR.FX.wallSparks(hit.x, hit.y, -nx * hit.side, -ny * hit.side, 10, 0.7);
+      var sev = hit.severity;
+      DR.Car.jolt(-hit.side * (1.5 + sev * 3));
+      DR.FX.wallSparks(hit.x, hit.y, -nx * hit.side, -ny * hit.side, 8 + Math.round(sev * 14), 0.6 + sev * 0.6);
+      DR.FX.shakeBy(3 + sev * 9, 0.25);
       bumpFlash = 1;
-      // Running into the back of someone costs you; being run into doesn't.
-      if (hit.playerBehind) hitPenalty = Math.max(HIT_FLOOR, hitPenalty * 0.95);
+      if (hit.knock) DR.FX.hazardHit('KNOCKED', '#ff8a5c', sev, DR.Car);
+      else if (hit.spun) DR.FX.hazardHit('TAKEDOWN!', '#ffd76a', sev, DR.Car);
+      else if (hit.kind === 'rear' && sev > 0.45) DR.FX.hazardHit('BLOCKED', '#eaf2ff', sev, DR.Car);
     }
   }
 
@@ -2020,7 +2036,7 @@
     // happened to leave the physics constants set to.
     DR.Cars.applyToCar(DR.Save.selectedCar());
     DR.Car.reset(); DR.FX.reset();
-    camReady = false; hitCool = 0; wallHitCount = 0;
+    camReady = false; hitCool = 0; wallHitCount = 0; draftMult = 1;
     lap = 1; lapFlash = 0; boostT = 1e9;
     lapTimer = 0; timing = false; lapTimes.length = 0;
     hitPenalty = 1; meter = 0.55; driftTime = 0; pickPop = 0; boostDenied = 0;
@@ -2106,6 +2122,16 @@
     ctx2.strokeText(txt, cx2, 130);
     ctx2.fillStyle = pos === 1 ? '#ffd76a' : '#eaf6ff';
     ctx2.fillText(txt, cx2, 130);
+    // Being towed along is worth knowing: it's what sets up a pass.
+    if (draftMult > 1.012) {
+      ctx2.globalAlpha = Math.min(1, (draftMult - 1.012) / 0.02);
+      ctx2.font = '800 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.lineWidth = 5;
+      ctx2.strokeText('\u00BB SLIPSTREAM \u00AB', cx2, 164);
+      ctx2.fillStyle = '#7ce4ff';
+      ctx2.fillText('\u00BB SLIPSTREAM \u00AB', cx2, 164);
+      ctx2.globalAlpha = 1;
+    }
     ctx2.textAlign = 'left';
   }
 
@@ -2687,6 +2713,7 @@
     applyCarTuning: applyCarTuning,
     speed: currentSpeed,
     hitPenalty: function () { return hitPenalty; },
+    draft: function () { return draftMult; },
     boostAmount: boostAmount,
     meter: function () { return meter; },
     setMeter: function (v) { meter = v; },

@@ -49,32 +49,36 @@ Rival cars (`src/rivals.js`) don't run the player's drift physics. They
 follow the racing line (the same one Practice paints) at a speed worked out
 for each track in advance, and their bodies swing out through corners by
 the angle a real car would need there, so they look like they're drifting.
-They can't spin, crash or get stuck, which makes them predictable in a
-useful way: you can learn where a rival is quick and where it isn't.
 
-- **Skill** is one number. 1.0 laps in exactly the track's target time
-  (the one on the track card); 0.9 is ten percent slower. Measured, not
-  just claimed: a skill-1.0 rival lapped Velocity Ring in 24.8–25.3s
-  against a 25s target, and a skill-0.9 rival 27.5s against 27.8s
-  expected. The small spread is deliberate: each lap gets a ±1.5% wobble,
-  so the running order can shift.
-- **Speed profile**: faster on straights, easing off before corners, and a
-  short burst out of each corner (with a visible exhaust flame). It's
-  scaled so the average over the lap lands exactly on the target.
-- **Traffic**: a rival that comes up behind a car goes round it on
-  whichever side has more room. Rivals never overlap each other; bumping
-  the player pushes both cars apart sideways and slows whoever ran into
-  the back of the other a little. A bump never pushes you into the wall.
-- **Catch-up, one direction only**: a rival more than about 1,400 units
-  behind you gets up to 4% extra pace, so races don't turn empty. A rival
-  ahead of you never gets help, so beating one always means actually
-  being faster than it.
+- **Skill** is one number. 1.0 laps in the track's target time before
+  boost and slipstream; 0.9 is ten percent slower. Measured: a skill-1.0
+  rival alone on Velocity Ring laps 23.97s against 25s, the difference
+  being its own boost.
+- **Boost.** Each rival fills a meter (faster in corners) and fires it on
+  a straight: peak 1.30x, the same shape as yours, with the same flame.
+  About one boost every 8-12 seconds.
+- **Slipstream, for everyone.** A car tucked in 40-460 units behind
+  another, within 70 across, is pulled along up to 6% faster. It shows as
+  SLIPSTREAM under your position. A rival you've just passed can hang on
+  and come back; you can do the same to them.
+- **Comeback pace, one way only.** A rival more than 600 behind you drives
+  up to 8% harder until it's back in the fight. A rival ahead of you never
+  gets help, so beating one means actually being faster.
+- **Mistakes and defending.** Now and then (30% of laps; bosses 15%) a
+  rival runs wide for a moment. A rival with you right on its bumper moves
+  across to cover you (bosses harder).
+- **Contact is solid.** Cars are boxes; an overlap is pushed out along
+  whichever way is shallower. Side by side, both get shoved apart and
+  knocked off line (and a car pinned against the barrier scrapes it).
+  Nose to tail, the car behind stops against the one in front and drops
+  to its speed: you can't drive through a car. A fast hit on a car's back
+  corner spins it out (TAKEDOWN!), and a rival can do the same to you
+  (KNOCKED).
 
-**Quick Play race:** three rivals, skill 0.86 / 0.91 / 0.96. Measured
-with the racing-line bot on a stock Nightrunner: without using boost it
-finishes 2nd on every track; using boost well, it wins every one. So a
-new player can beat the slowest rival and a good one can win. Pay by
-finishing place: 120 / 90 / 70 / 50.
+**Quick Play race:** three rivals, skill 0.90 / 0.95 / 1.00. Measured with
+an overtaking bot on a stock Nightrunner, using boost: 2nd, 2nd and 3rd
+on the three original tracks, with up to 18 changes of position in a race.
+Pay by finishing place: 120 / 90 / 70 / 50.
 
 ## Tutorial
 
@@ -315,21 +319,35 @@ beats the bosses of cities 1-6 and loses 7-10; maxed cars win all ten).
 
 "Recommended spec" is guidance shown on the city screen, not a hard lock.
 
-**The difficulty curve (Phase 5, `curve` in `src/story.js`).** For city
-number d (0-9): the crew's middle car has skill 0.80 + 0.028·d, the boss
-0.88 + 0.03·d, and a Time Attack target is the track's target time ×
-(1.17 − 0.028·d), 1% tighter again over 3 laps. Measured with the
-racing-line bot, boosting on straights:
+**The difficulty curve (`BOSS_SKILL` in `src/story.js`).** A table, one
+boss skill per city: 0.93, 0.99, 1.05, 1.08, 1.11, 1.14, 1.16, 1.175,
+1.18, 1.16 (the finale track is long and hard, so its number is lower). The
+crew's middle car is 0.08 below the boss, and a Time Attack target is the
+track's target lap x 0.98 / (boss skill - 0.05).
 
-- **Stock Nightrunner** (no upgrades): beats the bosses of cities 1-6, by
-  13.7s down to 0.2s; loses cities 7-10. Passes Time Attacks through city
-  8. So the back half of the story needs a better car or upgrades, which
-  is the point.
-- **Maxed Nightrunner or maxed Warbird**: wins everything, beating Apex by
-  7.2s / 9.7s. Nothing in the story needs a specific car.
+Rewritten after playtesting found a stock car could clear the story up to
+city 7 without an upgrade. Measured with a racing bot that overtakes and
+boosts on straights:
 
-The bot is a clean driver, not a perfect one; a human still drifts,
-hits walls and misses boosts, so these margins are an upper bound.
+| Car | Beats the bosses of |
+|---|---|
+| Stock Nightrunner | Cities 1-2 (city 3 lost by 7s) |
+| Nightrunner, all upgrades tier 1 | Cities 1-2 (city 3 lost by 1s) |
+| Nightrunner, all tier 2 | Cities 1-5 |
+| Nightrunner, all tier 3 | Cities 1-7 and 9; loses 8 by 0.2s and 10 by 1.4s |
+| Warbird or Undertow, all tier 3 | All ten (the finale by 0.7s / 1.2s) |
+
+Boss races end within a couple of seconds either way, because rivals
+fight back (boost, slipstream, comeback pace). The bot is a clean driver
+but not a perfect one, and a person who uses slipstream well will do
+better.
+
+**Why upgrades and better cars matter now.** Measured on Grand Circuit
+(3 laps, bot, boost): a fully upgraded Nightrunner is 26% faster than
+stock. Engine alone gives up to 18%, but it hits the walls without Tyres
+and Transmission to handle the speed. Upgrades now close less of the gap
+to the shared ceiling (tier 3 closes 62%, down from 75%), so a better car
+stays better once both are maxed. That's what wins the finale.
 
 ## Currency
 

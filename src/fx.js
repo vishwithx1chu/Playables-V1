@@ -155,6 +155,17 @@
     if (labels.length > 4) labels.shift();
   }
 
+  // A word over any spot on the road (a rival spinning out, say), and a
+  // shake that isn't tied to a wall.
+  function labelAt(text, color, x, y, dur) {
+    labels.push({ text: text, color: color, x: x, y: y, t: 0, dur: dur || 1.0 });
+    if (labels.length > 4) labels.shift();
+  }
+  function shakeBy(mag, dur) {
+    shake.mag = Math.max(shake.mag, mag);
+    shake.t = 0; shake.dur = dur || 0.3;
+  }
+
   function update(dt, carX, carY) {
     var i, p, dx, dy;
     shake.t += dt;
@@ -424,6 +435,7 @@
     drawFlash: drawFlash, drawLabels: drawLabels, drawSpeedLines: drawSpeedLines,
     drawBoostFx: drawBoostFx, drawBurst: drawBurst, drawSparks: drawSparks,
     wallSparks: wallSparks, wallHit: wallHit, wallHits: wallHits,
-    boostKick: boostKick, pickupBurst: pickupBurst
+    boostKick: boostKick, pickupBurst: pickupBurst,
+    labelAt: labelAt, shakeBy: shakeBy
   };
 })(window.DR = window.DR || {});
