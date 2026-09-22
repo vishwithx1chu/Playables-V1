@@ -29,7 +29,7 @@
   // Track indices into road.js. Until the three new circuits exist
   // (Coastal Run, Underpass, The Circuit), their cities run on the closest
   // existing layout in character — see the content plan's kit table.
-  var RING = 0, MAZE = 1, GRAND = 2;
+  var RING = 0, MAZE = 1, GRAND = 2, COAST = 3, UNDER = 4, FINALE = 5;
 
   /* Colours for each city, as overrides of road.js's DEFAULT_THEME. Only
      decoration changes; the road stays near-black and the edges stay a
@@ -181,12 +181,12 @@
       intro: 'Desert dusk and long straights. Mirage is never where you think.',
       spec: 'Alleycat, or Tyres tier 1.',
       events: [{ type: 'race', need: 3 }, { type: 'race', need: 2 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
-    { id: 'oldquarter', name: 'OLD QUARTER', track: MAZE, boss: 'CUTLASS', bossColor: '#ffcf6a', bossArch: 'compact',
+    { id: 'oldquarter', name: 'OLD QUARTER', track: UNDER, boss: 'CUTLASS', bossColor: '#ffcf6a', bossArch: 'compact',
       reward: { cash: true }, crew: ['COBBLE', 'LANTERN', 'ALLEY'],
       intro: 'Cobbles and sodium lamps. Cutlass knows every corner blind.',
       spec: 'A Compact car, or Tyres tier 2.',
       events: [{ type: 'race', need: 3 }, { type: 'time', laps: 2 }, { type: 'time', laps: 3 }, { type: 'boss' }] },
-    { id: 'coastal', name: 'COASTAL RUN', track: RING, boss: 'RIPTIDE', bossColor: '#1de9b6', bossArch: 'sport',
+    { id: 'coastal', name: 'COASTAL RUN', track: COAST, boss: 'RIPTIDE', bossColor: '#1de9b6', bossArch: 'sport',
       reward: { car: 'riptide' }, crew: ['SWELL', 'CURRENT', 'SPRAY'],
       intro: 'Cliffs, ocean, and a road that never stops curving.',
       spec: 'Engine tier 1.',
@@ -206,17 +206,17 @@
       intro: 'Mountain dusk, thin cold air. Glacier doesn’t slide. Ever.',
       spec: 'Engine tier 2 and a Muscle car.',
       events: [{ type: 'race', need: 2 }, { type: 'race', need: 1 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
-    { id: 'underpass', name: 'THE UNDERPASS', track: MAZE, boss: 'UNDERTOW', bossColor: '#2a5cff', bossArch: 'sport',
+    { id: 'underpass', name: 'THE UNDERPASS', track: UNDER, boss: 'UNDERTOW', bossColor: '#2a5cff', bossArch: 'sport',
       reward: { car: 'undertow' }, crew: ['DRAIN', 'ECHO', 'SLICK'],
       intro: 'Wet concrete under the city. Undertow pulls you under.',
       spec: 'Transmission tier 2-3.',
       events: [{ type: 'race', need: 1 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
-    { id: 'skyline', name: 'SKYLINE AVE', track: RING, boss: 'HALO', bossColor: '#ffd76a', bossArch: 'muscle',
+    { id: 'skyline', name: 'SKYLINE AVE', track: COAST, boss: 'HALO', bossColor: '#ffd76a', bossArch: 'muscle',
       reward: { cash: true }, crew: ['SPIRE', 'BEACON', 'AURA'],
       intro: 'The bridge, the tallest skyline, and Halo waiting at the top.',
       spec: 'NOS tier 2-3, Ironclad or Warbird.',
       events: [{ type: 'race', need: 1 }, { type: 'race', need: 1 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
-    { id: 'circuit', name: 'THE CIRCUIT', track: GRAND, boss: 'APEX', bossColor: '#ffd76a', bossArch: 'sport',
+    { id: 'circuit', name: 'THE CIRCUIT', track: FINALE, boss: 'APEX', bossColor: '#ffd76a', bossArch: 'sport',
       reward: { car: 'apex' }, crew: ['ACE', 'MAVERICK', 'LEGEND'],
       intro: 'Every city, one lap. Apex is the one everyone measures themselves against.',
       spec: 'Your best car, fully upgraded.',
@@ -392,12 +392,30 @@
 
   function themeFor(ci) { return THEMES[CITIES[ci].id] || null; }
 
+  /* Quick Play's circuits. The first three are always open; each story
+     circuit opens once Story reaches the first city that races on it, so
+     a new track is something you find, then get to practise. */
+  function trackCity(t) {
+    for (var i = 0; i < CITIES.length; i++) if (CITIES[i].track === t) return i;
+    return -1;
+  }
+  function trackUnlocked(t) {
+    if (t <= GRAND) return true;
+    var ci = trackCity(t);
+    return ci < 0 || cityUnlocked(ci);
+  }
+  function trackLockText(t) {
+    var ci = trackCity(t);
+    return ci < 0 ? '' : 'REACH ' + CITIES[ci].name + ' IN STORY';
+  }
+
   DR.Story = {
     cities: function () { return CITIES; },
     cityState: cityState, cityUnlocked: cityUnlocked, bossUnlocked: bossUnlocked,
     bossBeaten: bossBeaten, cleared: cleared, eventLocked: eventLocked,
     currentCity: currentCity, setup: setup, resolve: resolve, themeFor: themeFor,
     eventId: eventId, bossIndex: bossIndex,
+    trackUnlocked: trackUnlocked, trackLockText: trackLockText, trackCity: trackCity,
     // Exposed so tests and the balance pass can read the curve directly.
     curve: { crewSkill: crewSkill, bossSkill: bossSkill, timeFactor: timeFactor }
   };

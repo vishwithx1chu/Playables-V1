@@ -202,6 +202,16 @@ It pays 150 CR the first time and then sends you to Story. Details in
 
 To test it: on the title, tap TUTORIAL twice. Do what the screen says.
 
+**Phase 7 — new circuits.** Three new tracks in
+[`src/road.js`](src/road.js): **Coastal Run** (all long sweepers),
+**Underpass** (city blocks and a hairpin) and **The Circuit** (the finale,
+a piece of every other track). Five story cities moved onto them. In Quick
+Play the new tracks start locked, with a padlock and "REACH ... IN STORY",
+and open as Story gets there. The track screen now fits six compact cards.
+
+To test it: Quick Play → Race. The bottom three cards are locked on a new
+save. Clear Portside and Sundown Strip in Story and Underpass opens.
+
 ## Current state, before career mode: Milestone 2.5
 
 Four modes, picked from the screen the game opens on:

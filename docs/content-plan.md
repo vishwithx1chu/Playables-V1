@@ -21,8 +21,8 @@ of that existed.
 | 4 | **Rivals** — AI cars on track, race position, bumping, pay by finishing place | Done |
 | 5 | **Story mode** — 10 cities, their events, unlocks, boss races, boss-car rewards, and a distinct look for every city | Done |
 | 6 | **Tutorial** — a guided run that shows which side to press, how long to hold, and when to let go | Done |
-| 7 | **New circuits** — Coastal Run, Underpass and the finale lap | Next |
-| 8 | **Terrain** — hills and banking, visual only | Planned |
+| 7 | **New circuits** — Coastal Run, Underpass and the finale lap | Done |
+| 8 | **Terrain** — hills and banking, visual only | Next |
 | 9 | Balance & polish — difficulty measured per city with bots, payout tuning | Planned |
 
 **Why this order.**
@@ -245,9 +245,19 @@ plan actually costs to build: 6 layouts total, not 30.
 | **A** | Harbour Maze (exists) | Technical, barely a straight on it |
 | **B** | Velocity Ring (exists) | Fast, flowing, long sweepers |
 | **C** | Grand Circuit (exists) | Balanced — hairpin, esses, four big corners |
-| **D** | *New* — "Coastal Run" | Long cliffside curves, closer in character to B |
-| **E** | *New* — "Underpass" | Tight, urban, closer in character to A |
-| **F** | *New* — "The Circuit" (finale only) | One lap built from motifs of every city before it |
+| **D** | Coastal Run (Phase 7) | All sweepers, no hairpin: 11 corners, 64% of the lap turning, 30s |
+| **E** | Underpass (Phase 7) | City blocks: 90-degree corners, a chicane and a 170-degree hairpin, 30s |
+| **F** | The Circuit (Phase 7) | A piece of every circuit in story order: ring sweeper, maze esses, the hairpin, cliff curves, city blocks, 45s |
+
+The three new circuits follow the same rules as the first three (no corner
+tighter than the car can hold, a lap that closes, a length set by its target
+time), and the test suite checks all six. The rivals needed no retuning:
+skill 1.0 lapped each new track within 1% of its target time.
+
+**In Quick Play**, the first three circuits are always open. Each new one
+opens once Story reaches the first city that races on it (Underpass with
+Old Quarter, Coastal Run with Coastal Run, The Circuit with the finale).
+Until then its card is shown with a padlock and says which city opens it.
 
 ## The cities
 
@@ -260,10 +270,10 @@ beating the boss opens the next city. Every city has its own colours:
 sky, sun, ground, neon, walls, fog, and a skyline or mountain ridge on
 the horizon (`THEMES` in `src/story.js`).
 
-Until Phase 7 builds kits D, E and F, the cities that need them run on the
-closest existing track, recoloured: Old Quarter and The Underpass on
-Harbour Maze, Coastal Run and Skyline Ave on Velocity Ring, The Circuit on
-Grand Circuit.
+Old Quarter and The Underpass race on Underpass, Coastal Run and Skyline
+Ave on Coastal Run, and The Circuit on its own finale lap. Re-measured with
+the bot after the move: the curve kept its shape (a stock Nightrunner still
+beats the bosses of cities 1-6 and loses 7-10; maxed cars win all ten).
 
 | # | City | Kit | Theme | Boss | Recommended spec | Reward |
 |---|---|---|---|---|---|---|

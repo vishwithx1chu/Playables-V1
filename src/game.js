@@ -951,7 +951,11 @@
     }
   }
 
-  function cardBox(i) { return { x: 64, y: 322 + i * 300, w: 592, h: 268 }; }
+  // Six circuits now, so the cards are compact: a small map on the left,
+  // name, character and target lap on the right.
+  var CARD_H = 146, CARD_PITCH = 160;
+  function cardBox(i) { return { x: 48, y: 244 + i * CARD_PITCH, w: 624, h: CARD_H }; }
+  function trackOpen(i) { return DR.Story.trackUnlocked(i); }
   // Centred on the screen rather than pinned to the top, so the list looks
   // deliberate whether it holds two modes or five.
   var MODE_H = 156, MODE_GAP = 30;
@@ -1544,6 +1548,17 @@
     ctx2.textAlign = 'left';
   }
 
+  // A locked card says so with a shape and words, never just by being dim.
+  function drawPadlock(ctx2, x, y) {
+    ctx2.lineWidth = 4;
+    ctx2.strokeStyle = '#ffb24d';
+    ctx2.beginPath();
+    ctx2.arc(x, y - 6, 11, Math.PI, 0);
+    ctx2.stroke();
+    ctx2.fillStyle = '#ffb24d';
+    ctx2.fillRect(x - 16, y - 6, 32, 24);
+  }
+
   function drawSelect(ctx2, v) {
     var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     var tracks = DR.Road.tracks(), i;
@@ -1561,37 +1576,43 @@
     ctx2.fillText(sub, v.W * 0.5, 212);
 
     for (i = 0; i < tracks.length; i++) {
-      var b = cardBox(i), on = i === selected;
+      var b = cardBox(i), on = i === selected, open = trackOpen(i);
+      ctx2.globalAlpha = open ? 1 : 0.55;
       ctx2.fillStyle = on ? 'rgba(34,120,150,0.28)' : 'rgba(10,8,24,0.55)';
       ctx2.fillRect(b.x, b.y, b.w, b.h);
       ctx2.lineWidth = on ? 3 : 1.5;
       ctx2.strokeStyle = on ? '#41e0ff' : 'rgba(150,196,225,0.35)';
       ctx2.strokeRect(b.x, b.y, b.w, b.h);
 
-      drawOutline(ctx2, { x: b.x + 14, y: b.y + 14, w: 240, h: 240 }, i, null, 2.5);
+      drawOutline(ctx2, { x: b.x + 10, y: b.y + 10, w: 126, h: 126 }, i, null, 2);
 
+      var tx = b.x + 152;
       ctx2.textAlign = 'left';
-      ctx2.font = '800 33px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
       ctx2.fillStyle = on ? '#eaf6ff' : 'rgba(226,240,250,0.8)';
-      ctx2.fillText(tracks[i].name, b.x + 274, b.y + 74);
+      fitText(ctx2, tracks[i].name, tx, b.y + 46, 300, 30, '800',
+              'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif');
 
-      ctx2.font = '700 20px ' + MONO;
+      // What a clean lap here is worth, so the circuits read as different
+      // lengths rather than just different shapes.
+      ctx2.font = '700 19px ' + MONO;
       ctx2.fillStyle = on ? '#7dffb0' : 'rgba(125,255,176,0.6)';
-      ctx2.fillText(tracks[i].tag, b.x + 274, b.y + 114);
-
-      // What a clean lap here is worth, so the three circuits read as three
-      // different lengths rather than three different shapes.
-      ctx2.font = '700 20px ' + MONO;
+      ctx2.fillText(tracks[i].tag, tx, b.y + 82);
       ctx2.fillStyle = on ? 'rgba(255,215,106,0.9)' : 'rgba(190,214,235,0.5)';
-      ctx2.fillText('TARGET LAP  ' + tracks[i].targetSecs + 's', b.x + 402, b.y + 114);
+      ctx2.fillText('TARGET ' + tracks[i].targetSecs + 's', tx + 150, b.y + 82);
 
-      ctx2.font = '500 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx2.fillStyle = 'rgba(180,206,226,0.85)';
-      ctx2.fillText(tracks[i].blurb, b.x + 274, b.y + 158);
+      ctx2.fillStyle = open ? 'rgba(180,206,226,0.85)' : '#ffb24d';
+      fitText(ctx2, open ? tracks[i].blurb : DR.Story.trackLockText(i), tx, b.y + 120, 450, 21, '600',
+              'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif');
 
-      ctx2.font = '700 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx2.fillStyle = on ? '#ffd76a' : 'rgba(190,214,235,0.5)';
-      ctx2.fillText(on ? 'TAP AGAIN TO RACE' : 'TAP TO SELECT', b.x + 274, b.y + 214);
+      ctx2.textAlign = 'right';
+      ctx2.font = '700 19px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      if (!open) {
+        drawPadlock(ctx2, b.x + b.w - 34, b.y + 40);
+      } else {
+        ctx2.fillStyle = on ? '#ffd76a' : 'rgba(190,214,235,0.5)';
+        ctx2.fillText(on ? 'TAP AGAIN \u25B8' : 'TAP', b.x + b.w - 18, b.y + 46);
+      }
+      ctx2.globalAlpha = 1;
     }
     drawControlsLine(ctx2, v, 1248);
     ctx2.textAlign = 'left';
@@ -1903,7 +1924,7 @@
       for (i = 0; i < DR.Road.tracks().length; i++) {
         b = cardBox(i);
         if (inBox(lx, ly, b)) {
-          if (selected === i) startRace(i);
+          if (selected === i) { if (trackOpen(i)) startRace(i); }
           else selected = i;
           return;
         }
@@ -2479,7 +2500,7 @@
         var n = DR.Road.tracks().length;
         selected = ((selected + st) % n + n) % n;
       }
-      if (confirm) startRace(selected);
+      if (confirm && trackOpen(selected)) startRace(selected);
     } else if (phase === 'garage') {
       if (st) garageStep(st);
       if (confirm) garageAction();
@@ -2723,6 +2744,7 @@
     storyEvent: function () { return storyEvent; },
     storyResult: function () { return storyResult; },
     doneSel: function () { return doneSel; },
+    selected: function () { return selected; },
     startTutorial: startTutorial,
     wallHits: function () { return wallHitCount; },
     garageReturn: function () { return garageReturn; },
