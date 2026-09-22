@@ -23,7 +23,7 @@ of that existed.
 | 6 | **Tutorial** — a guided run that shows which side to press, how long to hold, and when to let go | Done |
 | 7 | **New circuits** — Coastal Run, Underpass and the finale lap | Done |
 | 8 | **Terrain** — hills and banking, visual only | Done |
-| 9 | Balance & polish — difficulty measured per city with bots, payout tuning | Next |
+| 9 | Balance & polish — car rating, what each city needs, payout tuning, START OVER | Done |
 
 **Why this order.**
 
@@ -67,13 +67,22 @@ the angle a real car would need there, so they look like they're drifting.
 - **Mistakes and defending.** Now and then (30% of laps; bosses 15%) a
   rival runs wide for a moment. A rival with you right on its bumper moves
   across to cover you (bosses harder).
-- **Contact is solid.** Cars are boxes; an overlap is pushed out along
-  whichever way is shallower. Side by side, both get shoved apart and
-  knocked off line (and a car pinned against the barrier scrapes it).
-  Nose to tail, the car behind stops against the one in front and drops
-  to its speed: you can't drive through a car. A fast hit on a car's back
-  corner spins it out (TAKEDOWN!), and a rival can do the same to you
-  (KNOCKED).
+- **Contact is solid, and it cuts both ways.** Cars are boxes; an
+  overlap is pushed out along whichever way is shallower. You can't drive
+  through a car: run into its back and you stop against it. But the car
+  in front doesn't shrug it off either: its tail is knocked sideways away
+  from the side you hit, it fishtails, loses a little speed and stops
+  defending while it's shaken (about a second). Side by side, both get
+  shoved apart, and a car pinned against the barrier scrapes it. A fast
+  hit on a car's back corner spins it out (TAKEDOWN!), and a rival can do
+  the same to you (KNOCKED).
+- **How hard you hit.** Impact power is 1 for a plain bump, plus up to 0.9
+  on boost and up to 1.2 while drifting (your whole car is swinging
+  sideways into them, and that sideways speed adds to the shove).
+  Measured: a rear hit on boost throws the car ahead about 3x as far as a
+  plain bump, costs you one small speed loss instead of being held to its
+  pace, and you get through. A drift into a rival shoves it about 2.7x as
+  hard as a rub (SHUNT!). Drifting and boosting together can spin it.
 
 **Quick Play race:** three rivals, skill 0.90 / 0.95 / 1.00. Measured with
 an overtaking bot on a stock Nightrunner, using boost: 2nd, 2nd and 3rd
@@ -241,6 +250,24 @@ Four systems, three purchasable tiers each (tier 0 is stock), implemented in
 | **Transmission** (incl. steering) | `BUILD_TAU` / `DECAY_TAU` / `REVERSE_TAU` — handling |
 | **NOS** | boost peak and hold duration |
 
+**Car rating.** One number for how fast a car really is (`rating` in
+`src/cars.js`): 100 is a stock Nightrunner, 120 laps about 20% quicker.
+Fitted to measured laps (the racing bot, boosting, all three original
+tracks) across every car at several upgrade levels; it predicts all of
+them to within 2%. Speed is most of it, but speed the car can't handle is
+wasted: past what the Tyres and Transmission can hold, extra Engine counts
+for much less. So Tyres and Transmission show "HANDLING" in the Garage
+until there's speed for them to unlock, then a rating gain. Every upgrade
+button shows what it adds.
+
+| Car | Stock | Tier 1 | Tier 2 | Tier 3 | Cost to max |
+|---|---|---|---|---|---|
+| Nightrunner | 100 | 109 | 116 | 122 | 1,824 |
+| Warbird | 106 | 114 | 120 | 126 | 4,256 |
+| Foundry (boss) | 112 | 118 | 123 | 128 | 5,776 |
+| Undertow (boss) | 115 | 120 | 124 | 127 | 7,296 |
+| Apex (boss) | 119 | 123 | 126 | 129 | 9,120 |
+
 **Convergence, not a flat percentage.** An early draft gave every car the
 same +X% per tier, but that preserves the exact ratio between cars forever
 — equal treatment, not what "some difference between cars, but not too
@@ -248,7 +275,7 @@ much once maxed" actually asks for. Instead, each tier closes part of the
 gap between a car's own stock value and a fixed cap shared by every car on
 that stat (speed 1.30, grip 0.75, handling 0.68, boost peak/hold 1.35 —
 all at or beyond today's best roster value, so an upgrade never makes a
-car worse). The fraction of that gap closed per tier is 30% / 55% / 75% —
+car worse). The fraction of that gap closed per tier is 25% / 45% / 62% —
 never reaching 100%, so a real gap, just a smaller one, still exists at
 tier 3. A car that starts further behind gains more per tier in absolute
 terms than one that starts close to the cap already, which is what lets a
@@ -256,9 +283,10 @@ cheap car's full upgrade tree meaningfully close the distance to an
 expensive one without erasing the reason to want the expensive one too.
 
 **Cost** scales off the car's own price (or a reference value for the
-starter and story-exclusive cars): tier 1/2/3 cost 22%/30%/40% of that
-price, incremental per tier. Maxing all four systems on a 500cr car costs
-roughly 1,840cr total; on a 2,200cr car, roughly 8,100cr — matching "you
+starter and story-exclusive cars): tier 1/2/3 cost 18%/25%/33% of that
+price, incremental per tier (cut from 22/30/40% in Phase 9, so the story
+pays for the cars it asks for). Maxing all four systems on a 500cr car costs
+roughly 1,520cr total; on a 2,200cr car, roughly 6,700cr — matching "you
 need a different car for this city," since fully upgrading a cheap car is
 realistic, fully upgrading every car is not.
 
@@ -300,24 +328,23 @@ sky, sun, ground, neon, walls, fog, and a skyline or mountain ridge on
 the horizon (`THEMES` in `src/story.js`).
 
 Old Quarter and The Underpass race on Underpass, Coastal Run and Skyline
-Ave on Coastal Run, and The Circuit on its own finale lap. Re-measured with
-the bot after the move: the curve kept its shape (a stock Nightrunner still
-beats the bosses of cities 1-6 and loses 7-10; maxed cars win all ten).
+Ave on Coastal Run, and The Circuit on its own finale lap.
 
-| # | City | Kit | Theme | Boss | Recommended spec | Reward |
-|---|---|---|---|---|---|---|
-| 1 | Portside | A | Foggy harbour, industrial night | Fender | Starter car is enough | Fender's car |
-| 2 | Sundown Strip | B | Desert dusk, orange horizon | Mirage | Alleycat or Tyres T1 | Cash |
-| 3 | Old Quarter | E | Cobbled downtown, sodium-lamp warmth | Cutlass | A Compact car, or Tyres T2 | Cash |
-| 4 | Coastal Run | D | Cliffside ocean night, cool blues | Riptide | Engine T1 | Riptide's car |
-| 5 | Steel District | C | Industrial, sparks and steam | Foundry | Transmission T1-2 | Foundry's car |
-| 6 | Neon Downtown | A (harder) | Dense skyscraper neon canyon | Vertex | A Muscle car, or Tyres T2-3 | Cash |
-| 7 | High Pass | B (harder) | Mountain dusk, thin cold fog | Glacier | Engine T2, a Muscle car | Glacier's car |
-| 8 | The Underpass | E (harder) | Wet-road night, reflections | Undertow | Transmission T2-3 | Undertow's car |
-| 9 | Skyline Ave | D (harder) | Bridge crossing, tallest skyline | Halo | NOS T2-3, Ironclad or Warbird | Cash |
-| 10 | The Circuit | F | Every theme, mixed | **Apex** | Best available car and upgrades | Apex's car |
+| # | City | Kit | Theme | Boss | Rating needed | Recommended | Reward |
+|---|---|---|---|---|---|---|---|
+| 1 | Portside | A | Foggy harbour, industrial night | Fender | 98 | Starter car | Fender's car |
+| 2 | Sundown Strip | B | Desert dusk, orange horizon | Mirage | 100 | Starter car, driven well | Cash |
+| 3 | Old Quarter | E | Cobbled downtown, sodium-lamp warmth | Cutlass | 109 | Tier 1 everywhere | Cash |
+| 4 | Coastal Run | D | Cliffside ocean night, cool blues | Riptide | 113 | Tier 1 everywhere, Engine and Tyres T2 | Riptide's car |
+| 5 | Steel District | C | Industrial, sparks and steam | Foundry | 116 | Tier 2 everywhere | Foundry's car |
+| 6 | Neon Downtown | A (harder) | Dense skyscraper neon canyon | Vertex | 118 | Tier 2 everywhere, or Foundry T1 | Cash |
+| 7 | High Pass | B (harder) | Mountain dusk, thin cold fog | Glacier | 119 | Maxed starter, or Foundry T1-2 | Glacier's car |
+| 8 | The Underpass | E (harder) | Wet-road night, reflections | Undertow | 123 | Foundry T2, or another boss car upgraded | Undertow's car |
+| 9 | Skyline Ave | D (harder) | Bridge crossing, tallest skyline | Halo | 123 | Foundry T2 or better | Cash |
+| 10 | The Circuit | F | Every theme, mixed | **Apex** | 124 | Foundry T2, or any boss car well upgraded | Apex's car |
 
-"Recommended spec" is guidance shown on the city screen, not a hard lock.
+The rating needed and the recommendation are shown on the city screen
+(with your own car's rating next to them), not a hard lock.
 
 **The difficulty curve (`BOSS_SKILL` in `src/story.js`).** A table, one
 boss skill per city: 0.93, 0.99, 1.05, 1.08, 1.11, 1.14, 1.16, 1.175,
@@ -327,20 +354,22 @@ track's target lap x 0.98 / (boss skill - 0.05).
 
 Rewritten after playtesting found a stock car could clear the story up to
 city 7 without an upgrade. Measured with a racing bot that overtakes and
-boosts on straights:
+boosts on straights, with the Phase 9 contact rules (rating in brackets):
 
 | Car | Beats the bosses of |
 |---|---|
-| Stock Nightrunner | Cities 1-2 (city 3 lost by 7s) |
-| Nightrunner, all upgrades tier 1 | Cities 1-2 (city 3 lost by 1s) |
-| Nightrunner, all tier 2 | Cities 1-5 |
-| Nightrunner, all tier 3 | Cities 1-7 and 9; loses 8 by 0.2s and 10 by 1.4s |
-| Warbird or Undertow, all tier 3 | All ten (the finale by 0.7s / 1.2s) |
+| Stock Nightrunner (100) | Cities 1-2 (city 3 lost by 7.7s) |
+| Nightrunner, all upgrades tier 1 (109) | Cities 1-3 (city 4 lost by 1.1s) |
+| Nightrunner, all tier 2 (116) | Cities 1-5 and 7 (6 lost by 0.5s, 8 by 0.9s) |
+| Nightrunner, all tier 3 (122) | Cities 1-7 and 9 (8 lost by 0.1s, 10 by 0.5s) |
+| Foundry, all tier 2 (123) | All ten (the finale by 0.5s) |
+| Foundry, all tier 3 (128) | All ten (the finale by 1.4s) |
 
-Boss races end within a couple of seconds either way, because rivals
-fight back (boost, slipstream, comeback pace). The bot is a clean driver
-but not a perfect one, and a person who uses slipstream well will do
-better.
+The rating each city needs (`RATING_NEED`) is read off this table. Boss
+races end within a couple of seconds either way, because rivals fight
+back (boost, slipstream, comeback pace). The bot is a clean driver but
+not a perfect one; a person who uses slipstream and boost hits well will
+do better.
 
 **Why upgrades and better cars matter now.** Measured on Grand Circuit
 (3 laps, bot, boost): a fully upgraded Nightrunner is 26% faster than
@@ -367,8 +396,8 @@ Story pays more, and more in later cities (d = city number, 0-9):
 
 | Story event | Pays |
 |---|---|
-| Race | (60 + 12·d) × 1 / 0.75 / 0.55 / 0.4 by place, +50% the first time you clear it |
-| Time Attack | 50 + 10·d if you beat the target (+50% the first time), 30% of that if you miss |
+| Race | (60 + 15·d) × 1 / 0.75 / 0.55 / 0.4 by place, +50% the first time you clear it |
+| Time Attack | 50 + 13·d if you beat the target (+50% the first time), 30% of that if you miss |
 | Boss, car city | The car + (100 + 15·d) |
 | Boss, cash city | 300 + 45·d |
 | Boss, replayed | 90 + 15·d |
@@ -379,10 +408,13 @@ count.
 
 | Purchase | Cost |
 |---|---|
-| Upgrade tier | 22% / 30% / 40% of the car's price, per tier (see above) |
+| Upgrade tier | 18% / 25% / 33% of the car's price, per tier (see above) |
 | A new car | 500-2200, per the roster table above |
 
-Probably too generous: first-clear payouts alone add up to about 2,700 CR
-by the end of city 5 (7,000 over the whole story), more than the roughly
-2,200 CR it costs to max every system on a Nightrunner. To be checked with
-real play in Phase 9.
+**Checked in Phase 9.** Winning every event first time earns about 7,600
+CR over the story. The test suite walks the story and, before every boss,
+checks that some car you already own could reach that city's rating with
+what you've earned so far (the cheapest mix of tiers, found by trying
+them all). It holds for all ten cities. The tight spots are cities 8-10,
+where the efficient path is to move to Foundry (free from city 5) and
+upgrade it rather than keep maxing the starter.

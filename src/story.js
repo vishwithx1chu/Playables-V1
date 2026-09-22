@@ -17,18 +17,16 @@
    four whose cities already point you at buying a specific car from the
    Garage (see docs/content-plan.md for why it's split that way).
 
-   Difficulty rises by a fixed step per city, in the same currency rivals
-   already use: skill, where 1.0 laps in exactly the track's target time.
-   So "city 6 is harder than city 5" is a number you can read off, not a
-   guess — and the numbers are first drafts, to be tuned once real people
-   play them. */
+   Difficulty is a table, one boss skill per city (BOSS_SKILL below), in the
+   same currency rivals already use: skill, where 1.0 laps in exactly the
+   track's target time. It was measured with a racing bot against every
+   upgrade level, so each city asks for a known car rating (RATING_NEED),
+   and the city screen shows it next to yours. */
 
 (function (DR) {
   'use strict';
 
-  // Track indices into road.js. Until the three new circuits exist
-  // (Coastal Run, Underpass, The Circuit), their cities run on the closest
-  // existing layout in character — see the content plan's kit table.
+  // Track indices into road.js.
   var RING = 0, MAZE = 1, GRAND = 2, COAST = 3, UNDER = 4, FINALE = 5;
 
   /* Colours for each city, as overrides of road.js's DEFAULT_THEME. Only
@@ -191,47 +189,47 @@
     { id: 'sundown', name: 'SUNDOWN STRIP', track: RING, boss: 'MIRAGE', bossColor: '#ffb347', bossArch: 'compact',
       reward: { cash: true }, crew: ['DUNE', 'SCORCH', 'HAZE'],
       intro: 'Desert dusk and long straights. Mirage is never where you think.',
-      spec: 'Alleycat, or Tyres tier 1.',
+      spec: 'Your starter car, driven well.',
       events: [{ type: 'race', need: 3 }, { type: 'race', need: 2 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
     { id: 'oldquarter', name: 'OLD QUARTER', track: UNDER, boss: 'CUTLASS', bossColor: '#ffcf6a', bossArch: 'compact',
       reward: { cash: true }, crew: ['COBBLE', 'LANTERN', 'ALLEY'],
       intro: 'Cobbles and sodium lamps. Cutlass knows every corner blind.',
-      spec: 'A Compact car, or Tyres tier 2.',
+      spec: 'Tier 1 on every upgrade.',
       events: [{ type: 'race', need: 3 }, { type: 'time', laps: 2 }, { type: 'time', laps: 3 }, { type: 'boss' }] },
     { id: 'coastal', name: 'COASTAL RUN', track: COAST, boss: 'RIPTIDE', bossColor: '#1de9b6', bossArch: 'sport',
       reward: { car: 'riptide' }, crew: ['SWELL', 'CURRENT', 'SPRAY'],
       intro: 'Cliffs, ocean, and a road that never stops curving.',
-      spec: 'Engine tier 1.',
+      spec: 'Tier 1 everywhere, Engine and Tyres at tier 2.',
       events: [{ type: 'race', need: 2 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
     { id: 'steel', name: 'STEEL DISTRICT', track: GRAND, boss: 'FOUNDRY', bossColor: '#ff5a36', bossArch: 'muscle',
       reward: { car: 'foundry' }, crew: ['RIVET', 'SLAG', 'ANVIL'],
       intro: 'Sparks and steam. Foundry drives like the furnaces never close.',
-      spec: 'Transmission tier 1-2.',
+      spec: 'Tier 2 on every upgrade.',
       events: [{ type: 'race', need: 2 }, { type: 'race', need: 1 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
     { id: 'downtown', name: 'NEON DOWNTOWN', track: MAZE, boss: 'VERTEX', bossColor: '#ff2fd8', bossArch: 'muscle',
       reward: { cash: true }, crew: ['PIXEL', 'STROBE', 'GRID'],
       intro: 'A canyon of neon towers. Vertex owns every one of them.',
-      spec: 'A Muscle car, or Tyres tier 2-3.',
+      spec: 'Tier 2 everywhere, or Foundry at tier 1.',
       events: [{ type: 'race', need: 2 }, { type: 'time', laps: 2 }, { type: 'time', laps: 3 }, { type: 'boss' }] },
     { id: 'highpass', name: 'HIGH PASS', track: RING, boss: 'GLACIER', bossColor: '#bfefff', bossArch: 'compact',
       reward: { car: 'glacier' }, crew: ['FROST', 'SUMMIT', 'THAW'],
       intro: 'Mountain dusk, thin cold air. Glacier doesn’t slide. Ever.',
-      spec: 'Engine tier 2 and a Muscle car.',
+      spec: 'A fully upgraded starter, or Foundry at tier 1-2.',
       events: [{ type: 'race', need: 2 }, { type: 'race', need: 1 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
     { id: 'underpass', name: 'THE UNDERPASS', track: UNDER, boss: 'UNDERTOW', bossColor: '#2a5cff', bossArch: 'sport',
       reward: { car: 'undertow' }, crew: ['DRAIN', 'ECHO', 'SLICK'],
       intro: 'Wet concrete under the city. Undertow pulls you under.',
-      spec: 'Transmission tier 2-3.',
+      spec: 'Foundry at tier 2, or another boss car upgraded.',
       events: [{ type: 'race', need: 1 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
     { id: 'skyline', name: 'SKYLINE AVE', track: COAST, boss: 'HALO', bossColor: '#ffd76a', bossArch: 'muscle',
       reward: { cash: true }, crew: ['SPIRE', 'BEACON', 'AURA'],
       intro: 'The bridge, the tallest skyline, and Halo waiting at the top.',
-      spec: 'NOS tier 2-3, Ironclad or Warbird.',
+      spec: 'Foundry at tier 2 or better.',
       events: [{ type: 'race', need: 1 }, { type: 'race', need: 1 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
     { id: 'circuit', name: 'THE CIRCUIT', track: FINALE, boss: 'APEX', bossColor: '#ffd76a', bossArch: 'sport',
       reward: { car: 'apex' }, crew: ['ACE', 'MAVERICK', 'LEGEND'],
       intro: 'Every city, one lap. Apex is the one everyone measures themselves against.',
-      spec: 'Your best car, fully upgraded.',
+      spec: 'Foundry at tier 2, or any boss car well upgraded.',
       events: [{ type: 'race', need: 1 }, { type: 'time', laps: 3 }, { type: 'boss' }] }
   ];
 
@@ -246,14 +244,19 @@
   var BOSS_SKILL = [0.93, 0.99, 1.05, 1.08, 1.11, 1.14, 1.16, 1.175, 1.18, 1.16];
   function bossSkill(d)  { return BOSS_SKILL[Math.max(0, Math.min(9, d))]; }
   function crewSkill(d)  { return bossSkill(d) - 0.08; }  // middle of the field
+  // The car rating (cars.js) a good driver needs to beat each city's boss,
+  // read off the same bot runs as the table above. Shown on the city
+  // screen so you can tell whether it's your driving or your car.
+  var RATING_NEED = [98, 100, 109, 113, 116, 118, 119, 123, 123, 124];
+  function ratingNeed(ci) { return RATING_NEED[Math.max(0, Math.min(9, ci))]; }
   // Time attack: asks for about what the crew races do. A stock car laps a
   // little under the target time with good boost use, so the target is the
   // track's target lap scaled by how much faster than stock the city wants.
   function timeFactor(d, laps) { return 0.98 / (bossSkill(d) - 0.05) * (laps >= 3 ? 0.995 : 1); }
 
   // ---- Payouts ----------------------------------------------------------
-  function racePay(d)  { return 60 + 12 * d; }
-  function timePay(d)  { return 50 + 10 * d; }
+  function racePay(d)  { return 60 + 15 * d; }
+  function timePay(d)  { return 50 + 13 * d; }
   function bossCash(d) { return 300 + 45 * d; }
   function bossCarCash(d) { return 100 + 15 * d; }
   function bossReplay(d) { return 90 + 15 * d; }
@@ -435,7 +438,7 @@
     cityState: cityState, cityUnlocked: cityUnlocked, bossUnlocked: bossUnlocked,
     bossBeaten: bossBeaten, cleared: cleared, eventLocked: eventLocked,
     currentCity: currentCity, setup: setup, resolve: resolve, themeFor: themeFor,
-    eventId: eventId, bossIndex: bossIndex,
+    eventId: eventId, bossIndex: bossIndex, ratingNeed: ratingNeed,
     trackUnlocked: trackUnlocked, trackLockText: trackLockText, trackCity: trackCity,
     // Exposed so tests and the balance pass can read the curve directly.
     curve: { crewSkill: crewSkill, bossSkill: bossSkill, timeFactor: timeFactor }

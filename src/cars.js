@@ -138,7 +138,7 @@
     { id: 'transmission', name: 'TRANSMISSION', fields: ['tauMult'] },
     { id: 'nos', name: 'NOS', fields: ['boostPeakMult', 'boostHoldMult'] }
   ];
-  var TIER_COST_FRACTION = [0, 0.22, 0.30, 0.40];   // incremental, per tier
+  var TIER_COST_FRACTION = [0, 0.18, 0.25, 0.33];   // incremental, per tier
 
   function upgradeSystems() { return UPGRADE_SYSTEMS; }
 
@@ -197,6 +197,38 @@
     return true;
   }
 
+  /* One number for how fast a car really is: 100 is a stock Nightrunner,
+     120 laps about 20% quicker. Fitted to measured laps (the racing bot,
+     boosting, over all three original circuits) across every car at
+     several upgrade levels — it predicts all of them to within 2%.
+     Speed is most of it, but speed you can't handle is wasted: past what
+     the tyres and transmission can hold, extra engine counts for much
+     less. That's why the three systems want upgrading together. */
+  function ratingOf(st) {
+    var spd = st.speedMult - 1, grip = 1 - st.gripMult, tau = 1 - st.tauMult;
+    var boost = st.boostPeakMult - 1;
+    var unhandled = Math.max(0, spd - 0.7 * (grip + tau));
+    return Math.round(100 * (1 + 1.035 * spd + 0.030 * tau + 0.088 * boost - 0.289 * unhandled));
+  }
+  function rating(carId) {
+    var def = get(carId);
+    return def ? ratingOf(effectiveStats(def)) : 0;
+  }
+  // What the rating would be with one more tier on one system.
+  function ratingWith(carId, systemId) {
+    var def = get(carId);
+    if (!def) return 0;
+    var tier = DR.Save.upgradeLevel(carId, systemId);
+    var st = effectiveStats(def);
+    if (tier >= MAX_TIER) return ratingOf(st);
+    for (var i = 0; i < UPGRADE_SYSTEMS.length; i++) {
+      if (UPGRADE_SYSTEMS[i].id !== systemId) continue;
+      var f = UPGRADE_SYSTEMS[i].fields;
+      for (var j = 0; j < f.length; j++) st[f[j]] = convergedValue(def.stats[f[j]], f[j], tier + 1);
+    }
+    return ratingOf(st);
+  }
+
   function statFrac(def, key) {
     var spec = STAT_KEYS[key];
     if (!spec || !def) return 0;
@@ -227,5 +259,6 @@
 
   DR.Cars = { roster: roster, get: get, palette: palette, applyToCar: applyToCar,
               statFrac: statFrac, upgradeSystems: upgradeSystems, tierCost: tierCost,
+              effectiveStats: effectiveStats, rating: rating, ratingWith: ratingWith, ratingOf: ratingOf,
               upgradeMaxed: upgradeMaxed, buyUpgrade: buyUpgrade, MAX_TIER: MAX_TIER };
 })(window.DR = window.DR || {});

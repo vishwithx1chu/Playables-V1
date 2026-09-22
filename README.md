@@ -239,6 +239,28 @@ and dip; lap times are unchanged.
 To test it: Quick Play → Race → Velocity Ring. Sit behind a rival to feel
 the slipstream, then try to pass. Hitting its back corner spins it.
 
+**After the second playtest, and Phase 9 (balance and polish).**
+- **Hits that open gaps.** Running into a car's back now knocks its tail
+  sideways and shakes it, so it stops blocking you for a moment. Hit it on
+  boost and it's thrown aside while you keep your speed; drift into it and
+  your sideways swing adds to the hit. Rivals block a little less.
+- **Speedometer**, bottom right: km/h, with an arc that turns orange (and
+  says BOOST) while boosting.
+- **Car rating.** One number for how fast a car really is (100 = stock
+  starter), shown in the Garage, with what each upgrade adds. Each city
+  shows the rating its boss needs next to yours (READY or UPGRADE), and
+  losing tells you whether it was the car or the driving.
+- **Money checked against it.** Upgrades are 17% cheaper and later races
+  pay a bit more. The test suite walks the whole story and checks that
+  first-time winnings always cover a car good enough for the next boss.
+- **START OVER** on the title screen (two taps) wipes progress for a
+  fresh run.
+- Fixed: on menus, tapping where the boost button sits in a race used to
+  count as "confirm".
+
+To test: Garage shows RATING top right; open a city to see READY or
+UPGRADE; in a race, boost into the back of a rival.
+
 ## Current state, before career mode: Milestone 2.5
 
 Four modes, picked from the screen the game opens on:

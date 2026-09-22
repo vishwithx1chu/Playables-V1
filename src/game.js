@@ -188,6 +188,10 @@
     { id: 'tutorial', name: 'TUTORIAL',   ready: true }
   ];
   var titleSel = 1;   // Quick Play — the default door
+  /* START OVER wipes the save. Two taps, because it can't be undone: the
+     first arms it and says so, the second (within a few seconds) erases. */
+  var RESET_BTN = { x: 230, y: 1150, w: 260, h: 56 };
+  var resetArmed = 0, resetDone = 0;
 
   /* --------------------------------- STORY --------------------------------
      'title' -> 'story' (the ten cities) -> 'city' (one city's events) ->
@@ -426,7 +430,12 @@
   }
 
   function update(dt) {
-    if (phase !== 'racing') { clock += dt; return; }
+    if (phase !== 'racing') {
+      clock += dt;
+      if (resetArmed > 0) resetArmed = Math.max(0, resetArmed - dt);
+      if (resetDone > 0) resetDone = Math.max(0, resetDone - dt);
+      return;
+    }
     var steer = DR.Input.steer();
     if (steer !== 0) hintAlpha = Math.max(0, hintAlpha - dt * 2.4);
 
@@ -606,6 +615,14 @@
     if (storyEvent) {
       storyResult = DR.Story.resolve(storyEvent.city, storyEvent.event,
                                      { pos: raceRivals ? finishPos : 0, total: raceTotal });
+      // Lost, and the car is the reason? Say so, and where to fix it.
+      var have = DR.Cars.rating(DR.Save.selectedCar()), need = DR.Story.ratingNeed(storyEvent.city);
+      if (!storyResult.ok && have < need) {
+        storyResult.lines.push('YOUR CAR IS RATED ' + have + ' \u2014 THIS CITY WANTS ~' + need);
+        storyResult.lines.push('UPGRADE IN THE GARAGE, OR EARN IN QUICK PLAY');
+      } else if (!storyResult.ok) {
+        storyResult.lines.push('YOUR CAR IS QUICK ENOUGH \u2014 TRY SLIPSTREAM AND BOOST');
+      }
       doneAward = storyResult.award;
       // Failing puts RETRY under your thumb; clearing puts CONTINUE there.
       doneSel = storyResult.ok ? 1 : 0;
@@ -1135,6 +1152,25 @@
       ctx2.globalAlpha = 1;
     }
     drawControlsLine(ctx2, v, titleBox(TITLE_ITEMS.length - 1).y + TITLE_ROW_H + 62);
+    // Quiet, out of the way, and it asks twice.
+    var b2 = RESET_BTN;
+    ctx2.fillStyle = resetArmed > 0 ? 'rgba(120,30,40,0.55)' : 'rgba(10,8,24,0.45)';
+    ctx2.fillRect(b2.x, b2.y, b2.w, b2.h);
+    ctx2.lineWidth = resetArmed > 0 ? 2.5 : 1;
+    ctx2.strokeStyle = resetArmed > 0 ? '#ff8a5c' : 'rgba(150,196,225,0.3)';
+    ctx2.strokeRect(b2.x, b2.y, b2.w, b2.h);
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'middle';
+    ctx2.font = '700 21px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = resetArmed > 0 ? '#ffd0b8' : 'rgba(190,214,235,0.7)';
+    ctx2.fillText(resetArmed > 0 ? 'TAP AGAIN TO ERASE' : 'START OVER', b2.x + b2.w * 0.5, b2.y + b2.h * 0.5 + 1);
+    if (resetArmed > 0 || resetDone > 0) {
+      ctx2.font = '600 19px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = resetDone > 0 ? '#7dffb0' : '#ffb08a';
+      ctx2.fillText(resetDone > 0 ? 'PROGRESS ERASED \u2014 A FRESH START'
+                                  : 'ALL CARS, CREDITS AND STORY PROGRESS', v.W * 0.5, b2.y - 22);
+    }
+    ctx2.textBaseline = 'alphabetic';
     ctx2.textAlign = 'left';
   }
 
@@ -1228,6 +1264,14 @@
     ctx2.font = '700 22px ' + MONO;
     ctx2.fillStyle = '#ffd76a';
     ctx2.fillText(DR.Save.currency().toLocaleString() + ' CR', v.W - 24, 44);
+    // How fast this car really is, as one number (cars.js): the same number
+    // each city asks for on its own screen.
+    ctx2.font = '700 16px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(150,196,225,0.9)';
+    ctx2.fillText('RATING', v.W - 24, 70);
+    ctx2.font = '800 34px ' + MONO;
+    ctx2.fillStyle = '#7dffb0';
+    ctx2.fillText(String(DR.Cars.rating(def.id)), v.W - 24, 104);
     ctx2.textAlign = 'center';
 
     // One dot per car, so browsing the roster shows its own progress.
@@ -1342,6 +1386,14 @@
         ctx2.arc(r.x + 10 + t * 22, r.y + 48, 6, 0, Math.PI * 2);
         ctx2.fillStyle = t < tier ? '#7dffb0' : 'rgba(150,196,225,0.30)';
         ctx2.fill();
+      }
+
+      // What the next tier is worth, in the same rating the cities ask for.
+      if (!maxed) {
+        var gain = DR.Cars.ratingWith(def.id, sys.id) - DR.Cars.rating(def.id);
+        ctx2.font = '700 17px ' + MONO;
+        ctx2.fillStyle = gain > 0 ? '#7dffb0' : 'rgba(190,214,235,0.6)';
+        ctx2.fillText(gain > 0 ? '+' + gain + ' RATING' : 'HANDLING', r.x + 86, r.y + 54);
       }
 
       var b = garageUpgradeBtnBox(i);
@@ -1527,6 +1579,12 @@
     ctx2.fillStyle = 'rgba(180,206,226,0.85)';
     ctx2.fillText('CIRCUIT: ' + DR.Road.tracks()[c.track].name, 40, 1000);
     ctx2.fillText('DRIVING: ' + (car ? car.name.toUpperCase() : ''), 40, 1030);
+    // Is it the car or the driving? The rating says, in a number and a word.
+    var have = DR.Cars.rating(DR.Save.selectedCar()), need = DR.Story.ratingNeed(ci);
+    ctx2.font = '800 21px ' + SANS;
+    ctx2.fillStyle = have >= need ? '#7dffb0' : '#ffb24d';
+    ctx2.fillText('YOUR RATING ' + have + '  \u2022  BOSS NEEDS ~' + need +
+                  (have >= need ? '  \u2022  READY' : '  \u2022  UPGRADE'), 40, 1070);
     drawButton(ctx2, CITY_GARAGE_BTN, 'GARAGE ▸');
     drawCurrency(ctx2, v);
     ctx2.textAlign = 'left';
@@ -1916,6 +1974,13 @@
 
   // Which room a Title door leads to. Both unbuilt rooms are still reachable
   // — they just have nothing in them yet but a name and a way back.
+  function startOver() {
+    DR.Save.resetAll();
+    DR.Save.ensureStarter('nightrunner');
+    DR.Cars.applyToCar(DR.Save.selectedCar());
+    storySel = 0; citySel = 0;
+  }
+
   function enterTitleItem(i) {
     var it = TITLE_ITEMS[i];
     if (it.id === 'quick') phase = 'modes';
@@ -1939,6 +2004,12 @@
     var lx = (t.x - offX) / scale, ly = (t.y - offY) / scale;
     var i, b;
     if (phase === 'title') {
+      if (inBox(lx, ly, RESET_BTN)) {
+        if (resetArmed > 0) { startOver(); resetArmed = 0; resetDone = 2.5; }
+        else resetArmed = 4;
+        return;
+      }
+      resetArmed = 0;
       for (i = 0; i < TITLE_ITEMS.length; i++) {
         if (inBox(lx, ly, titleBox(i))) {
           if (titleSel === i) enterTitleItem(i);
@@ -2740,6 +2811,10 @@
     // The button is positioned in playfield units, so the hit test has to undo
     // the letterboxing to find out where a real finger landed.
     DR.Input.setBoostHitTest(function (clientX, clientY) {
+      // Only a button while there's a car to boost: on a menu that circle
+      // is empty screen, and treating a tap there as "confirm" would press
+      // whatever happened to be selected.
+      if (phase !== 'racing') return false;
       var lx = (clientX - offX) / scale, ly = (clientY - offY) / scale;
       var dx = lx - BOOST_BTN.x, dy = ly - BOOST_BTN.y;
       return dx * dx + dy * dy <= BOOST_BTN.r * BOOST_BTN.r;
@@ -2822,6 +2897,7 @@
       if (kind === 'cityGarage') return CITY_GARAGE_BTN;
       if (kind === 'doneRetry') return DONE_RETRY_BTN;
       if (kind === 'doneContinue') return DONE_CONT_BTN;
+      if (kind === 'reset') return RESET_BTN;
       if (kind === 'garageUpgrade') return garageUpgradeBtnBox(i);
       return null;
     },
