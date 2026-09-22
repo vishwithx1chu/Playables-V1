@@ -388,6 +388,13 @@
     var lean = Math.min(1, Math.abs(car.slip) / SLIP_AT_LIMIT);
     var MATS = (skin && skin.mat) || MAT;
     var EMIT = (skin && skin.emissive) || EMISSIVE;
+    // A rival brings its own mesh and wheel mounts, so drawing one never
+    // borrows — or disturbs — the player's archetype, which lives in module
+    // state because the physics reads it too.
+    var VXd = (skin && skin.mesh) ? skin.mesh.VX : VX;
+    var FACESd = (skin && skin.mesh) ? skin.mesh.FACES : FACES;
+    var WH = (skin && skin.wheel) || WHEEL;
+    var flame = (skin && skin.boost !== undefined) ? skin.boost : (view.boost || 0);
 
     // Ground glow and shadow first, flat on the tarmac.
     var g = DR.Road.project(car.x, car.y, view);
@@ -404,9 +411,21 @@
       glowGrad.addColorStop(0.45, 'rgba(140,60,255,0.15)');
       glowGrad.addColorStop(1.00, 'rgba(0,0,0,0)');
     }
+    // A rival glows in its own paint, fainter than yours, so the pink pool
+    // under the car stays a way of finding YOU in a pack.
+    var gg = glowGrad;
+    if (skin && skin.glowRgb) {
+      if (!skin.glowGrad) {
+        var c3 = skin.glowRgb;
+        skin.glowGrad = ctx.createRadialGradient(0, 0, 4, 0, 0, 96);
+        skin.glowGrad.addColorStop(0.00, 'rgba(' + c3[0] + ',' + c3[1] + ',' + c3[2] + ',0.26)');
+        skin.glowGrad.addColorStop(1.00, 'rgba(0,0,0,0)');
+      }
+      gg = skin.glowGrad;
+    }
     ctx.scale(gs, gs);
     ctx.globalAlpha = 0.6 + lean * 0.4;
-    ctx.fillStyle = glowGrad;
+    ctx.fillStyle = gg;
     ctx.fillRect(-104, -104, 208, 208);
     ctx.globalAlpha = 1;
     ctx.rotate(car.bodyYaw - view.camAngle);
@@ -414,15 +433,15 @@
     ctx.ellipse(0, 0, 32, 52, 0, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
     ctx.fill();
-    drawBoostFlame(ctx, view.boost || 0);
+    drawBoostFlame(ctx, flame);
     ctx.restore();
     }
 
     // --- every vertex into the world, then onto the screen ---
     var cr = Math.cos(car.roll), sr = Math.sin(car.roll);
     var lift = Math.abs(car.roll) * 26;   // keeps the low corner out of the tarmac
-    for (i = 0; i < VX.length; i++) {
-      var L = VX[i];
+    for (i = 0; i < VXd.length; i++) {
+      var L = VXd[i];
       // Rocked over about the car's own nose-to-tail axis before it goes
       // anywhere near the world, so the roll rides along with the heading.
       var rx = L[0] * cr - L[2] * sr;
@@ -435,8 +454,8 @@
     }
 
     polyN = 0;
-    for (i = 0; i < FACES.length; i++) {
-      f = FACES[i];
+    for (i = 0; i < FACESd.length; i++) {
+      f = FACESd[i];
       var v = f.v, ok = true, depth = 0;
       for (j = 0; j < v.length; j++) { if (!pv[v[j]]) { ok = false; break; } depth += pz[v[j]]; }
       if (!ok) continue;
@@ -445,10 +464,10 @@
 
     // --- wheels, built fresh because the fronts steer ---
     var steerAng = -Math.max(-1, Math.min(1, car.slip / SLIP_AT_LIMIT)) * 0.42;
-    buildWheel(view, car, cb, sb,  WHEEL.frontX, WHEEL.frontY, WHEEL.frontR, steerAng);
-    buildWheel(view, car, cb, sb, -WHEEL.frontX, WHEEL.frontY, WHEEL.frontR, steerAng);
-    buildWheel(view, car, cb, sb,  WHEEL.rearX,  WHEEL.rearY,  WHEEL.rearR, 0);
-    buildWheel(view, car, cb, sb, -WHEEL.rearX,  WHEEL.rearY,  WHEEL.rearR, 0);
+    buildWheel(view, car, cb, sb,  WH.frontX, WH.frontY, WH.frontR, steerAng);
+    buildWheel(view, car, cb, sb, -WH.frontX, WH.frontY, WH.frontR, steerAng);
+    buildWheel(view, car, cb, sb,  WH.rearX,  WH.rearY,  WH.rearR, 0);
+    buildWheel(view, car, cb, sb, -WH.rearX,  WH.rearY,  WH.rearR, 0);
 
     // --- furthest first, so nearer panels cover the ones behind ---
     var order = [];
@@ -580,8 +599,45 @@
     }
   }
 
+  /* Rivals. Each one gets a skin built once, at race start: its own paint
+     (the same one-base-plus-offsets rule as setPalette, so a rival's panels
+     shade exactly the way yours do), its own archetype's mesh and wheel
+     mounts, and its own exhaust flame level, set per frame by rivals.js. */
+  var _wheelFor = {};
+  function wheelFor(arch) {
+    if (_wheelFor[arch]) return _wheelFor[arch];
+    var m = ARCHETYPES[arch];
+    _wheelFor[arch] = { frontX: 29 * m.track, rearX: 30 * m.track,
+                        frontY: 31 * m.wheelbase, rearY: -29 * m.wheelbase,
+                        frontR: 11 * m.wheelR, rearR: 12 * m.wheelR };
+    return _wheelFor[arch];
+  }
+  function makeSkin(color, arch) {
+    var rgb = typeof color === 'string' ? hexToRgb(color) : color;
+    var a = ARCHETYPES[arch] ? arch : 'sport';
+    var mat = { under: MAT.under, glass: MAT.glass, tyre: MAT.tyre, rim: MAT.rim };
+    for (var k in PAINT_DELTA) {
+      var d = PAINT_DELTA[k];
+      mat[k] = [clamp255(rgb[0] + d[0]), clamp255(rgb[1] + d[1]), clamp255(rgb[2] + d[2])];
+    }
+    return { mat: mat, mesh: MESHES[a], wheel: wheelFor(a), boost: 0,
+             glowRgb: rgb, glowGrad: null, arch: a };
+  }
+
   // A ghost is not a Car — it has no physics — but it draws like one.
   Car.drawGhost = function (ctx, view, g) { drawCar(ctx, view, g, GHOST_SKIN); };
+  Car.makeSkin = makeSkin;
+  Car.drawRival = function (ctx, view, obj, skin) { drawCar(ctx, view, obj, skin); };
+  // How much of the road a car of this archetype takes up at a given slip —
+  // the same rule as halfWidth() above, for cars that aren't the player.
+  Car.halfWidthFor = function (arch, slip) {
+    var m = ARCHETYPES[arch] || ARCHETYPES.sport;
+    return Math.abs(Math.cos(slip)) * CAR_W_STOCK * m.width * 0.5 +
+           Math.abs(Math.sin(slip)) * CAR_L_STOCK * m.length * 0.40;
+  };
+  Car.lengthFor = function (arch) {
+    return CAR_L_STOCK * (ARCHETYPES[arch] || ARCHETYPES.sport).length;
+  };
   // Same trick for the garage preview: a plain {x,y,bodyYaw,slip,roll} object,
   // drawn in the car's real colours rather than the ghost's.
   Car.drawStatic = function (ctx, view, obj) { drawCar(ctx, view, obj); };

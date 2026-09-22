@@ -961,6 +961,135 @@
 
   var skyGrad = null, groundGrad = null, fogGrad = null;
 
+  /* ------------------------------- THEMES -------------------------------
+     Every colour the scene is painted in, gathered in one place so a city
+     can repaint the whole world without touching a single draw call. The
+     default is the game's original synthwave look, value for value — so
+     Quick Play looks exactly as it always has.
+
+     Two things are deliberately NOT themeable: the orange corner chevrons
+     and the pickups. Those are information, not decoration, and a player
+     who has learned "orange arrows mean a bend" in one city must be able to
+     rely on it in every other. */
+  var DEFAULT_THEME = {
+    sky:    ['#140a26', '#2d1046', '#5c1a55', '#8d2a4e'],
+    stars:  1,
+    sunDisc: ['#ffd76a', '#ff8a3d', '#ff2f8e'],
+    sunHalo: ['rgba(255,138,60,0.42)', 'rgba(224,70,140,0.18)'],
+    sunR:   210,
+    sunBands: true,
+    ground: ['#1a0c2c', '#0d0719', '#06040e'],
+    grid:   'rgba(168,124,248,0.20)',
+    road:   '#100d20',
+    edge:   [34, 230, 255],
+    dash:   'rgba(255,74,206,0.88)',
+    wallFace: '#241541', wallUpper: '#35205e', wallSkirt: '#0e0820',
+    wallStripe: 'rgba(255,74,206,0.32)',
+    fog:    ['rgba(104,34,92,1)', 'rgba(74,24,78,0.86)', 'rgba(34,14,48,0)'],
+    horizon: null
+  };
+  var TH = DEFAULT_THEME, THS = null, themeKey = null;
+  var horizonShapes = null;
+
+  // Strings built once per theme, not once a frame.
+  function themeStrings() {
+    if (THS) return THS;
+    var e = TH.edge;
+    var rgb = e[0] + ',' + e[1] + ',' + e[2];
+    THS = {
+      edgeSpill: 'rgba(' + rgb + ',0.07)', edgeGlow: 'rgba(' + rgb + ',0.13)',
+      edgeCore: 'rgb(' + rgb + ')', railSpill: 'rgba(' + rgb + ',0.10)'
+    };
+    return THS;
+  }
+
+  // A theme is any subset of DEFAULT_THEME's keys; whatever it leaves out
+  // falls back to the default. null restores the original look.
+  function setTheme(t) {
+    var key = t ? (t.id || JSON.stringify(t)) : null;
+    if (key === themeKey) return;
+    themeKey = key;
+    var out = {};
+    for (var k in DEFAULT_THEME) out[k] = DEFAULT_THEME[k];
+    if (t) for (var k2 in t) out[k2] = t[k2];
+    TH = out;
+    THS = null;
+    skyGrad = groundGrad = fogGrad = null;
+    horizonShapes = null;
+  }
+  function theme() { return TH; }
+
+  /* A skyline, a ridge of mountains, or nothing — built once per theme from
+     a fixed seed, anchored to compass bearings the same way the stars are,
+     so it swings past as you turn and a hairpin visibly turns the city
+     round behind you. */
+  function makeHorizon() {
+    if (horizonShapes) return horizonShapes;
+    var hz = TH.horizon, list = [];
+    horizonShapes = list;
+    if (!hz) return list;
+    var seed = hz.seed || 4242;
+    function rnd() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+    var n = hz.count || 60, i;
+    for (i = 0; i < n; i++) {
+      var w = hz.kind === 'mountains' ? 0.25 + rnd() * 0.45 : 0.018 + rnd() * 0.05;
+      var h = (hz.minH || 30) + Math.pow(rnd(), hz.kind === 'mountains' ? 1 : 1.8) *
+              ((hz.maxH || 140) - (hz.minH || 30));
+      var shape = { bearing: rnd() * Math.PI * 2, w: w, h: h, layer: rnd() < 0.5 ? 0 : 1,
+                    lit: [] };
+      if (hz.kind !== 'mountains' && hz.window) {
+        for (var q = 0; q < 12; q++) shape.lit.push([rnd(), rnd()]);
+      }
+      list.push(shape);
+    }
+    // Far layer first, so the near layer overlaps it.
+    list.sort(function (a, b) { return a.layer - b.layer; });
+    return list;
+  }
+
+  function bearingX(rel, W) { return W * 0.5 + Math.tan(rel) * FOCAL; }
+
+  function drawHorizon(ctx, view) {
+    var hz = TH.horizon;
+    if (!hz) return;
+    var shapes = makeHorizon(), W = view.W, i;
+    for (var layer = 0; layer < 2; layer++) {
+      ctx.beginPath();
+      var windows = [];
+      for (i = 0; i < shapes.length; i++) {
+        var s = shapes[i];
+        if (s.layer !== layer) continue;
+        var rel = s.bearing - view.camAngle;
+        while (rel > Math.PI) rel -= Math.PI * 2;
+        while (rel < -Math.PI) rel += Math.PI * 2;
+        if (Math.abs(rel) > 1.3) continue;
+        var x0 = bearingX(rel - s.w * 0.5, W), x1 = bearingX(rel + s.w * 0.5, W);
+        if (x1 < -40 || x0 > W + 40) continue;
+        var h = s.h * (layer === 0 ? 0.72 : 1);
+        if (hz.kind === 'mountains') {
+          ctx.moveTo(x0, HORIZON_Y);
+          ctx.lineTo((x0 + x1) * 0.5, HORIZON_Y - h);
+          ctx.lineTo(x1, HORIZON_Y);
+          ctx.closePath();
+        } else {
+          ctx.rect(x0, HORIZON_Y - h, x1 - x0, h);
+          if (layer === 1 && hz.window) {
+            for (var k = 0; k < s.lit.length; k++) {
+              windows.push(x0 + 2 + s.lit[k][0] * Math.max(0, x1 - x0 - 6),
+                           HORIZON_Y - h + 4 + s.lit[k][1] * Math.max(0, h - 10));
+            }
+          }
+        }
+      }
+      ctx.fillStyle = layer === 0 ? (hz.far || hz.color) : hz.color;
+      ctx.fill();
+      if (windows.length) {
+        ctx.fillStyle = hz.window;
+        for (i = 0; i < windows.length; i += 2) ctx.fillRect(windows[i], windows[i + 1], 3, 2);
+      }
+    }
+  }
+
   var stars = null;
   function makeStars() {
     if (stars) return stars;
@@ -991,7 +1120,7 @@
       if (x < -20 || x > W + 20) continue;
       // fade out near the horizon so they do not sit on the skyline
       var f = Math.min(1, (HORIZON_Y - s2.y) / 90);
-      ctx.globalAlpha = s2.a * f;
+      ctx.globalAlpha = s2.a * f * TH.stars;
       ctx.fillRect(x - s2.r, s2.y - s2.r, s2.r * 2, s2.r * 2);
     }
     ctx.globalAlpha = 1;
@@ -1001,22 +1130,23 @@
     var W = view.W, H = view.H;
     if (!skyGrad) {
       skyGrad = ctx.createLinearGradient(0, -60, 0, HORIZON_Y);
-      skyGrad.addColorStop(0.00, '#140a26');
-      skyGrad.addColorStop(0.45, '#2d1046');
-      skyGrad.addColorStop(0.80, '#5c1a55');
-      skyGrad.addColorStop(1.00, '#8d2a4e');
+      skyGrad.addColorStop(0.00, TH.sky[0]);
+      skyGrad.addColorStop(0.45, TH.sky[1]);
+      skyGrad.addColorStop(0.80, TH.sky[2]);
+      skyGrad.addColorStop(1.00, TH.sky[3]);
     }
     ctx.fillStyle = skyGrad;
     ctx.fillRect(-60, -60, W + 120, HORIZON_Y + 60);
 
-    drawStars(ctx, view);
+    if (TH.stars > 0) drawStars(ctx, view);
     drawSun(ctx, view);
+    drawHorizon(ctx, view);
 
     if (!groundGrad) {
       groundGrad = ctx.createLinearGradient(0, HORIZON_Y, 0, H + 60);
-      groundGrad.addColorStop(0.00, '#1a0c2c');
-      groundGrad.addColorStop(0.35, '#0d0719');
-      groundGrad.addColorStop(1.00, '#06040e');
+      groundGrad.addColorStop(0.00, TH.ground[0]);
+      groundGrad.addColorStop(0.35, TH.ground[1]);
+      groundGrad.addColorStop(1.00, TH.ground[2]);
     }
     ctx.fillStyle = groundGrad;
     ctx.fillRect(-60, HORIZON_Y, W + 120, H + 120 - HORIZON_Y);
@@ -1034,11 +1164,11 @@
     while (rel < -Math.PI) rel += Math.PI * 2;
     if (Math.abs(rel) > 1.5) return;            // behind you
     var cxp = W * 0.5 + Math.tan(rel) * FOCAL;
-    var r = 210;
+    var r = TH.sunR;
 
     var halo = ctx.createRadialGradient(cxp, HORIZON_Y, r * 0.3, cxp, HORIZON_Y, r * 2.4);
-    halo.addColorStop(0.00, 'rgba(255,138,60,0.42)');
-    halo.addColorStop(0.40, 'rgba(224,70,140,0.18)');
+    halo.addColorStop(0.00, TH.sunHalo[0]);
+    halo.addColorStop(0.40, TH.sunHalo[1]);
     halo.addColorStop(1.00, 'rgba(0,0,0,0)');
     ctx.fillStyle = halo;
     ctx.fillRect(-60, -60, W + 120, HORIZON_Y + 60);
@@ -1048,16 +1178,18 @@
     ctx.rect(-60, -60, W + 120, HORIZON_Y + 60);
     ctx.clip();
     var disc = ctx.createLinearGradient(0, HORIZON_Y - r, 0, HORIZON_Y + 10);
-    disc.addColorStop(0.00, '#ffd76a');
-    disc.addColorStop(0.45, '#ff8a3d');
-    disc.addColorStop(1.00, '#ff2f8e');
+    disc.addColorStop(0.00, TH.sunDisc[0]);
+    disc.addColorStop(0.45, TH.sunDisc[1]);
+    disc.addColorStop(1.00, TH.sunDisc[2]);
     ctx.beginPath();
     ctx.arc(cxp, HORIZON_Y, r, 0, Math.PI * 2);
     ctx.fillStyle = disc;
     ctx.fill();
-    ctx.fillStyle = 'rgba(20,10,38,0.85)';
-    for (var i = 0; i < 7; i++) {
-      ctx.fillRect(cxp - r, HORIZON_Y - i * i * 3.4 - 8, r * 2, 3 + i * 1.5);
+    if (TH.sunBands) {
+      ctx.fillStyle = 'rgba(20,10,38,0.85)';
+      for (var i = 0; i < 7; i++) {
+        ctx.fillRect(cxp - r, HORIZON_Y - i * i * 3.4 - 8, r * 2, 3 + i * 1.5);
+      }
     }
     ctx.restore();
   }
@@ -1095,7 +1227,7 @@
     var gy0 = Math.floor((view.camY - R) / G) * G;
     var g;
 
-    ctx.strokeStyle = 'rgba(168,124,248,0.20)';
+    ctx.strokeStyle = TH.grid;
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (g = gx0; g <= view.camX + R; g += G) {
@@ -1291,28 +1423,28 @@
   }
 
   function drawWalls(ctx, rib) {
-    var side;
+    var side, S = themeStrings();
     for (side = -1; side <= 1; side += 2) {
       // Solid face. It has to sit clearly lighter than the ground behind it,
       // or a wall in the dark is just more dark — and then a crash still has
       // nothing visible to hit.
       ctx.beginPath(); wallStrip(ctx, rib, side, 0, 1);
-      ctx.fillStyle = '#241541'; ctx.fill();
+      ctx.fillStyle = TH.wallFace; ctx.fill();
       ctx.beginPath(); wallStrip(ctx, rib, side, 0.42, 1);
-      ctx.fillStyle = '#35205e'; ctx.fill();
+      ctx.fillStyle = TH.wallUpper; ctx.fill();
       // A dark skirt along the bottom so the barrier looks planted on the
       // tarmac rather than floating over it.
       ctx.beginPath(); wallStrip(ctx, rib, side, 0, 0.16);
-      ctx.fillStyle = '#0e0820'; ctx.fill();
+      ctx.fillStyle = TH.wallSkirt; ctx.fill();
 
       ctx.beginPath(); wallStripes(ctx, rib, side, 0.20, 0.82);
-      ctx.fillStyle = 'rgba(255,74,206,0.32)'; ctx.fill();
+      ctx.fillStyle = TH.wallStripe; ctx.fill();
 
       // Neon top rail, with a soft spill above and below it.
       ctx.beginPath(); wallStrip(ctx, rib, side, 0.62, 1.28);
-      ctx.fillStyle = 'rgba(34,230,255,0.10)'; ctx.fill();
+      ctx.fillStyle = S.railSpill; ctx.fill();
       ctx.beginPath(); wallStrip(ctx, rib, side, 0.86, 1.02);
-      ctx.fillStyle = '#22e6ff'; ctx.fill();
+      ctx.fillStyle = S.edgeCore; ctx.fill();
       ctx.beginPath(); wallStrip(ctx, rib, side, 0.93, 0.99);
       ctx.fillStyle = 'rgba(240,252,255,0.9)'; ctx.fill();
     }
@@ -1711,7 +1843,7 @@
 
     ctx.beginPath();
     quads(ctx, rib, -1, 0, 1, 0);
-    ctx.fillStyle = '#100d20';
+    ctx.fillStyle = TH.road;
     ctx.fill();
 
     drawLaneDashes(ctx, rib);
@@ -1720,13 +1852,14 @@
     // Everything here is a fixed width in WORLD units, so a metre of neon a
     // few metres from the lens is hundreds of pixels across. Capped, or
     // getting sideways next to an edge paints half the screen cyan.
+    var S = themeStrings();
     for (var side = -1; side <= 1; side += 2) {
       ctx.beginPath(); quads(ctx, rib, side, -50, side, 50, 0, EDGE_MAX_SC);
-      ctx.fillStyle = 'rgba(34,230,255,0.07)'; ctx.fill();
+      ctx.fillStyle = S.edgeSpill; ctx.fill();
       ctx.beginPath(); quads(ctx, rib, side, -24, side, 24, 0, EDGE_MAX_SC);
-      ctx.fillStyle = 'rgba(34,230,255,0.13)'; ctx.fill();
+      ctx.fillStyle = S.edgeGlow; ctx.fill();
       ctx.beginPath(); quads(ctx, rib, side, -10, side, 10, 0, EDGE_MAX_SC);
-      ctx.fillStyle = '#22e6ff'; ctx.fill();
+      ctx.fillStyle = S.edgeCore; ctx.fill();
       ctx.beginPath(); quads(ctx, rib, side, -3, side, 3, 0, EDGE_MAX_SC);
       ctx.fillStyle = 'rgba(240,252,255,0.92)'; ctx.fill();
     }
@@ -1758,7 +1891,7 @@
         ctx.closePath();
       }
     }
-    ctx.fillStyle = 'rgba(255,74,206,0.88)';
+    ctx.fillStyle = TH.dash;
     ctx.fill();
   }
 
@@ -1829,9 +1962,9 @@
     if (!fogGrad) {
       var top = HORIZON_Y - 20;
       fogGrad = ctx.createLinearGradient(0, top, 0, top + 300);
-      fogGrad.addColorStop(0.00, 'rgba(104,34,92,1)');
-      fogGrad.addColorStop(0.34, 'rgba(74,24,78,0.86)');
-      fogGrad.addColorStop(1.00, 'rgba(34,14,48,0)');
+      fogGrad.addColorStop(0.00, TH.fog[0]);
+      fogGrad.addColorStop(0.34, TH.fog[1]);
+      fogGrad.addColorStop(1.00, TH.fog[2]);
     }
     ctx.fillStyle = fogGrad;
     ctx.fillRect(-60, HORIZON_Y - 20, view.W + 120, 300);
@@ -1857,6 +1990,7 @@
     lapPath: lapPath, lapCorners: lapCorners,
     WALL_H: WALL_H, WALL_OFF: WALL_OFF,
     drawBackground: drawBackground, draw: draw,
+    setTheme: setTheme, theme: theme, DEFAULT_THEME: DEFAULT_THEME,
     drawChevrons: drawChevrons, drawFog: drawFog
   };
 })(window.DR = window.DR || {});

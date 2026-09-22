@@ -112,6 +112,25 @@
 
   var doneAward = 0;   // credits just earned, for the results screen to show
 
+  /* -------------------------------- RIVALS --------------------------------
+     A Quick Play race is you against three rivals (rivals.js). Their skill
+     is a fraction of the track's target lap pace: 1.0 laps in exactly the
+     target time printed on the track card. The spread is wide on purpose —
+     a new player can beat the slowest, and the fastest needs a clean race
+     from a stock car, less so from an upgraded one. That gap closing as you
+     upgrade is the point of upgrading. */
+  var QUICK_RIVALS = [
+    { name: 'VOLT',    color: '#22e6ff', arch: 'compact', skill: 0.86, bias: -30 },
+    { name: 'ONYX',    color: '#8b3dff', arch: 'sport',   skill: 0.91, bias:  30 },
+    { name: 'SCARLET', color: '#ff2f8e', arch: 'muscle',  skill: 0.96, bias:   0 }
+  ];
+  var POS_PAY = [120, 90, 70, 50];     // Quick Play race payout by finishing place
+  var raceClock = 0;      // seconds since the lights, shared by every car
+  var raceRivals = null;  // the field for the current race, or null
+  var standings = null;   // results table, filled when the player finishes
+  var finishPos = 0;
+  var bumpFlash = 0;
+
   var rushTime = 0, rushScore = 0, rushBest = 0;
   var cpIndex = 0, cpClean = true, cpFlash = 0, cpFlashText = '';
   var spikeT = 0, rushGates = 0;
@@ -141,8 +160,8 @@
      A mode decides what the race is FOR; the track screen is the same either
      way, so the two screens stack rather than each mode owning its own. */
   var MODES = [
-    { id: 'race',     name: 'RACE',     tag: '3 LAPS',
-      blurb: 'Three laps. Best lap called out at the end.' },
+    { id: 'race',     name: 'RACE',     tag: '3 LAPS  •  3 RIVALS',
+      blurb: 'Three laps against three rivals. Win for the big pay.' },
     { id: 'practice', name: 'PRACTICE', tag: 'NO CLOCK',
       blurb: 'The ideal line painted on the road, and when to hold.' },
     { id: 'rush',     name: 'CHECKPOINT RUSH', tag: 'SURVIVE',
@@ -393,6 +412,8 @@
     if (steer !== 0) hintAlpha = Math.max(0, hintAlpha - dt * 2.4);
 
     clock += dt;
+    raceClock += dt;
+    if (bumpFlash > 0) bumpFlash = Math.max(0, bumpFlash - dt / 0.5);
     if (pickPop > 0) pickPop = Math.max(0, pickPop - dt / 0.5);
     if (boostDenied > 0) boostDenied = Math.max(0, boostDenied - dt / 0.6);
 
@@ -435,6 +456,7 @@
     } else rebound = 0;
 
     checkEdges(dt);
+    updateRivals(dt);
     updateCamera(dt);
 
     // Laps. One lap is the whole corner sequence once; the start line is the
@@ -452,7 +474,7 @@
       lapFlash = 1;
       // Only a race has a last lap. Practice runs until you leave; Rush runs
       // until the clock beats you.
-      if (mode === 'race' && lapTimes.length >= RACE_LAPS) { phase = 'done'; lapFlash = 0; awardRaceCurrency(); }
+      if (mode === 'race' && lapTimes.length >= RACE_LAPS) { finishRace(); }
       if (mode === 'duel' && lapTimes.length >= DUEL_LAPS) { finishDuelLeg(); }
     }
     if (lapFlash > 0) lapFlash = Math.max(0, lapFlash - dt / 1.6);
@@ -482,10 +504,52 @@
      numbers; expect these to move once Phase 5 makes a city's real
      difficulty measurable instead of guessed. */
   function awardRaceCurrency() {
-    var target = DR.Road.tracks()[DR.Road.currentTrack()].targetSecs * RACE_LAPS;
-    var ratio = target / Math.max(1, raceTotal);
-    doneAward = Math.round(Math.max(40, Math.min(130, 80 * ratio)));
+    if (raceRivals && finishPos) {
+      doneAward = POS_PAY[Math.min(POS_PAY.length, finishPos) - 1];
+    } else {
+      var target = DR.Road.tracks()[DR.Road.currentTrack()].targetSecs * RACE_LAPS;
+      var ratio = target / Math.max(1, raceTotal);
+      doneAward = Math.round(Math.max(40, Math.min(130, 80 * ratio)));
+    }
     DR.Save.addCurrency(doneAward);
+  }
+
+  function finishLineS() { return DR.Road.INTRO_LEN + lapsFor(mode) * DR.Road.lapLength(); }
+
+  function updateRivals(dt) {
+    if (!raceRivals) return;
+    DR.Rivals.update(dt, { playerS: DR.Car.roadS, playerDev: DR.Car.dev,
+                           playerHW: DR.Car.halfWidth(), playerDone: false,
+                           clock: raceClock, finishS: finishLineS() });
+    // Pushed sideways along the road, but never INTO the barrier: being
+    // leaned on by a rival shouldn't be able to cost you a wall hit too.
+    var limit = Math.max(0, DR.Road.halfWidthAt(DR.Car.roadS) - DR.Car.halfWidth() - 2);
+    var hit = DR.Rivals.contact(DR.Car.roadS, DR.Car.dev, DR.Car.halfWidth(), DR.Car.L, limit);
+    if (!hit) return;
+    var c = DR.Road.centreAt(DR.Car.roadS);
+    var nx = Math.cos(c.h), ny = -Math.sin(c.h);
+    var nd = Math.max(-limit, Math.min(limit, DR.Car.dev + hit.shift));
+    var shift = nd - DR.Car.dev;
+    DR.Car.x += nx * shift; DR.Car.y += ny * shift;
+    DR.Car.dev = nd;
+    if (hit.fresh) {
+      DR.Car.jolt(-hit.side * 2.2);
+      DR.FX.wallSparks(hit.x, hit.y, -nx * hit.side, -ny * hit.side, 10, 0.7);
+      bumpFlash = 1;
+      // Running into the back of someone costs you; being run into doesn't.
+      if (hit.playerBehind) hitPenalty = Math.max(HIT_FLOOR, hitPenalty * 0.95);
+    }
+  }
+
+  function finishRace() {
+    phase = 'done'; lapFlash = 0;
+    standings = null; finishPos = 0;
+    if (raceRivals) {
+      standings = DR.Rivals.standings({ name: 'YOU', color: '#ffd76a', time: raceClock,
+                                        clock: raceClock, finishS: finishLineS() });
+      for (var i = 0; i < standings.length; i++) if (standings[i].isPlayer) finishPos = i + 1;
+    }
+    awardRaceCurrency();
   }
   function awardDuelCurrency() {
     var target = DR.Road.tracks()[DR.Road.currentTrack()].targetSecs * DUEL_LAPS;
@@ -669,6 +733,7 @@
 
     drawBoostButton(ctx2);
     drawMinimap(ctx2);
+    if (raceRivals) drawPosition(ctx2, v);
 
     // Crossing the line: one soft swell, no strobe.
     if (lapFlash > 0) {
@@ -1283,6 +1348,8 @@
     ctx2.fillStyle = 'rgba(6,4,16,0.74)';
     ctx2.fillRect(0, 0, v.W, v.H);
 
+    if (standings) { drawStandings(ctx2, v); return; }
+
     ctx2.textAlign = 'center';
     ctx2.font = '800 64px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx2.fillStyle = '#ffd76a';
@@ -1326,6 +1393,88 @@
     ctx2.fillStyle = '#ffd76a';
     ctx2.fillText('TAP TO RACE AGAIN', v.W * 0.5, 880);
     ctx2.textAlign = 'left';
+  }
+
+  /* A race against rivals ends on where you finished, then the whole field.
+     Rival times are shown as a gap to yours, which is the number that
+     actually means something; a rival still out on track when you crossed
+     the line is marked as an estimate rather than pretending it's final. */
+  function drawStandings(ctx2, v) {
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var cx2 = v.W * 0.5, i, me = null;
+    for (i = 0; i < standings.length; i++) if (standings[i].isPlayer) me = standings[i];
+
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '800 70px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = finishPos === 1 ? '#ffd76a' : '#eaf6ff';
+    ctx2.fillText(ordinal(finishPos) + ' PLACE', cx2, 270);
+    ctx2.font = '700 24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(180,214,236,0.9)';
+    ctx2.fillText(resultsSubtitle(), cx2, 312);
+
+    ctx2.font = '800 52px ' + MONO;
+    ctx2.fillStyle = '#eaf6ff';
+    ctx2.fillText(fmt(raceTotal), cx2, 388);
+    if (lapTimes.length) {
+      ctx2.font = '700 22px ' + MONO;
+      ctx2.fillStyle = '#7dffb0';
+      ctx2.fillText('BEST LAP  ' + fmt(Math.min.apply(null, lapTimes)), cx2, 424);
+    }
+
+    var top = 470, rowH = 62, x0 = 70, w = v.W - 140;
+    for (i = 0; i < standings.length; i++) {
+      var r = standings[i], y = top + i * rowH;
+      ctx2.fillStyle = r.isPlayer ? 'rgba(34,120,150,0.30)' : 'rgba(10,8,24,0.55)';
+      ctx2.fillRect(x0, y, w, rowH - 8);
+      if (r.isPlayer) {
+        ctx2.lineWidth = 2;
+        ctx2.strokeStyle = '#41e0ff';
+        ctx2.strokeRect(x0, y, w, rowH - 8);
+      }
+      var mid = y + (rowH - 8) * 0.5 + 9;
+      ctx2.textAlign = 'left';
+      ctx2.font = '800 26px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = 'rgba(190,214,235,0.9)';
+      ctx2.fillText(ordinal(i + 1), x0 + 18, mid);
+      ctx2.beginPath();
+      ctx2.arc(x0 + 104, mid - 9, 9, 0, Math.PI * 2);
+      ctx2.fillStyle = r.color;
+      ctx2.fill();
+      ctx2.font = '800 26px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx2.fillStyle = r.isPlayer ? '#eaf6ff' : (r.boss ? '#ffd76a' : 'rgba(226,240,250,0.85)');
+      ctx2.fillText(r.name, x0 + 126, mid);
+      ctx2.textAlign = 'right';
+      ctx2.font = '700 24px ' + MONO;
+      var gap = r.time - me.time;
+      var label = r.isPlayer ? 'YOU'
+                : (r.estimated ? '~' : '') + (gap >= 0 ? '+' : '−') + Math.abs(gap).toFixed(2);
+      ctx2.fillStyle = r.isPlayer ? '#ffd76a' : (gap >= 0 ? 'rgba(190,214,235,0.85)' : '#ff9a7a');
+      ctx2.fillText(label, x0 + w - 18, mid);
+    }
+
+    ctx2.textAlign = 'center';
+    var below = top + standings.length * rowH + 40;
+    drawResultsFooter(ctx2, v, below);
+    ctx2.textAlign = 'left';
+  }
+
+  function resultsSubtitle() {
+    return DR.Road.tracks()[DR.Road.currentTrack()].name;
+  }
+
+  // Currency earned, and the way back in. Story mode adds its own lines
+  // (unlocks, rewards) through the same footer, so every results screen
+  // reads the same way.
+  function drawResultsFooter(ctx2, v, y) {
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    ctx2.textAlign = 'center';
+    ctx2.font = '700 28px ' + MONO;
+    ctx2.fillStyle = '#7dffb0';
+    ctx2.fillText('+' + doneAward + ' CR', v.W * 0.5, y);
+    ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = '#ffd76a';
+    ctx2.fillText('TAP TO RACE AGAIN', v.W * 0.5, Math.max(y + 70, 880));
   }
 
   // Which room a Title door leads to. Both unbuilt rooms are still reachable
@@ -1420,7 +1569,7 @@
     if (inBox(lx, ly, EXIT_BTN)) { phase = 'modes'; DR.Input.releaseAll(); }
   }
 
-  function startRace(i, m, keepDuel) {
+  function startRace(i, m, keepDuel, opts) {
     if (m) mode = m;
     selected = i;
     // Whatever was being held to get here is not a steering input, and any
@@ -1447,6 +1596,10 @@
       DR.Ghost.start();
     }
     raceTotal = 0; hintAlpha = 1;
+    raceClock = 0; standings = null; finishPos = 0; bumpFlash = 0;
+    raceRivals = mode === 'race' ? ((opts && opts.rivals) || QUICK_RIVALS) : null;
+    if (raceRivals && raceRivals.length) DR.Rivals.start(raceRivals);
+    else { raceRivals = null; DR.Rivals.clear(); }
     phase = 'racing';
   }
 
@@ -1463,7 +1616,56 @@
     ctx2.lineWidth = 1.5;
     ctx2.strokeStyle = 'rgba(150,196,225,0.35)';
     ctx2.strokeRect(m.x, m.y, m.w, m.h);
+    if (raceRivals) drawRivalDots(ctx2, m);
     drawOutline(ctx2, m, undefined, lapProgress(), 2);
+  }
+
+  // Rivals on the minimap, as smaller dots in their own colours, drawn
+  // under the track line so your own (bigger, red) dot always reads on top.
+  var _fracs = [];
+  function drawRivalDots(ctx2, m) {
+    var pts = DR.Road.lapOutline(), i, j;
+    var pad = m.w * 0.12, iw = m.w - pad * 2, ih = m.h - pad * 2;
+    DR.Rivals.lapFractions(_fracs);
+    for (i = 0; i < _fracs.length; i++) {
+      var f = _fracs[i].f, best = pts[0];
+      for (j = 0; j < pts.length; j++) {
+        if (Math.abs(pts[j].f - f) < Math.abs(best.f - f)) best = pts[j];
+      }
+      ctx2.beginPath();
+      ctx2.arc(m.x + pad + best.nx * iw, m.y + pad + (1 - best.ny) * ih, 5, 0, Math.PI * 2);
+      ctx2.fillStyle = _fracs[i].color;
+      ctx2.fill();
+      ctx2.lineWidth = 1.5;
+      ctx2.strokeStyle = 'rgba(4,2,10,0.9)';
+      ctx2.stroke();
+    }
+  }
+
+  function ordinal(n) {
+    return n + (n === 1 ? 'ST' : n === 2 ? 'ND' : n === 3 ? 'RD' : 'TH');
+  }
+
+  // Your place in the race, top centre. Written as a word ("2ND"), never
+  // just a colour, and it gets a brief swell when someone leans on you.
+  function drawPosition(ctx2, v) {
+    var pos = DR.Rivals.position(DR.Car.roadS, false);
+    var total = DR.Rivals.all().length + 1;
+    var cx2 = v.W * 0.5;
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '700 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = 'rgba(150,196,225,0.85)';
+    ctx2.fillText('POSITION', cx2, 70);
+    var sz = 58 + Math.round(bumpFlash * 8);
+    ctx2.font = '800 ' + sz + 'px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.lineWidth = 7;
+    ctx2.strokeStyle = 'rgba(4,2,10,0.88)';
+    var txt = ordinal(pos) + ' / ' + total;
+    ctx2.strokeText(txt, cx2, 130);
+    ctx2.fillStyle = pos === 1 ? '#ffd76a' : '#eaf6ff';
+    ctx2.fillText(txt, cx2, 130);
+    ctx2.textAlign = 'left';
   }
 
   // Did we just run over a pickup?
@@ -1875,7 +2077,9 @@
       DR.Ghost.at(duelGhost, duelElapsed, _ghostPos);
       if (!_ghostPos.done) DR.Car.drawGhost(ctx, v, _ghostPos);
     }
+    if (raceRivals) DR.Rivals.draw(ctx, v, DR.Car.roadS, 'ahead');
     DR.Car.draw(ctx, v);
+    if (raceRivals) DR.Rivals.draw(ctx, v, DR.Car.roadS, 'behind');
     DR.FX.drawSparks(ctx, v);
     DR.FX.drawSpeedLines(ctx, v);
     DR.FX.drawBurst(ctx, v);
@@ -2010,6 +2214,13 @@
     },
     garageSel: function () { return garageSel; },
     garageTab: function () { return garageTab; },
+    // Runs the simulation forward without drawing — for tests that need to
+    // drive whole races in milliseconds rather than minutes.
+    step: function (dt) { update(dt || FIXED); },
+    standings: function () { return standings; },
+    finishPos: function () { return finishPos; },
+    doneAward: function () { return doneAward; },
+    raceClock: function () { return raceClock; },
     setMode: function (m) { mode = m; },
     modes: function () { return MODES; },
     modeSel: function () { return modeSel; },

@@ -7,31 +7,74 @@ the current best draft, not a locked spec.
 
 ## Development roadmap
 
-Each phase is built, tested and shown before the next one starts. Terrain
-was inserted after Garage and before Currency: both AI opponents (which
-follow the racing line) and the real city circuits get built against
-whatever track model exists, so hills and banking need to exist before
-either of those, not be retrofitted after.
+Rewritten after the first three phases shipped, because the scope grew a
+lot along the way: a real WebGL garage preview, boss-car rewards for six
+of the ten cities, a distinct look per city, a tutorial with its own door,
+and hills and banking on the tracks. The old order was written before any
+of that existed.
 
 | Phase | What it is | Status |
 |---|---|---|
-| 0 | Foundations — the save file, the Title screen | Done |
-| 1 | Garage — 8 cars, real stats, colours, a real WebGL preview | Done |
-| 3 | Currency & upgrades | **Current** |
-| 2 | Terrain — hills and banking, visual first | Planned |
-| 4 | AI opponents | Planned |
-| 5 | Story structure — cities, gating, boss races | Planned |
-| 6 | Narrative & difficulty tuning | Planned |
-| 7 | Quick Play & flow polish | Planned |
-| 8 | Tutorial overhaul — its home on the Title screen exists since Phase 1 | Planned |
+| 1 | Foundations — the save file, the Title screen | Done |
+| 2 | Garage — 8 cars, real stats, colours, a WebGL preview | Done |
+| 3 | Currency & upgrades — Quick Play payouts, 4 upgrade systems | Done |
+| 4 | **Rivals** — AI cars on track, race position, bumping, pay by finishing place | Next |
+| 5 | **Story mode** — 10 cities, their events, unlocks, boss races, boss-car rewards, and a distinct look for every city | Planned |
+| 6 | **Tutorial** — a guided run that shows which side to press, how long to hold, and when to let go | Planned |
+| 7 | **New circuits** — Coastal Run, Underpass and the finale lap | Planned |
+| 8 | **Terrain** — hills and banking, visual only | Planned |
+| 9 | Balance & polish — difficulty measured per city with bots, payout tuning | Planned |
 
-Currency & upgrades moved ahead of Terrain: it builds entirely on the
-Garage and save.js's existing (until now unused) currency/upgrade
-functions, needs none of Terrain's track-model work, and is the more
-direct answer to the original "15-20 minute engagement" problem this whole
-plan exists to solve. Terrain still comes before AI opponents and the real
-city circuits, for the reason originally given — both get built against
-whatever track model exists.
+**Why this order.**
+
+- **Rivals come first** because Story mode is mostly races against other
+  cars, and boss races are a rival with a name. Nothing in Story can be
+  built until there is something on the road to race.
+- **City looks are part of Story mode, not their own phase.** A city's
+  look is a colour set for the sky, sun, ground and neon, which is small
+  work on its own and only matters once cities exist.
+- **Tutorial after Story**, because the tutorial is the front door to Story
+  mode. A new player's path is Tutorial, then City 1.
+- **New circuits after Story.** Every city can run on one of the three
+  existing tracks, recoloured, from day one; new layouts swap in later
+  without changing how any city is built.
+- **Terrain late, and visual only.** Hills that change the physics or hide
+  the road ahead would break the "a crash must never feel unfair" rule.
+  Kept as a pure visual layer, it can't break anything that has already
+  shipped, so there's no reason to hold other phases for it.
+
+## Rivals
+
+Rival cars (`src/rivals.js`) don't run the player's drift physics. They
+follow the racing line (the same one Practice paints) at a speed worked out
+for each track in advance, and their bodies swing out through corners by
+the angle a real car would need there, so they look like they're drifting.
+They can't spin, crash or get stuck, which makes them predictable in a
+useful way: you can learn where a rival is quick and where it isn't.
+
+- **Skill** is one number. 1.0 laps in exactly the track's target time
+  (the one on the track card); 0.9 is ten percent slower. Measured, not
+  just claimed: a skill-1.0 rival lapped Velocity Ring in 24.8–25.3s
+  against a 25s target, and a skill-0.9 rival 27.5s against 27.8s
+  expected. The small spread is deliberate: each lap gets a ±1.5% wobble,
+  so the running order can shift.
+- **Speed profile**: faster on straights, easing off before corners, and a
+  short burst out of each corner (with a visible exhaust flame). It's
+  scaled so the average over the lap lands exactly on the target.
+- **Traffic**: a rival that comes up behind a car goes round it on
+  whichever side has more room. Rivals never overlap each other; bumping
+  the player pushes both cars apart sideways and slows whoever ran into
+  the back of the other a little. A bump never pushes you into the wall.
+- **Catch-up, one direction only**: a rival more than about 1,400 units
+  behind you gets up to 4% extra pace, so races don't turn empty. A rival
+  ahead of you never gets help, so beating one always means actually
+  being faster than it.
+
+**Quick Play race:** three rivals, skill 0.86 / 0.91 / 0.96. Measured
+with the racing-line bot on a stock Nightrunner: without using boost it
+finishes 2nd on every track; using boost well, it wins every one. So a
+new player can beat the slowest rival and a good one can win. Pay by
+finishing place: 120 / 90 / 70 / 50.
 
 ## The story
 
