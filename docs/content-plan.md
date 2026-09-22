@@ -20,8 +20,8 @@ of that existed.
 | 3 | Currency & upgrades — Quick Play payouts, 4 upgrade systems | Done |
 | 4 | **Rivals** — AI cars on track, race position, bumping, pay by finishing place | Done |
 | 5 | **Story mode** — 10 cities, their events, unlocks, boss races, boss-car rewards, and a distinct look for every city | Done |
-| 6 | **Tutorial** — a guided run that shows which side to press, how long to hold, and when to let go | Next |
-| 7 | **New circuits** — Coastal Run, Underpass and the finale lap | Planned |
+| 6 | **Tutorial** — a guided run that shows which side to press, how long to hold, and when to let go | Done |
+| 7 | **New circuits** — Coastal Run, Underpass and the finale lap | Next |
 | 8 | **Terrain** — hills and banking, visual only | Planned |
 | 9 | Balance & polish — difficulty measured per city with bots, payout tuning | Planned |
 
@@ -75,6 +75,42 @@ with the racing-line bot on a stock Nightrunner: without using boost it
 finishes 2nd on every track; using boost well, it wins every one. So a
 new player can beat the slowest rival and a good one can win. Pay by
 finishing place: 120 / 90 / 70 / 50.
+
+## Tutorial
+
+A coach riding along (`src/tutorial.js`), not a screen of instructions. It
+runs on Velocity Ring at 55% of race speed, with the racing line painted.
+
+- **Lesson 1, corners.** The half of the screen to press lights up with a
+  thumb (or an arrow key, if you've been using the keyboard) and the words
+  HOLD LEFT / HOLD RIGHT. Mid-corner it says EASE OFF when you're turning
+  too tight, and LET GO once the road straightens. A bar shows how much of
+  the corner is left. Nail three corners to move on.
+- **Lesson 2, boost.** The meter is filled for you; a ring and an arrow
+  point at the BOOST button, and it says WAIT FOR A STRAIGHT until there
+  is one. Then it shows a drift filling the meter back up.
+- **Grading is on the result**, not the exact rhythm of your thumb: a
+  corner passes if you held the right side, didn't touch a wall, and
+  stayed near the line. Otherwise it says which mistake it was: MISSED
+  THAT ONE, OTHER SIDE, RAN WIDE, CUT IN, or ALMOST (a scrape on an
+  otherwise good corner). A wall hit is judged the moment it happens.
+- **The cues come from a driver that is known to get round cleanly**: the
+  same look-ahead the test bots use, smoothed so the words change at a
+  human pace (about 2-3 changes a second, never a flash).
+- **You can't get stuck.** If a spin leaves you facing the wrong way, the
+  car is put back on the road pointing forward and the coach says BACK ON
+  TRACK.
+- **Pays 150 CR the first time**, once. Finishing sends you to Story.
+  Until you've done it, the title screen's TUTORIAL row reads "NEW? START
+  HERE".
+
+**Why 55% speed, and why holding solid is wrong.** The first version told
+you to hold for the whole of the racing line's corner zone. A bot doing
+exactly that crashed constantly: on long sweepers, holding flat out turns
+too hard. Good drivers hold and ease off. A simulated player who does what
+the screen says, 0.2-0.3s late, crashed at full race speed but finishes in
+30-55 seconds at 55%, in every car tried (Nightrunner, Alleycat, Warbird,
+Ironclad, Specter).
 
 ## The story
 

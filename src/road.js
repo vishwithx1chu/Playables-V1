@@ -1778,6 +1778,33 @@
     return _lineOut;
   }
 
+  /* The hold window you are in, or the next one ahead: which side, and the
+     world arc lengths where holding should start and stop. The tutorial
+     reads this to show "get ready", a hold meter, and "let go" at exactly
+     the points the racing line's own advice switches. Null if there is no
+     corner within maxAhead. */
+  var _holdOut = { dir: 0, start: 0, end: 0 };
+  function holdWindow(s, maxAhead) {
+    var L = racingLine(curTrack);
+    var u = (s - INTRO_LEN) / L.step;
+    var base = Math.floor(u);
+    var sAt = function (k) { return s + (base + k - u) * L.step; };
+    var z = function (k) { return L.zone[((base + k) % L.n + L.n) % L.n]; };
+    var k = 0, limit = Math.ceil((maxAhead || 3000) / L.step);
+    if (z(0) === 0) {
+      while (k < limit && z(k) === 0) k++;
+      if (k >= limit) return null;
+    } else {
+      while (k > -L.n && z(k - 1) === z(0)) k--;
+    }
+    var dir = z(k), e = k;
+    while (e - k < L.n && z(e) === dir) e++;
+    _holdOut.dir = dir;
+    _holdOut.start = sAt(k);
+    _holdOut.end = sAt(e);
+    return _holdOut;
+  }
+
   // The line painted on the road, as a strip that follows it.
   function drawRacingLine(ctx, rib, view, time) {
     var HALF = 13;
@@ -1986,7 +2013,7 @@
     drawCheckpoints: drawCheckpoints, checkpointAt: checkpointAt, cpCount: cpCount,
     project: project, project3: project3, CAM_LIFT: CAM_LIFT,
     buildRibbon: buildRibbon, quads: quads, drawWalls: drawWalls,
-    racingLine: racingLine, lineAt: lineAt, drawRacingLine: drawRacingLine,
+    racingLine: racingLine, lineAt: lineAt, holdWindow: holdWindow, drawRacingLine: drawRacingLine,
     lapPath: lapPath, lapCorners: lapCorners,
     WALL_H: WALL_H, WALL_OFF: WALL_OFF,
     drawBackground: drawBackground, draw: draw,

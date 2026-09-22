@@ -192,6 +192,16 @@ Finish in the top 3 to clear it; clear the Time Attack; then FENDER's boss
 race unlocks. Beat Fender and the Harbormaster is in your garage and
 Sundown Strip is open on the map.
 
+**Phase 6 — tutorial.** The TUTORIAL door is real
+([`src/tutorial.js`](src/tutorial.js)). A coach rides along on Velocity
+Ring at just over half race speed: it lights up the half of the screen to
+press, says HOLD / EASE OFF / LET GO as you go, and grades each corner
+(NICE!, RAN WIDE, CUT IN...). After three good corners it teaches boost.
+It pays 150 CR the first time and then sends you to Story. Details in
+[`docs/content-plan.md`](docs/content-plan.md#tutorial).
+
+To test it: on the title, tap TUTORIAL twice. Do what the screen says.
+
 ## Current state, before career mode: Milestone 2.5
 
 Four modes, picked from the screen the game opens on:
@@ -823,6 +833,7 @@ src/car.js      the drift physics and the car
 src/cars.js     the 13 cars, their stats, and the upgrade maths
 src/rivals.js   the AI cars: pace, lines, passing, bumping, standings
 src/story.js    the ten cities, their events, colours, pay and unlocks
+src/tutorial.js the tutorial coach: cues, corner grading, the boost lesson
 src/car3d.js    the lit WebGL car in the Garage
 src/ghost.js    records a run, and plays it back as a car that is not there
 src/fx.js       smoke, skid marks, screen shake, edge flash, crash sparks

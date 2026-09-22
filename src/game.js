@@ -185,7 +185,7 @@
     { id: 'story',    name: 'STORY',      ready: true },
     { id: 'quick',    name: 'QUICK PLAY', ready: true },
     { id: 'garage',   name: 'GARAGE',     ready: true },
-    { id: 'tutorial', name: 'TUTORIAL',   ready: false }
+    { id: 'tutorial', name: 'TUTORIAL',   ready: true }
   ];
   var titleSel = 1;   // Quick Play — the default door
 
@@ -256,6 +256,8 @@
   var last = 0, acc = 0;
   var hintAlpha = 1;
   var hitCool = 0;
+  var wallHitCount = 0;       // every wall hit this run; the tutorial grades on it
+  var lastWallSide = 0;       // and which side of the road the last one was on
   var lap = 1, lapFlash = 0;
   var boostT = 1e9;          // seconds since the boost was pressed
   var lapTimer = 0;          // seconds into the current lap
@@ -301,7 +303,8 @@
   function spikeMult() { return spikeT > 0 ? SPIKE_SLOW : 1; }
 
   function currentSpeed() {
-    return BASE_SPEED * boostMult() * hitPenalty * slipDrag() * spikeMult();
+    var pace = mode === 'tutorial' ? DR.Tutorial.pace() : 1;
+    return BASE_SPEED * pace * boostMult() * hitPenalty * slipDrag() * spikeMult();
   }
 
   // Where the next gate is, in world arc length.
@@ -401,6 +404,7 @@
     rebound = 130 + severity * 220;
     rbNX = -loc.nx * side; rbNY = -loc.ny * side;
     hitCool = 0.45;
+    wallHitCount++; lastWallSide = side;
 
     // A crash should push you toward the correction you actually needed.
     // Running wide means you were not turning ENOUGH, so bleeding the drift
@@ -430,9 +434,10 @@
     if (pickPop > 0) pickPop = Math.max(0, pickPop - dt / 0.5);
     if (boostDenied > 0) boostDenied = Math.max(0, boostDenied - dt / 0.6);
 
+    var boostFired = false;
     if (DR.Input.takeBoost()) {
       if (meter >= BOOST_COST) {
-        meter -= BOOST_COST; boostT = 0; DR.FX.boostKick();
+        meter -= BOOST_COST; boostT = 0; DR.FX.boostKick(); boostFired = true;
         // A shove forward takes some of the sideways out of it straight away.
         DR.Car.scrubSlip(BOOST_SLIP_SCRUB);
       } else boostDenied = 1;
@@ -492,6 +497,15 @@
       if (mode === 'duel' && lapTimes.length >= DUEL_LAPS) { finishDuelLeg(); }
     }
     if (lapFlash > 0) lapFlash = Math.max(0, lapFlash - dt / 1.6);
+
+    if (mode === 'tutorial') {
+      tutorialRescue(dt);
+      var tr = DR.Tutorial.update(dt, { s: DR.Car.roadS, steer: steer, speed: speed,
+                                        walls: wallHitCount, wallSide: lastWallSide,
+                                        meter: meter, boosted: boostFired });
+      if (tr.fillMeter && meter < 1) meter = Math.min(1, meter + dt * 0.9);
+      if (tr.finished) finishTutorial();
+    }
 
     DR.FX.emit(DR.Car, speed, dt);
     DR.FX.update(dt, DR.Car.x, DR.Car.y);
@@ -572,6 +586,49 @@
     } else {
       awardRaceCurrency();
     }
+  }
+
+  /* The tutorial: Velocity Ring, the gentlest track, with the racing line
+     painted and a coach (src/tutorial.js) on top. No laps to count — it
+     ends when both lessons are done. The first finish pays a little, and
+     the title stops pointing new players at it. */
+  var TUTORIAL_ID = 'tutorial:done';
+  var TUTORIAL_PAY = 150;
+  /* Held flat out at tutorial pace, a car can spin right round and end up
+     driving back the way it came. A beginner shouldn't have to work out how
+     to turn round; after a moment facing the wrong way the car is set back
+     on the middle of the road, pointing forward, and the coach says so. */
+  var wrongWayT = 0;
+  function tutorialRescue(dt) {
+    var c = DR.Road.centreAt(DR.Car.roadS);
+    var dh = DR.Car.h - c.h;
+    dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+    wrongWayT = Math.abs(dh) > 1.75 ? wrongWayT + dt : 0;
+    if (wrongWayT < 0.8) return;
+    wrongWayT = 0;
+    var car = DR.Car;
+    car.x = c.x; car.y = c.y; car.h = c.h; car.bodyYaw = c.h;
+    car.cmdSlip = 0; car.gripSlip = 0; car.slip = 0; car.yawRate = 0;
+    car.roll = 0; car.rollV = 0; car.dev = 0;
+    rebound = 0; camReady = false;
+    DR.Tutorial.rescued();
+  }
+
+  function startTutorial() {
+    wrongWayT = 0;
+    startRace(0, 'tutorial');
+    DR.Tutorial.start();
+  }
+  function finishTutorial() {
+    phase = 'done'; lapFlash = 0;
+    var first = !DR.Save.isUnlocked(TUTORIAL_ID);
+    doneAward = first ? TUTORIAL_PAY : 0;
+    if (first) { DR.Save.unlock(TUTORIAL_ID); DR.Save.addCurrency(doneAward); }
+    doneSel = 1;
+  }
+  function leaveTutorial() {
+    phase = 'story'; storySel = DR.Story.currentCity();
+    DR.Input.releaseAll(); DR.Input.clearTap();
   }
 
   function startStoryEvent(ci, ei) {
@@ -987,8 +1044,10 @@
         ctx2.fillStyle = 'rgba(190,214,235,0.5)';
         ctx2.fillText('COMING SOON', b.x + b.w - 26, b.y + b.h * 0.5 + 7);
       } else {
-        ctx2.fillStyle = on ? '#ffd76a' : 'rgba(190,214,235,0.45)';
-        ctx2.fillText(on ? 'TAP AGAIN ▸' : 'TAP TO SELECT', b.x + b.w - 26, b.y + b.h * 0.5 + 7);
+        var fresh = it.id === 'tutorial' && !DR.Save.isUnlocked(TUTORIAL_ID);
+        ctx2.fillStyle = on || fresh ? '#ffd76a' : 'rgba(190,214,235,0.45)';
+        ctx2.fillText(on ? 'TAP AGAIN ▸' : (fresh ? 'NEW? START HERE' : 'TAP TO SELECT'),
+                      b.x + b.w - 26, b.y + b.h * 0.5 + 7);
       }
       ctx2.globalAlpha = 1;
     }
@@ -1580,6 +1639,7 @@
   }
 
   function drawDone(ctx2, v) {
+    if (mode === 'tutorial') { drawTutorialDone(ctx2, v); return; }
     if (mode === 'rush') { drawRushDone(ctx2, v); return; }
     if (mode === 'duel') { drawDuelDone(ctx2, v); return; }
     if (mode === 'time') {
@@ -1769,7 +1829,7 @@
                                   // last remembered
       phase = 'garage';
     }
-    else if (it.id === 'tutorial') phase = 'tutorial';
+    else if (it.id === 'tutorial') startTutorial();
   }
 
   // Menu presses. The boost button owns its own, so this only runs off-race.
@@ -1850,6 +1910,10 @@
       }
     } else if (phase === 'handoff') {
       startDuelLeg2();
+    } else if (phase === 'done' && mode === 'tutorial') {
+      if (inBox(lx, ly, DONE_RETRY_BTN)) { startTutorial(); return; }
+      leaveTutorial();
+      return;
     } else if (phase === 'done') {
       if (storyEvent) {
         // Story results have two real choices, so they get two buttons; a
@@ -1913,11 +1977,14 @@
   // Practice never ends on its own, so it needs a way out. Handled here
   // rather than in updateMenu, because the menu loop does not run mid-race.
   function handleRaceTap() {
-    if (mode !== 'practice') { DR.Input.clearTap(); return; }
+    if (mode !== 'practice' && mode !== 'tutorial') { DR.Input.clearTap(); return; }
     var t = DR.Input.takeTap();
     if (!t) return;
     var lx = (t.x - offX) / scale, ly = (t.y - offY) / scale;
-    if (inBox(lx, ly, EXIT_BTN)) { phase = 'modes'; DR.Input.releaseAll(); }
+    if (inBox(lx, ly, EXIT_BTN)) {
+      phase = mode === 'tutorial' ? 'title' : 'modes';
+      DR.Input.releaseAll();
+    }
   }
 
   function startRace(i, m, keepDuel, opts) {
@@ -1932,7 +1999,7 @@
     // happened to leave the physics constants set to.
     DR.Cars.applyToCar(DR.Save.selectedCar());
     DR.Car.reset(); DR.FX.reset();
-    camReady = false; hitCool = 0;
+    camReady = false; hitCool = 0; wallHitCount = 0;
     lap = 1; lapFlash = 0; boostT = 1e9;
     lapTimer = 0; timing = false; lapTimes.length = 0;
     hitPenalty = 1; meter = 0.55; driftTime = 0; pickPop = 0; boostDenied = 0;
@@ -2037,6 +2104,53 @@
       pickPop = 1;
       DR.FX.pickupBurst();
     }
+  }
+
+  function drawTutorialHud(ctx2, v) {
+    DR.Tutorial.draw(ctx2, v, { byKey: DR.Input.lastDevice() === 'key', boostBtn: BOOST_BTN });
+    drawBoostButton(ctx2);
+    drawButton(ctx2, EXIT_BTN, '\u25C2 MENU');
+  }
+
+  function drawTutorialDone(ctx2, v) {
+    var SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    ctx2.fillStyle = 'rgba(6,4,16,0.80)';
+    ctx2.fillRect(0, 0, v.W, v.H);
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '800 60px ' + SANS;
+    ctx2.fillStyle = '#7dffb0';
+    ctx2.fillText('TUTORIAL DONE', v.W * 0.5, 300);
+    var steps = [
+      ['1', 'HOLD THE SIDE THE ROAD TURNS TOWARD'],
+      ['2', 'LET GO AS IT STRAIGHTENS'],
+      ['3', 'DRIFTS FILL BOOST \u2014 USE IT ON STRAIGHTS']
+    ];
+    for (var i = 0; i < steps.length; i++) {
+      var y = 420 + i * 96;
+      ctx2.beginPath();
+      ctx2.arc(96, y - 10, 26, 0, Math.PI * 2);
+      ctx2.fillStyle = 'rgba(255,215,106,0.18)';
+      ctx2.fill();
+      ctx2.lineWidth = 3;
+      ctx2.strokeStyle = '#ffd76a';
+      ctx2.stroke();
+      ctx2.font = '800 28px ' + SANS;
+      ctx2.fillStyle = '#ffd76a';
+      ctx2.fillText(steps[i][0], 96, y);
+      ctx2.textAlign = 'left';
+      fitText(ctx2, steps[i][1], 146, y, 540, 24, '800', SANS);
+      ctx2.textAlign = 'center';
+    }
+    ctx2.font = '700 30px ' + MONO;
+    ctx2.fillStyle = '#7dffb0';
+    ctx2.fillText(doneAward ? '+' + doneAward + ' CR' : 'ALREADY PAID OUT', v.W * 0.5, 800);
+    ctx2.font = '700 24px ' + SANS;
+    ctx2.fillStyle = 'rgba(190,214,235,0.9)';
+    ctx2.fillText('STORY MODE STARTS IN PORTSIDE', v.W * 0.5, 1060);
+    drawDoneButton(ctx2, DONE_RETRY_BTN, 'AGAIN', doneSel === 0);
+    drawDoneButton(ctx2, DONE_CONT_BTN, 'TO STORY', doneSel === 1);
   }
 
   /* Practice read-out. The line on the road says WHERE; this says WHAT TO DO
@@ -2381,6 +2495,9 @@
       if (confirm) tryStoryEvent(storySel, citySel);
     } else if (phase === 'handoff') {
       if (confirm) startDuelLeg2();
+    } else if (phase === 'done' && mode === 'tutorial') {
+      if (st) doneSel = st < 0 ? 0 : 1;
+      if (confirm) { if (doneSel === 0) startTutorial(); else leaveTutorial(); }
     } else if (phase === 'done') {
       if (storyEvent) {
         if (st) doneSel = st < 0 ? 0 : 1;
@@ -2437,7 +2554,7 @@
     var rib = DR.Road.draw(ctx, v);
     DR.FX.drawSkids(ctx, v);
     // Over the skid marks, or your own rubber hides the advice.
-    if (mode === 'practice') DR.Road.drawRacingLine(ctx, rib, v, clock);
+    if (mode === 'practice' || mode === 'tutorial') DR.Road.drawRacingLine(ctx, rib, v, clock);
     if (mode === 'rush') {
       DR.Road.drawCheckpoints(ctx, rib, v, cpWorldS(cpIndex));
       DR.Road.drawHazards(ctx, rib, v, clock);
@@ -2462,6 +2579,7 @@
     // The results panel owns the screen; the race HUD behind it is clutter.
     if (phase === 'racing') {
       if (mode === 'practice') drawPracticeHud(ctx, v);
+      else if (mode === 'tutorial') drawTutorialHud(ctx, v);
       else if (mode === 'rush') drawRushHud(ctx, v);
       else { drawHud(ctx, v); drawHint(ctx, v); }
       if (mode === 'duel') drawDuelHud(ctx, v);
@@ -2514,7 +2632,7 @@
     });
     // Reaching for the MENU button must not drift the car on the way.
     DR.Input.setUiHitTest(function (clientX, clientY) {
-      if (phase !== 'racing' || mode !== 'practice') return false;
+      if (phase !== 'racing' || (mode !== 'practice' && mode !== 'tutorial')) return false;
       var lx = (clientX - offX) / scale, ly = (clientY - offY) / scale;
       return inBox(lx, ly, EXIT_BTN);
     });
@@ -2605,6 +2723,8 @@
     storyEvent: function () { return storyEvent; },
     storyResult: function () { return storyResult; },
     doneSel: function () { return doneSel; },
+    startTutorial: startTutorial,
+    wallHits: function () { return wallHitCount; },
     garageReturn: function () { return garageReturn; },
     finishPos: function () { return finishPos; },
     doneAward: function () { return doneAward; },
