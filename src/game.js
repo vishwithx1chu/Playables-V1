@@ -957,7 +957,7 @@
     // device that can't do WebGL. The in-race car is untouched either way.
     _garagePreview.bodyYaw = 0.55 + Math.sin(clock * 0.45) * 0.18;
     var previewColor = DR.Save.carColor(def.id) || def.color;
-    var drew3D = DR.Car3D && DR.Car3D.render({ id: def.id, color: previewColor, yaw: _garagePreview.bodyYaw });
+    var drew3D = DR.Car3D && DR.Car3D.render({ archetype: def.archetype, color: previewColor, yaw: _garagePreview.bodyYaw });
     if (!drew3D) {
       ctx2.save();
       ctx2.translate(0, -GARAGE_PREVIEW_SHIFT_Y);
