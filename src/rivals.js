@@ -54,7 +54,7 @@
   // Slipstream.
   var DRAFT_NEAR = 40, DRAFT_FAR = 460, DRAFT_W = 70, DRAFT_GAIN = 0.06;
   // Defending.
-  var BLOCK_NEAR = 60, BLOCK_FAR = 320, BLOCK = 0.35, BLOCK_BOSS = 0.55;
+  var BLOCK_NEAR = 60, BLOCK_FAR = 320, BLOCK = 0.28, BLOCK_BOSS = 0.45;
   // Mistakes.
   var MISTAKE_CHANCE = 0.3, MISTAKE_CHANCE_BOSS = 0.15, MISTAKE_T = 0.9;
   // Contact.
@@ -143,7 +143,7 @@
         slow: 1, bumpCool: 0,
         meter: hash(i * 13 + 5) * 0.6, boostT: 1e9, boosts: 0,
         draft: 1, kickD: 0,
-        wobT: 0, wobAmp: 0, spinT: 0, spinDir: 0, spins: 0,
+        wobT: 0, wobAmp: 0, spinT: 0, spinDir: 0, spins: 0, stunT: 0, shunts: 0,
         mistLap: -99, mistS: -1, mistT: 0, mistDir: 0,
         finished: false, finishT: 0
       });
@@ -214,7 +214,8 @@
       var kHere = Math.abs(DR.Road.centreAt(r.s, _c).k);
       r.meter = Math.min(1, r.meter + dt * (RB_FILL + RB_FILL_CORNER * Math.min(1, kHere * 600)));
       if (r.boostT < 1e9) r.boostT += dt;
-      if (r.meter >= 1 && r.spinT <= 0 && r.s > DR.Road.INTRO_LEN &&
+      if (r.stunT > 0) r.stunT = Math.max(0, r.stunT - dt);
+      if (r.meter >= 1 && r.spinT <= 0 && r.stunT <= 0 && r.s > DR.Road.INTRO_LEN &&
           DR.Road.dirAt(r.s + 60) === 0 && DR.Road.dirAt(r.s + 500) === 0) {
         r.meter = 0; r.boostT = 0; r.boosts++;
       }
@@ -281,8 +282,9 @@
         if (leftOk && rightOk) want = Math.abs(left - want) < Math.abs(right - want) ? left : right;
         else if (leftOk) want = left;
         else if (rightOk) want = right;
-      } else if (!ctx.playerDone) {
-        // Nobody to get round: if you're right on its bumper, cover you.
+      } else if (!ctx.playerDone && r.stunT <= 0) {
+        // Nobody to get round: if you're right on its bumper, cover you —
+        // unless it's still shaken from a hit, which is your opening.
         var behind = r.s - ctx.playerS;
         if (behind > BLOCK_NEAR && behind < BLOCK_FAR) {
           want += (ctx.playerDev - want) * (r.boss ? BLOCK_BOSS : BLOCK);
@@ -293,7 +295,9 @@
       if (want < -limit) want = -limit;
 
       // A spinning car isn't steering; it just slides where it was knocked.
-      var nd = r.spinT > 0 ? r.d : r.d + (want - r.d) * (1 - Math.exp(-dt / LANE_TAU));
+      // Shaken by a hit, it's slow to get back on line.
+      var tau = r.stunT > 0 ? LANE_TAU * 3 : LANE_TAU;
+      var nd = r.spinT > 0 ? r.d : r.d + (want - r.d) * (1 - Math.exp(-dt / tau));
       nd += r.kickD * dt;
       r.kickD *= kd;
       if (nd > limit + EDGE_MARGIN) { nd = limit + EDGE_MARGIN; scrape(r, 1); }
@@ -392,6 +396,14 @@
             var back = a.s < b.s ? a : b, front = back === a ? b : a;
             back.s = front.s - (halfLen(a.arch) + halfLen(b.arch));
             if (back.v > front.v) back.slow = Math.min(back.slow, (front.v / back.v) * 0.99 * back.slow);
+            if (pass === 0 && front.bumpCool <= 0) {
+              // The one in front gets its tail knocked about too.
+              var off = front.d - back.d;
+              front.kickD = (off >= 0 ? 1 : -1) * 70;
+              wobble(front, 0.18);
+              front.stunT = Math.max(front.stunT, 0.6);
+              front.bumpCool = 0.5;
+            }
           }
         }
       }
@@ -417,9 +429,11 @@
     if (DR.FX && DR.FX.labelAt) DR.FX.labelAt('SPUN OUT', '#ffd76a', r.x, r.y, 1.2);
   }
 
-  /* Contact with the player. p: { s, dev, hw, len, limit, v } — where you
-     are, how wide and long your car is, how far you can move across before
-     the barrier, and how fast you're going. Returns what the game should do
+  /* Contact with the player. p: { s, dev, hw, len, limit, v, boost,
+     slipAmt, slipSign, latV } — where you are, how wide and long your car is,
+     how far you can move across before the barrier, how fast you're going,
+     how much boost is on (0..1), how sideways you are (0..1, and which
+     way), and how fast you're sliding across the road. Returns what the game should do
      to your car, or null:
        shiftD  sideways shove        shiftS  pushed back along the road
        cap     most of your current speed you can keep (1 = no loss)
@@ -428,12 +442,17 @@
        kind    'side' | 'rear' (you ran into it) | 'rammed' (it ran into you)
        severity 0..1, x/y where, side which side it was on */
   var _hit = { shiftD: 0, shiftS: 0, cap: 1, knock: 0, fresh: false, kind: '', severity: 0,
-               x: 0, y: 0, side: 0, spun: null, pinned: false };
+               x: 0, y: 0, side: 0, spun: null, pinned: false, shunt: false, power: 1 };
   function contact(p) {
     var hitAny = false, dev = p.dev, pullS = 0;
     _hit.shiftD = 0; _hit.shiftS = 0; _hit.cap = 1; _hit.knock = 0; _hit.fresh = false;
     _hit.kind = ''; _hit.severity = 0; _hit.spun = null; _hit.pinned = false;
     var hlP = p.len * 0.45;
+    /* How hard you hit. Boosting, you're a battering ram; drifting, your
+       whole car is swinging sideways into them. Both together is the
+       biggest hit in the game. 1 is a plain bump, up to about 3. */
+    var power = 1 + 0.9 * (p.boost || 0) + 1.2 * (p.slipAmt || 0);
+    _hit.power = power; _hit.shunt = false;
     // Two passes, with the rivals re-separated in between: shoving one
     // rival off you can push it into another, which pushes back into you.
     for (var pass = 0; pass < 2; pass++) {
@@ -452,6 +471,9 @@
         var side = dd >= 0 ? 1 : -1;          // the rival is on your right
         var fresh = r.bumpCool <= 0;
         var closing = p.v - r.v;              // + you're catching it
+        // How fast you're sliding across INTO it (a drift swinging you
+        // sideways): that's extra punch on top of the hit itself.
+        var sweep = Math.max(0, (p.latV || 0) * side);
         _hit.side = side;
         _hit.x = (r.x + DR.Car.x) * 0.5;
         _hit.y = (r.y + DR.Car.y) * 0.5;
@@ -473,33 +495,58 @@
             _hit.kind = 'side'; _hit.fresh = true;
             _hit.severity = Math.max(_hit.severity, sev);
             r.bumpCool = 0.5;
-            if (ds > hlR * 0.35 && closing > SPIN_CLOSING) {
-              // Your nose into its back corner, faster than it: it goes round.
+            if ((ds > hlR * 0.35 && closing > SPIN_CLOSING / power) ||
+                (power >= 2.2 && sev > 0.5)) {
+              // Your nose into its back corner, faster than it — or a big
+              // drifting, boosting broadside: it goes round.
               spin(r, -side);
+              r.kickD = side * Math.min(380, 90 * power);
               _hit.spun = r.name;
-              _hit.cap = Math.min(_hit.cap, 0.94);
+              _hit.cap = Math.min(_hit.cap, p.boost > 0.3 ? 0.98 : 0.94);
             } else if (ds < -hlP * 0.35 && -closing > SPIN_CLOSING) {
               // Its nose into YOUR back corner: you get knocked sideways.
               _hit.knock = side * 0.42;
               _hit.cap = Math.min(_hit.cap, 0.88);
               r.slow = Math.min(r.slow, 0.95);
             } else {
-              r.kickD = side * 110 * sev;
-              wobble(r, 0.1 + 0.15 * sev);
-              r.slow = Math.min(r.slow, 0.97);
-              _hit.cap = Math.min(_hit.cap, 0.97);
+              // Shoved away from you: harder the harder you hit.
+              r.kickD = side * Math.min(420, (80 + 70 * sev) * power + sweep * 0.8);
+              wobble(r, Math.min(0.45, (0.1 + 0.15 * sev) * power));
+              r.slow = Math.min(r.slow, 1 - 0.03 * power);
+              r.stunT = Math.max(r.stunT, 0.6 * power);
+              if (power >= 1.7) { _hit.shunt = true; r.shunts++; }
+              _hit.cap = Math.min(_hit.cap, p.boost > 0.3 ? 0.99 : 0.97);
             }
           }
         } else if (ds > 0) {
-          // You've run into the back of it. You stop against it, and you
-          // can't keep more speed than it has.
+          // You've run into the back of it. You can't drive through it —
+          // but it doesn't shrug you off either: its tail is knocked
+          // sideways, away from the side you hit, it fishtails, loses a
+          // little speed and stops defending for a moment. On boost you
+          // shove it right out of the way and keep most of your speed.
           pullS -= ox;
-          if (closing > 0) _hit.cap = Math.min(_hit.cap, (r.v / Math.max(1, p.v)) * 0.97);
-          r.s += 2;                            // a little shove forward
+          if (p.boost > 0.3) {
+            // On boost you're not held to its speed: the hit costs you a
+            // little once, and it's shoved aside rather than you stopped.
+            if (fresh) _hit.cap = Math.min(_hit.cap, 0.95);
+          } else if (closing > 0) {
+            _hit.cap = Math.min(_hit.cap, (r.v / Math.max(1, p.v)) * 0.98);
+          }
+          r.s += 2 * power;                    // a shove forward
           if (fresh) {
+            var offSide = Math.abs(dd) > 6 ? (dd > 0 ? 1 : -1) : (p.slipSign || 1);
+            var cl = Math.max(0, closing);
+            if (sweep > 40) offSide = side;     // a drift sweeps it the way you're sliding
+            r.kickD = offSide * Math.min(420, (70 + cl * 0.6) * power + sweep * 0.8);
+            wobble(r, Math.min(0.5, (0.14 + cl / 400) * power));
+            r.slow = Math.min(r.slow, 1 - 0.04 * power);
+            r.stunT = Math.max(r.stunT, 0.8 * power);
+            if (power >= 1.8 && Math.abs(dd) > 18 && cl > 50) {
+              spin(r, -offSide);
+              _hit.spun = r.name;
+            } else if (power >= 1.7) { _hit.shunt = true; r.shunts++; }
             _hit.kind = 'rear'; _hit.fresh = true;
-            _hit.severity = Math.max(_hit.severity, Math.min(1, 0.25 + Math.max(0, closing) / 250));
-            wobble(r, 0.08);
+            _hit.severity = Math.max(_hit.severity, Math.min(1, (0.25 + cl / 250) * Math.min(1.6, power)));
             r.bumpCool = 0.5;
           }
         } else {
@@ -509,6 +556,9 @@
           if (fresh) {
             _hit.kind = 'rammed'; _hit.fresh = true;
             _hit.severity = Math.max(_hit.severity, Math.min(1, 0.2 + Math.max(0, -closing) / 250));
+            // Rammed hard, your tail gets knocked about too.
+            if (-closing > 40) _hit.knock = (dd > 0 ? -1 : 1) * Math.min(0.3, -closing / 400);
+            wobble(r, 0.1);
             r.bumpCool = 0.5;
           }
         }

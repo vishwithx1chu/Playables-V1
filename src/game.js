@@ -256,6 +256,7 @@
   var last = 0, acc = 0;
   var hintAlpha = 1;
   var hitCool = 0;
+  var devVel = 0, lastDev = 0;   // sideways speed across the road
   var draftMult = 1;          // slipstream: > 1 while tucked in behind a rival
   var wallHitCount = 0;       // every wall hit this run; the tutorial grades on it
   var lastWallSide = 0;       // and which side of the road the last one was on
@@ -550,6 +551,12 @@
 
   function updateRivals(dt) {
     if (!raceRivals) return;
+    // How fast you're sliding across the road, smoothed: a drift swinging
+    // you into a rival hits it harder.
+    var dv = (DR.Car.dev - lastDev) / Math.max(1e-4, dt);
+    if (Math.abs(dv) > 2000) dv = 0;                  // a teleport, not a slide
+    devVel += (dv - devVel) * (1 - Math.exp(-dt / 0.08));
+    lastDev = DR.Car.dev;
     DR.Rivals.update(dt, { playerS: DR.Car.roadS, playerDev: DR.Car.dev,
                            playerHW: DR.Car.halfWidth(), playerDone: false,
                            clock: raceClock, finishS: finishLineS() });
@@ -557,8 +564,11 @@
     // leaned on by a rival shouldn't be able to cost you a wall hit too.
     var limit = Math.max(0, DR.Road.halfWidthAt(DR.Car.roadS) - DR.Car.halfWidth() - 2);
     var speedNow = currentSpeed();
+    var slipAmt = Math.min(1, Math.abs(Math.sin(DR.Car.slip)) / Math.sin(DR.Car.SLIP_AT_LIMIT));
     var hit = DR.Rivals.contact({ s: DR.Car.roadS, dev: DR.Car.dev, hw: DR.Car.halfWidth(),
-                                  len: DR.Car.L, limit: limit, v: speedNow });
+                                  len: DR.Car.L, limit: limit, v: speedNow,
+                                  boost: boostAmount(), slipAmt: slipAmt,
+                                  slipSign: DR.Car.slip >= 0 ? 1 : -1, latV: devVel });
     if (!hit) return;
     var c = DR.Road.centreAt(DR.Car.roadS);
     var nx = Math.cos(c.h), ny = -Math.sin(c.h);      // across the road, to the right
@@ -577,11 +587,11 @@
       var sev = hit.severity;
       DR.Car.jolt(-hit.side * (1.5 + sev * 3));
       DR.FX.wallSparks(hit.x, hit.y, -nx * hit.side, -ny * hit.side, 8 + Math.round(sev * 14), 0.6 + sev * 0.6);
-      DR.FX.shakeBy(3 + sev * 9, 0.25);
+      DR.FX.shakeBy(3 + sev * 9 * Math.min(1.5, hit.power), 0.25);
       bumpFlash = 1;
       if (hit.knock) DR.FX.hazardHit('KNOCKED', '#ff8a5c', sev, DR.Car);
       else if (hit.spun) DR.FX.hazardHit('TAKEDOWN!', '#ffd76a', sev, DR.Car);
-      else if (hit.kind === 'rear' && sev > 0.45) DR.FX.hazardHit('BLOCKED', '#eaf2ff', sev, DR.Car);
+      else if (hit.shunt) DR.FX.hazardHit('SHUNT!', '#7ce4ff', sev, DR.Car);
     }
   }
 
@@ -857,6 +867,59 @@
       ctx2.globalAlpha = 1;
       ctx2.textAlign = 'left';
     }
+  }
+
+  /* Speedometer, bottom right, mirroring the boost button. The number is
+     the reading; the arc is the at-a-glance version of the same thing, and
+     it turns orange while a boost is pushing you (with the word BOOST, so
+     it's never colour alone). km/h is a display scale, not physics: the
+     stock car's cruising speed reads 200. */
+  var SPEEDO = { x: 612, y: 1170, r: 66 };
+  var KMH = 200 / BASE_SPEED_STOCK, SPEEDO_MAX = 360;
+  var shownKmh = 0;
+  function drawSpeedo(ctx2) {
+    var g = SPEEDO, kmh = currentSpeed() * KMH;
+    shownKmh += (kmh - shownKmh) * 0.25;                // steady the needle
+    var a0 = Math.PI * 0.75, sweep = Math.PI * 1.5;
+    var f = Math.max(0, Math.min(1, shownKmh / SPEEDO_MAX));
+    var boosting = boostAmount() > 0.05;
+
+    ctx2.beginPath();
+    ctx2.arc(g.x, g.y, g.r, 0, Math.PI * 2);
+    ctx2.fillStyle = 'rgba(10,6,22,0.62)';
+    ctx2.fill();
+    // Track and fill.
+    ctx2.lineCap = 'round';
+    ctx2.lineWidth = 8;
+    ctx2.beginPath();
+    ctx2.arc(g.x, g.y, g.r - 10, a0, a0 + sweep);
+    ctx2.strokeStyle = 'rgba(150,196,225,0.22)';
+    ctx2.stroke();
+    ctx2.beginPath();
+    ctx2.arc(g.x, g.y, g.r - 10, a0, a0 + sweep * Math.max(0.001, f));
+    ctx2.strokeStyle = boosting ? '#ffb24d' : '#41e0ff';
+    ctx2.stroke();
+    ctx2.lineCap = 'butt';
+    // A tick every 60.
+    for (var t = 0; t <= SPEEDO_MAX; t += 60) {
+      var a = a0 + sweep * (t / SPEEDO_MAX);
+      ctx2.beginPath();
+      ctx2.moveTo(g.x + Math.cos(a) * (g.r - 2), g.y + Math.sin(a) * (g.r - 2));
+      ctx2.lineTo(g.x + Math.cos(a) * (g.r + 4), g.y + Math.sin(a) * (g.r + 4));
+      ctx2.lineWidth = 2;
+      ctx2.strokeStyle = 'rgba(190,214,235,0.6)';
+      ctx2.stroke();
+    }
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'middle';
+    ctx2.font = '800 34px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    ctx2.fillStyle = '#eaf6ff';
+    ctx2.fillText(String(Math.round(shownKmh)), g.x, g.y - 2);
+    ctx2.font = '700 15px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx2.fillStyle = boosting ? '#ffb24d' : 'rgba(150,196,225,0.9)';
+    ctx2.fillText(boosting ? 'BOOST' : 'KM/H', g.x, g.y + 26);
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.textAlign = 'left';
   }
 
   // The button doubles as the boost read-out: the ring drains through the two
@@ -2036,7 +2099,7 @@
     // happened to leave the physics constants set to.
     DR.Cars.applyToCar(DR.Save.selectedCar());
     DR.Car.reset(); DR.FX.reset();
-    camReady = false; hitCool = 0; wallHitCount = 0; draftMult = 1;
+    camReady = false; hitCool = 0; wallHitCount = 0; draftMult = 1; devVel = 0; lastDev = 0;
     lap = 1; lapFlash = 0; boostT = 1e9;
     lapTimer = 0; timing = false; lapTimes.length = 0;
     hitPenalty = 1; meter = 0.55; driftTime = 0; pickPop = 0; boostDenied = 0;
@@ -2634,6 +2697,7 @@
       else { drawHud(ctx, v); drawHint(ctx, v); }
       if (mode === 'duel') drawDuelHud(ctx, v);
       if (mode === 'time') drawTimeHud(ctx, v);
+      drawSpeedo(ctx);
     }
     if (phase === 'handoff') drawHandoff(ctx, v);
     if (phase === 'done') drawDone(ctx, v);
@@ -2722,6 +2786,7 @@
     lapTimer: function () { return lapTimer; },
     timing: function () { return timing; },
     boostButton: BOOST_BTN,
+    kmh: function () { return currentSpeed() * KMH; },
     LOGICAL_W: LOGICAL_W,
     LOGICAL_H: LOGICAL_H,
     camAngle: function () { return camAngle; },
