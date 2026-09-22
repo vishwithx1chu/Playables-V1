@@ -55,7 +55,7 @@
      and the thing drives like a circuit rather than a spiral. */
   var TRACKS = [
     { name: 'VELOCITY RING', blurb: 'Long straights, fast sweepers', tag: 'FAST',
-      targetSecs: 25, pace: 869, picks: 4, lap: [
+      targetSecs: 25, pace: 869, picks: 4, hills: 135, lap: [
       { kind:'str', len:1600 },
       { kind:'turn', dir: 1, r:1000, deg: 90 },
       { kind:'str', len:1300 },
@@ -80,7 +80,7 @@
       { kind:'str', len:1000 }
     ]},
     { name: 'HARBOUR MAZE', blurb: 'Barely a straight on it', tag: 'TECHNICAL',
-      targetSecs: 32, pace: 858, picks: 5, lap: [
+      targetSecs: 32, pace: 858, picks: 5, hills: 60, lap: [
       { kind:'str', len: 400 },
       { kind:'turn', dir: 1, r: 640, deg: 90 },
       { kind:'str', len: 250 },
@@ -112,7 +112,7 @@
       { kind:'str', len: 420 }
     ]},
     { name: 'GRAND CIRCUIT', blurb: 'Four big corners, hairpin, esses', tag: 'BALANCED',
-      targetSecs: 40, pace: 868, picks: 6, lap: [
+      targetSecs: 40, pace: 868, picks: 6, hills: 105, lap: [
       { kind:'str', len: 900 },
       { kind:'turn', dir: 1, r: 820, deg: 90 },
       { kind:'str', len: 500 },
@@ -142,7 +142,7 @@
     // Story circuits (Phase 7). Each is unlocked for Quick Play once Story
     // mode reaches the first city that races on it (see src/story.js).
     { name: 'COASTAL RUN', blurb: 'Long cliffside sweepers', tag: 'FLOWING',
-      targetSecs: 30, pace: 865, picks: 5, lap: [
+      targetSecs: 30, pace: 865, picks: 5, hills: 170, lap: [
       { kind:'str', len:1200 },
       { kind:'turn', dir: 1, r:1100, deg: 70 },
       { kind:'str', len: 500 },
@@ -166,7 +166,7 @@
       { kind:'str', len: 400 }
     ]},
     { name: 'UNDERPASS', blurb: 'City blocks and a hairpin', tag: 'TIGHT',
-      targetSecs: 30, pace: 858, picks: 5, lap: [
+      targetSecs: 30, pace: 858, picks: 5, hills: 50, lap: [
       { kind:'str', len: 500 },
       { kind:'turn', dir: 1, r: 620, deg: 90 },
       { kind:'str', len: 350 },
@@ -193,7 +193,7 @@
     // story visits them — a fast sweeper, maze esses, the hairpin, cliff
     // curves, city blocks, and the ring's flick to finish.
     { name: 'THE CIRCUIT', blurb: 'A piece of every city', tag: 'FINALE',
-      targetSecs: 45, pace: 865, picks: 6, lap: [
+      targetSecs: 45, pace: 865, picks: 6, hills: 150, lap: [
       { kind:'str', len:1300 },
       { kind:'turn', dir: 1, r:1000, deg: 90 },
       { kind:'str', len: 900 },
@@ -1019,6 +1019,158 @@
 
   var CAM_LIFT = K / FOCAL;      // how high the camera rides above the tarmac
 
+  /* ------------------------------- TERRAIN -------------------------------
+     Hills and banking, and they are only a picture. The car, the walls, the
+     rivals and every rule of the game still live on a flat plane; this
+     lifts what the camera SEES of that plane, so the road ahead climbs,
+     dips and leans into corners without changing a single thing you have
+     to drive.
+
+     It works on distance ahead, not on each object: once a frame a small
+     table is built of how high the ground is at each depth in front of the
+     camera, and every point drawn through project3 is lifted by it. So the
+     road, the walls, the dashes, the chevrons, skid marks, rivals and the
+     car all ride the same hill and can never disagree about where the
+     ground is.
+
+     Two rules keep it fair:
+     - The road can never hide itself. While the table is built, each depth
+       is kept strictly higher up the screen than the one before it, so a
+       crest can never fold the road behind it out of sight. The distance
+       you can see ahead is exactly what it was on the flat.
+     - It settles back onto the horizon at the far end of the view, so the
+       road still disappears into the fog where it always did, on every
+       screen shape. */
+  var TERR_N = 200;
+  var TERR_FAR = LOOKAHEAD + CAM_BACK + 600;
+  var TERR_STEP = (TERR_FAR - NEAR) / (TERR_N - 1);
+  var TERR_UP = 150, TERR_DOWN = 120;   // most the road ahead rises / falls
+  var TERR_EPS = 0.0003;     // at least ~0.15px further up the screen per step
+  var PITCH_FOLLOW = 0.75;   // how much the camera tips with the slope it's on
+  var BANK_R = 60;           // lean per unit curvature: 1/600 → 0.1
+  var BANK_MAX = 0.12;
+  var BANK_NEAR = 700, BANK_FAR = 1300;
+  var BANK_SPAN = 300;       // the lean spans the road; the ground beyond is level
+  var terrOn = false;
+  var terrLift = 0;          // cancels the lean under the car, so it never bobs
+  var terrZ = new Float64Array(TERR_N), terrXc = new Float64Array(TERR_N);
+  var terrBank = new Float64Array(TERR_N), terrS = new Float64Array(TERR_N);
+
+  // Height of the ground at arc length s: two swells a lap, lap-periodic so
+  // every lap climbs the same hills. Sized per track, then per city.
+  function hillsAt(s) {
+    var A = (TRACKS[curTrack].hills || 0) * (TH.hills === undefined ? 1 : TH.hills);
+    if (!A) return 0;
+    var L = lapLength(), t = (s - INTRO_LEN) / L;
+    var h = 0.7 * Math.sin(2 * Math.PI * (3 * t + 0.13)) + 0.3 * Math.sin(2 * Math.PI * (5 * t + 0.61));
+    // Flat on the grid, easing in over the run-up.
+    var ramp = s <= 0 ? 0 : s >= INTRO_LEN ? 1 : s / INTRO_LEN;
+    return A * h * ramp * ramp * (3 - 2 * ramp);
+  }
+
+  var _tc = {};
+  function clampSpan(d) { return d > BANK_SPAN ? BANK_SPAN : d < -BANK_SPAN ? -BANK_SPAN : d; }
+  function prepareTerrain(view, carS, carX, carY) {
+    if (!view) { terrOn = false; return; }
+    terrOn = true;
+    terrLift = 0;
+    var e0 = hillsAt(carS);
+    var slope = (hillsAt(carS + 60) - hillsAt(carS - 60)) / 120;
+    var fadeFrom = LOOKAHEAD * 0.55, fadeTo = LOOKAHEAD + CAM_BACK;
+
+    /* Which bit of road is at each depth? Walk the centreline out from
+       behind the camera and note where it first crosses each depth: in a
+       bend the road reaches a given depth later than a straight line would,
+       and the lean has to pivot on where the road really is. If the road
+       turns back before reaching a depth (a hairpin), the last bit found
+       stands in for it. */
+    var i = 0, prevRz = -1e9, prevLat = 0, prevS = carS;
+    var walkEnd = carS + LOOKAHEAD * 2;
+    for (var ws = carS - CAM_BACK; ws <= walkEnd && i < TERR_N; ws += 16) {
+      var c = centreAt(Math.max(0, ws), _tc);
+      var dx = c.x - view.camX, dy = c.y - view.camY;
+      var crz = dx * view.camSin + dy * view.camCos;
+      var clat = dx * view.camCos - dy * view.camSin;
+      while (i < TERR_N && crz >= NEAR + i * TERR_STEP && crz > prevRz) {
+        var want = NEAR + i * TERR_STEP;
+        var fr = prevRz > -1e8 ? (want - prevRz) / (crz - prevRz) : 1;
+        if (fr < 0) fr = 0;
+        terrS[i] = prevS + (ws - prevS) * fr;
+        terrXc[i] = prevLat + (clat - prevLat) * fr;
+        i++;
+      }
+      if (crz > prevRz) { prevRz = crz; prevLat = clat; prevS = ws; }
+    }
+    for (; i < TERR_N; i++) {
+      terrS[i] = i ? terrS[i - 1] + TERR_STEP : carS;
+      terrXc[i] = i ? terrXc[i - 1] : 0;
+    }
+
+    // Banks first: they don't depend on anything else.
+    for (i = 0; i < TERR_N; i++) {
+      // The lean is a close-up effect: full near the car, gone by the
+      // middle distance, where a bend can put two stretches of road at the
+      // same depth and a lean would have no single answer.
+      var rzb = NEAR + i * TERR_STEP;
+      var fb = rzb <= BANK_NEAR ? 1 : rzb >= BANK_FAR ? 0 : 1 - (rzb - BANK_NEAR) / (BANK_FAR - BANK_NEAR);
+      fb = fb * fb * (3 - 2 * fb);
+      var cb = centreAt(Math.max(0, terrS[i]), _tc);
+      var b = cb.k * BANK_R;
+      // The lean is across the road, and it only reads as left-right on
+      // screen while the road is heading away from the camera. Where the
+      // road swings across the view, it fades out rather than tilting the
+      // wrong way.
+      var away = Math.sin(cb.h) * view.camSin + Math.cos(cb.h) * view.camCos;
+      away = away > 0 ? away * away : 0;
+      terrBank[i] = (b > BANK_MAX ? BANK_MAX : b < -BANK_MAX ? -BANK_MAX : b) * fb * away;
+    }
+    // The car sits on the banked road too. Rather than let it ride up and
+    // down the screen as it slides across a bend, the whole picture moves
+    // round it by the same amount, as if the camera rode the bank with it.
+    // Worked out from where the car really is in the camera's view, so the
+    // camera leaning into a drift can't throw it off.
+    var ci = 0, cf = 0;
+    if (carX !== undefined) {
+      var cdx = carX - view.camX, cdy = carY - view.camY;
+      var crz0 = cdx * view.camSin + cdy * view.camCos;
+      var clat0 = cdx * view.camCos - cdy * view.camSin;
+      ci = Math.max(0, Math.min(TERR_N - 2, ((crz0 - NEAR) / TERR_STEP) | 0));
+      cf = Math.max(0, Math.min(1, (crz0 - NEAR) / TERR_STEP - ci));
+      var cxc = terrXc[ci] + (terrXc[ci + 1] - terrXc[ci]) * cf;
+      var cbk = terrBank[ci] + (terrBank[ci + 1] - terrBank[ci]) * cf;
+      terrLift = cbk * clampSpan(clat0 - cxc);
+    }
+
+    buildHeights(carS, e0, slope, fadeFrom, fadeTo);
+    // And the same for the height under the car itself (it isn't exactly
+    // on the centreline, so it isn't exactly zero): cancel it, then build
+    // once more so the no-fold rule holds for the final picture.
+    if (carX !== undefined) {
+      terrLift -= terrZ[ci] + (terrZ[ci + 1] - terrZ[ci]) * cf;
+      buildHeights(carS, e0, slope, fadeFrom, fadeTo);
+    }
+  }
+
+  function buildHeights(carS, e0, slope, fadeFrom, fadeTo) {
+    var L = CAM_LIFT - terrLift, lastZ = 0, lastRz = NEAR;
+    for (var i = 0; i < TERR_N; i++) {
+      var rz = NEAR + i * TERR_STEP, sAt = terrS[i], ahead = sAt - carS;
+      var f = rz <= fadeFrom ? 1 : rz >= fadeTo ? 0 : 1 - (rz - fadeFrom) / (fadeTo - fadeFrom);
+      f = f * f * (3 - 2 * f);
+      var z = (hillsAt(sAt) - e0 - slope * ahead * PITCH_FOLLOW) * f;
+      // Never a wall of road climbing into the sky, never a cliff.
+      if (z > TERR_UP) z = TERR_UP; else if (z < -TERR_DOWN) z = -TERR_DOWN;
+      if (i > 0) {
+        // Screen height is (L - z) / rz. Each step further away must sit a
+        // little higher on screen than the last, whether the ground there
+        // is below the camera or (over a crest) above it.
+        var floor = L - rz * ((L - lastZ) / lastRz - TERR_EPS);
+        if (z < floor) z = floor;
+      }
+      terrZ[i] = z; lastZ = z; lastRz = rz;
+    }
+  }
+
   var _p = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
   function project(wx, wy, view, out) { return project3(wx, wy, 0, view, out); }
 
@@ -1031,8 +1183,19 @@
     out.rz = rz;
     if (rz < NEAR) { out.vis = false; return out; }
     var sc = FOCAL / rz;
+    var lat = dx * view.camCos - dy * view.camSin;
+    if (terrOn) {
+      var u = (rz - NEAR) / TERR_STEP, i = u | 0;
+      if (i >= TERR_N - 1) { i = TERR_N - 2; u = i + 1; }
+      var fr = u - i;
+      var z = terrZ[i] + (terrZ[i + 1] - terrZ[i]) * fr;
+      var xc = terrXc[i] + (terrXc[i + 1] - terrXc[i]) * fr;
+      var bk = terrBank[i] + (terrBank[i + 1] - terrBank[i]) * fr;
+      // Banked: the outside of the bend (left of a right-hander) rides up.
+      wz += z - bk * clampSpan(lat - xc) + terrLift;
+    }
     out.sc = sc;
-    out.x = view.W * 0.5 + (dx * view.camCos - dy * view.camSin) * sc;
+    out.x = view.W * 0.5 + lat * sc;
     out.y = HORIZON_Y + (CAM_LIFT - wz) * sc;
     out.vis = true;
     return out;
@@ -1067,7 +1230,8 @@
     wallFace: '#241541', wallUpper: '#35205e', wallSkirt: '#0e0820',
     wallStripe: 'rgba(255,74,206,0.32)',
     fog:    ['rgba(104,34,92,1)', 'rgba(74,24,78,0.86)', 'rgba(34,14,48,0)'],
-    horizon: null
+    horizon: null,
+    hills: 1              // scales the track's hills; a flat city sets it low
   };
   var TH = DEFAULT_THEME, THS = null, themeKey = null;
   var horizonShapes = null;
@@ -2099,6 +2263,9 @@
     WALL_H: WALL_H, WALL_OFF: WALL_OFF,
     drawBackground: drawBackground, draw: draw,
     setTheme: setTheme, theme: theme, DEFAULT_THEME: DEFAULT_THEME,
+    prepareTerrain: prepareTerrain, hillsAt: hillsAt,
+    // For tests and tuning: the current frame's height table.
+    terrainTable: function () { return { on: terrOn, z: terrZ, xc: terrXc, bank: terrBank, s: terrS, lift: terrLift, step: TERR_STEP }; },
     drawChevrons: drawChevrons, drawFog: drawFog
   };
 })(window.DR = window.DR || {});

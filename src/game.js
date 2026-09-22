@@ -2559,6 +2559,7 @@
 
     if (phase === 'title' || phase === 'modes' || phase === 'select' || phase === 'city' ||
         phase === 'story' || phase === 'garage' || phase === 'tutorial') {
+      DR.Road.prepareTerrain(null);          // menus sit on the flat
       DR.Road.drawBackground(ctx, menuView());
       if (phase === 'title') drawTitle(ctx, v);
       else if (phase === 'modes') { drawModes(ctx, v); drawButton(ctx, BACK_BTN, '\u25C2 TITLE'); }
@@ -2571,6 +2572,8 @@
       return;
     }
 
+    // Hills and banking for this frame: a picture only, see road.js.
+    DR.Road.prepareTerrain(v, DR.Car.roadS, DR.Car.x, DR.Car.y);
     DR.Road.drawBackground(ctx, v);
     var rib = DR.Road.draw(ctx, v);
     DR.FX.drawSkids(ctx, v);

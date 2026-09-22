@@ -22,8 +22,8 @@ of that existed.
 | 5 | **Story mode** — 10 cities, their events, unlocks, boss races, boss-car rewards, and a distinct look for every city | Done |
 | 6 | **Tutorial** — a guided run that shows which side to press, how long to hold, and when to let go | Done |
 | 7 | **New circuits** — Coastal Run, Underpass and the finale lap | Done |
-| 8 | **Terrain** — hills and banking, visual only | Next |
-| 9 | Balance & polish — difficulty measured per city with bots, payout tuning | Planned |
+| 8 | **Terrain** — hills and banking, visual only | Done |
+| 9 | Balance & polish — difficulty measured per city with bots, payout tuning | Next |
 
 **Why this order.**
 
@@ -111,6 +111,31 @@ too hard. Good drivers hold and ease off. A simulated player who does what
 the screen says, 0.2-0.3s late, crashed at full race speed but finishes in
 30-55 seconds at 55%, in every car tried (Nightrunner, Alleycat, Warbird,
 Ironclad, Specter).
+
+## Terrain
+
+Hills and banking (`prepareTerrain` in `src/road.js`), and they are only a
+picture: physics, walls, rivals and every rule still run on a flat plane.
+Once a frame, the game builds a table of how high the ground is at each
+distance ahead of the camera, and everything drawn is lifted by it. So the
+road, walls, chevrons, skid marks, rivals and the car all ride the same
+hill.
+
+- **Hills**: two gentle swells per lap, the same every lap. Each track has
+  its own size (Coastal Run the biggest, Underpass the flattest) and each
+  city scales it (High Pass 1.5x, Neon Downtown and The Underpass 0.4x).
+  The camera partly tips with the slope it's on, and the road rises at
+  most 150 units or drops at most 120 relative to the car.
+- **Banking**: in a bend the outside edge rides up, up to a slope of
+  0.12. It's full near the car and fades out by the middle distance.
+- **Fairness, tested on all six tracks**: the road ahead always sits
+  higher on screen the further away it is, so a crest can never hide the
+  road behind it (worst case in the tests: under 0.2px). The car never
+  moves on screen (0.00px): the picture moves round it instead. The
+  terrain fades back to flat at the far end of the view, so the road
+  meets the fog at the horizon exactly where it did on the flat. Lookahead
+  distance is unchanged on every screen shape.
+- Cost: about 0.04ms a frame.
 
 ## The story
 

@@ -34,9 +34,12 @@
   /* Colours for each city, as overrides of road.js's DEFAULT_THEME. Only
      decoration changes; the road stays near-black and the edges stay a
      bright neon, so the road-versus-edge contrast rule holds everywhere. */
+  // hills: how hilly the city is, scaling its track's own hills — the
+  // mountain pass rolls, the downtown grid is nearly flat.
   var THEMES = {
     portside: {
       id: 'portside',
+      hills: 0.6,
       sky: ['#050b14', '#0d1d2e', '#1d3a4c', '#3d6470'],
       stars: 0.35,
       sunDisc: ['#f4e3b0', '#d9a860', '#a8654a'], sunHalo: ['rgba(220,190,130,0.30)', 'rgba(120,150,170,0.14)'],
@@ -51,6 +54,7 @@
     },
     sundown: {
       id: 'sundown',
+      hills: 1.0,
       sky: ['#1a0b1e', '#4a1a2e', '#b33e22', '#ff9a3c'],
       stars: 0.2,
       sunDisc: ['#fff1b0', '#ffb347', '#ff5a36'], sunHalo: ['rgba(255,170,70,0.50)', 'rgba(255,90,60,0.22)'],
@@ -64,6 +68,7 @@
     },
     oldquarter: {
       id: 'oldquarter',
+      hills: 0.5,
       sky: ['#120a06', '#2e1c0e', '#5c3814', '#a86a26'],
       stars: 0.5,
       sunDisc: ['#ffe1a0', '#ffb040', '#e07020'], sunHalo: ['rgba(255,176,64,0.36)', 'rgba(200,110,30,0.16)'],
@@ -78,6 +83,7 @@
     },
     coastal: {
       id: 'coastal',
+      hills: 1.2,
       sky: ['#02060f', '#08183a', '#16407a', '#3b82c0'],
       stars: 1,
       sunDisc: ['#f4fbff', '#cfe8ff', '#8fb8e8'], sunHalo: ['rgba(190,225,255,0.30)', 'rgba(80,140,220,0.14)'],
@@ -91,6 +97,7 @@
     },
     steel: {
       id: 'steel',
+      hills: 0.7,
       sky: ['#0b0b0e', '#211f24', '#43342f', '#7a4a2a'],
       stars: 0.15,
       sunDisc: ['#ffcf80', '#ff7a1a', '#c0341a'], sunHalo: ['rgba(255,122,26,0.36)', 'rgba(160,60,30,0.18)'],
@@ -105,6 +112,7 @@
     },
     downtown: {
       id: 'downtown',
+      hills: 0.4,
       sky: ['#10031e', '#2a0846', '#651274', '#c01f78'],
       stars: 0.6,
       sunDisc: ['#ffd1f0', '#ff5ad8', '#b020c0'], sunHalo: ['rgba(255,90,216,0.40)', 'rgba(140,40,200,0.20)'],
@@ -119,6 +127,7 @@
     },
     highpass: {
       id: 'highpass',
+      hills: 1.5,
       sky: ['#0a0d1c', '#222844', '#4c5478', '#9aa4c6'],
       stars: 0.9,
       sunDisc: ['#f6f2ff', '#cfc6f0', '#9a8ed0'], sunHalo: ['rgba(220,210,255,0.30)', 'rgba(150,140,210,0.14)'],
@@ -132,6 +141,7 @@
     },
     underpass: {
       id: 'underpass',
+      hills: 0.4,
       sky: ['#010204', '#05080f', '#0c1522', '#182a3c'],
       stars: 0.1,
       sunDisc: ['#c8fff0', '#60f0c0', '#20a080'], sunHalo: ['rgba(60,255,176,0.22)', 'rgba(20,120,100,0.12)'],
@@ -146,6 +156,7 @@
     },
     skyline: {
       id: 'skyline',
+      hills: 0.9,
       sky: ['#090514', '#20103c', '#4a1f6e', '#d18a3a'],
       stars: 0.7,
       sunDisc: ['#fff0c0', '#ffd76a', '#e08a30'], sunHalo: ['rgba(255,215,106,0.40)', 'rgba(180,120,255,0.18)'],
@@ -160,6 +171,7 @@
     },
     circuit: {
       id: 'circuit',
+      hills: 1.0,
       edge: [255, 215, 106], dash: 'rgba(255,74,206,0.9)',
       wallStripe: 'rgba(255,215,106,0.30)',
       horizon: { kind: 'city', count: 70, minH: 40, maxH: 200, color: '#0e0620', far: '#221040',

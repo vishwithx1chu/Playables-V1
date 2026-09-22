@@ -212,6 +212,16 @@ and open as Story gets there. The track screen now fits six compact cards.
 To test it: Quick Play → Race. The bottom three cards are locked on a new
 save. Clear Portside and Sundown Strip in Story and Underpass opens.
 
+**Phase 8 — terrain.** The road now rolls over hills and leans into its
+bends, but only as a picture: the driving is exactly as before. Each track
+and city has its own amount of hill (High Pass rolls, Neon Downtown is
+nearly flat). Tested so a crest can never hide the road ahead, and the car
+never moves on screen. Details in
+[`docs/content-plan.md`](docs/content-plan.md#terrain).
+
+To test it: race Coastal Run or High Pass and watch the road ahead rise
+and dip; lap times are unchanged.
+
 ## Current state, before career mode: Milestone 2.5
 
 Four modes, picked from the screen the game opens on:
