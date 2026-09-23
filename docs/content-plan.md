@@ -24,6 +24,7 @@ of that existed.
 | 7 | **New circuits** — Coastal Run, Underpass and the finale lap | Done |
 | 8 | **Terrain** — hills and banking, visual only | Done |
 | 9 | Balance & polish — car rating, what each city needs, payout tuning, START OVER | Done |
+| 10 | **Presentation & progression** — a new look everywhere, animated screens, race intro/VS card, start lights and perfect starts, style points, finish and results screens, driver level and stars | Done |
 
 **Why this order.**
 
@@ -443,6 +444,21 @@ count.
 |---|---|
 | Upgrade tier | 18% / 25% / 33% of the car's price, per tier (see above) |
 | A new car | 500-2200, per the roster table above |
+
+**Bonuses on top (Phase 10).** These are paid on top of every table
+above:
+
+| Bonus | Pays |
+|---|---|
+| Style points | 1 CR per 40 points, capped at 60 per event |
+| Driver level up | 15 + 5 × the new level |
+| A new story star | 10 CR (up to 3 per event, paid once each) |
+| XP | race 150/110/80/60 by place; boss 260 win / 70 loss; time attack 120 / 45; other modes 90; tutorial 100 once; plus style ÷ 10 |
+
+Over a full story career (winning everything first time) the bonuses add
+about 28% to the ~7,600 CR of prizes. They were first set higher, and
+doubled the story's income; the Phase 9 difficulty checks assume prizes
+are most of what you earn, so they were cut back.
 
 **Checked in Phase 9.** Winning every event first time earns about 7,600
 CR over the story. The test suite walks the story and, before every boss,

@@ -384,6 +384,12 @@
   };
 
   function narrative(ci) { return NARRATIVE[CITIES[ci].id]; }
+  // What the boss says on your way in: their line from the arrival scene.
+  function bossQuote(ci) {
+    var a = narrative(ci).arrive, who = CITIES[ci].boss;
+    for (var i = 0; i < a.length; i++) if (a[i].who === who) return a[i].text;
+    return 'Let\u2019s see what you\u2019ve got.';
+  }
   function placeName(ci, ei) {
     var n = narrative(ci);
     return (n && n.places[ei]) || ('EVENT ' + (ei + 1));
@@ -607,7 +613,8 @@
     currentCity: currentCity, setup: setup, resolve: resolve, themeFor: themeFor,
     eventId: eventId, bossIndex: bossIndex, ratingNeed: ratingNeed,
     prologue: function () { return PROLOGUE; }, arrivalScene: arrivalScene,
-    aftermathScene: aftermathScene, placeName: placeName, mapPos: mapPos,
+    aftermathScene: aftermathScene, placeName: placeName, mapPos: mapPos, bossQuote: bossQuote,
+    bossSkill: function (ci) { return bossSkill(ci); },
     trackUnlocked: trackUnlocked, trackLockText: trackLockText, trackCity: trackCity,
     // Exposed so tests and the balance pass can read the curve directly.
     curve: { crewSkill: crewSkill, bossSkill: bossSkill, timeFactor: timeFactor }

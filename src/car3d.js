@@ -198,6 +198,13 @@
     for (var i = 0; i < bodyMats.length; i++) bodyMats[i].color.set(hex);
   }
 
+  // Where on the playfield the car is shown: the Garage's spot by default,
+  // or wherever a screen asks (the title shows it too).
+  var HOME = { x: RECT.x, y: RECT.y, w: RECT.w, h: RECT.h };
+  function setRect(r) {
+    r = r || HOME;
+    RECT.x = r.x; RECT.y = r.y; RECT.w = r.w; RECT.h = r.h;
+  }
   function layout() {
     if (!DR.Game || !DR.Game.viewportRect) return;
     var g = DR.Game.viewportRect();
@@ -219,6 +226,7 @@
 
   function render(state) {
     if (failed || !renderer || canvas.style.display === 'none') return false;
+    setRect(state.rect);
     layout();
     if (state.archetype && state.archetype !== curArchetype) buildCar(state.archetype);
     if (state.color) setColor(state.color);
@@ -227,5 +235,5 @@
     return true;
   }
 
-  DR.Car3D = { show: show, render: render, available: function () { return ensureReady(); } };
+  DR.Car3D = { show: show, render: render, setRect: setRect, available: function () { return ensureReady(); } };
 })(window.DR = window.DR || {});

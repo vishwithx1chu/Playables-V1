@@ -188,6 +188,7 @@
     { id: 'tutorial', name: 'TUTORIAL',   ready: true }
   ];
   var titleSel = 1;   // Quick Play — the default door
+  var drawnPhase = '', phaseT = 0;   // which screen was drawn last, and for how long
   /* START OVER wipes the save. Two taps, because it can't be undone: the
      first arms it and says so, the second (within a few seconds) erases. */
   var RESET_BTN = { x: 230, y: 1150, w: 260, h: 56 };
@@ -262,6 +263,8 @@
   var hitCool = 0;
   var devVel = 0, lastDev = 0;   // sideways speed across the road
   var draftMult = 1;          // slipstream: > 1 while tucked in behind a rival
+  var raceDone = false, finishHold = 0, results = null, lastPos = 0;
+  var lapWalls = 0, driftRun = 0, draftCool = 0, drafting = false;
   var wallHitCount = 0;       // every wall hit this run; the tutorial grades on it
   var lastWallSide = 0;       // and which side of the road the last one was on
   var lap = 1, lapFlash = 0;
@@ -438,6 +441,26 @@
       return;
     }
     var steer = DR.Input.steer();
+    var realDt = dt;
+
+    // On the grid: the intro and the lights. Nothing moves; the only input
+    // that counts is an early boost (a jump start).
+    if (DR.Show.frozen()) {
+      clock += dt;
+      DR.Show.update(dt, { boostPressed: DR.Input.takeBoost(), kmh: 0 });
+      updateCamera(dt);
+      DR.FX.update(dt, DR.Car.x, DR.Car.y);
+      return;
+    }
+    // Over the line: slow motion, the car steering itself, then results.
+    if (raceDone) {
+      finishHold -= dt;
+      DR.Show.update(dt, { boostPressed: false, kmh: currentSpeed() * KMH });
+      if (finishHold <= 0) { phase = 'done'; return; }
+      dt *= 0.35;
+      steer = autoSteer();
+      DR.Input.takeBoost();
+    }
     if (steer !== 0) hintAlpha = Math.max(0, hintAlpha - dt * 2.4);
 
     clock += dt;
@@ -447,7 +470,12 @@
     if (boostDenied > 0) boostDenied = Math.max(0, boostDenied - dt / 0.6);
 
     var boostFired = false;
-    if (DR.Input.takeBoost()) {
+    var pressed = raceDone ? false : DR.Input.takeBoost();
+    var launch = raceDone ? null : DR.Show.update(realDt, { boostPressed: pressed, kmh: currentSpeed() * KMH });
+    if (launch === 'perfect') {
+      // A perfect start: a full launch, and it costs no meter.
+      boostT = 0; DR.FX.boostKick(); boostFired = true;
+    } else if (pressed) {
       if (meter >= BOOST_COST) {
         meter -= BOOST_COST; boostT = 0; DR.FX.boostKick(); boostFired = true;
         // A shove forward takes some of the sideways out of it straight away.
@@ -462,8 +490,15 @@
       driftTime = Math.min(FILL_RAMP_CAP, driftTime + dt);
       var slipFrac = Math.min(1, (slipMag - DRIFT_MIN) / (DR.Car.SLIP_AT_LIMIT - DRIFT_MIN));
       meter = Math.min(1, meter + (FILL_BASE + FILL_RAMP * driftTime) * slipFrac * dt);
+      driftRun += dt;
     } else {
       driftTime = 0;
+      // A long, clean slide is worth something when it ends.
+      if (driftRun >= 1.4 && !raceDone) {
+        DR.Show.notify('DRIFT', Math.round(driftRun * 30), '#ff2f8e', driftRun.toFixed(1) + 's');
+        DR.Show.count('drifts');
+      }
+      driftRun = 0;
     }
 
     collectPicks();
@@ -474,6 +509,12 @@
     // Slipstream: tucked in behind a rival, you're pulled along too.
     var draftWant = raceRivals ? DR.Rivals.draftFor(DR.Car.roadS, DR.Car.dev) : 1;
     draftMult += (draftWant - draftMult) * (1 - Math.exp(-dt / 0.35));
+    if (draftCool > 0) draftCool -= dt;
+    if (draftMult > 1.03 && !drafting && draftCool <= 0 && !raceDone) {
+      DR.Show.notify('SLIPSTREAM', 20, '#7ce4ff');
+      draftCool = 4;
+    }
+    drafting = draftMult > 1.03;
     var speed = currentSpeed();
     // Eased off with the boost rather than switched off at the end of it, so
     // there is no moment where the car suddenly stops squaring up.
@@ -499,12 +540,13 @@
     if (timing) lapTimer += dt;
 
     var done = Math.floor(Math.max(0, DR.Car.roadS - DR.Road.INTRO_LEN) / DR.Road.lapLength());
-    if (done + 1 > lap) {
+    if (done + 1 > lap && !raceDone) {
       lapTimes.push(lapTimer);
       raceTotal += lapTimer;
       lapTimer = 0;
       lap = done + 1;
       lapFlash = 1;
+      lapShow();
       // Only a race has a last lap. Practice runs until you leave; Rush runs
       // until the clock beats you.
       if (mode === 'race' && lapTimes.length >= RACE_LAPS) { finishRace(); }
@@ -526,6 +568,36 @@
     DR.FX.update(dt, DR.Car.x, DR.Car.y);
     DR.Road.ensure(DR.Car.roadS + DR.Road.LOOKAHEAD + 400);
     DR.Road.trim(DR.Car.roadS - DR.Road.CAM_BACK - 900);
+  }
+
+  // A lap just ended: say so, and what it was worth.
+  function lapShow() {
+    var total = lapsFor(mode), t0 = lapTimes[lapTimes.length - 1];
+    if (wallHitCount === lapWalls && mode !== 'practice' && mode !== 'tutorial') {
+      DR.Show.notify('CLEAN LAP', 100, '#7dffb0', 'NO WALLS');
+      DR.Show.count('cleanLaps');
+    }
+    lapWalls = wallHitCount;
+    if (mode === 'practice' || mode === 'rush' || mode === 'tutorial') return;
+    if (lap > total) return;                       // the finish has its own show
+    var best = lapTimes.length > 1 && t0 === Math.min.apply(null, lapTimes);
+    if (lap === total) DR.Show.banner('FINAL LAP', (best ? 'BEST LAP ' : 'LAST LAP ') + fmt(t0), '#ff8a3d');
+    else DR.Show.banner('LAP ' + lap + ' / ' + total, (best ? 'BEST LAP ' : '') + fmt(t0), best ? '#7dffb0' : '#ffd76a');
+  }
+
+  // Steering for the car once the race is over: the same look-ahead the
+  // coach uses, so the run-out after the line stays on the road.
+  var _as = {};
+  function autoSteer() {
+    var Car = DR.Car, s2 = Car.roadS + 420;
+    var c = DR.Road.centreAt(s2, _as), off = DR.Road.lineAt(s2).off;
+    var rx = c.x + Math.cos(c.h) * off - Car.x, ry = c.y - Math.sin(c.h) * off - Car.y;
+    var sn = Math.sin(Car.h), cs = Math.cos(Car.h);
+    var ey = rx * cs - ry * sn, ex = rx * sn + ry * cs, L2 = ex * ex + ey * ey;
+    var kappa = L2 > 1 ? 2 * ey / L2 : 0;
+    var want = Math.asin(Math.max(-1, Math.min(1, kappa * Car.minRadius() * Math.sin(Car.SLIP_AT_LIMIT))));
+    var err = want - Car.cmdSlip;
+    return err > 0.05 ? 1 : (err < -0.05 ? -1 : 0);
   }
 
   function updateDuel(dt) {
@@ -575,6 +647,13 @@
     var limit = Math.max(0, DR.Road.halfWidthAt(DR.Car.roadS) - DR.Car.halfWidth() - 2);
     var speedNow = currentSpeed();
     var slipAmt = Math.min(1, Math.abs(Math.sin(DR.Car.slip)) / Math.sin(DR.Car.SLIP_AT_LIMIT));
+    // Places gained.
+    var posNow = DR.Rivals.position(DR.Car.roadS, false);
+    if (posNow < lastPos && !raceDone) {
+      DR.Show.notify('OVERTAKE', 50 * (lastPos - posNow), '#22e6ff', 'UP TO ' + DR.Show.ordinal(posNow));
+      DR.Show.count('overtakes');
+    }
+    lastPos = posNow;
     var hit = DR.Rivals.contact({ s: DR.Car.roadS, dev: DR.Car.dev, hw: DR.Car.halfWidth(),
                                   len: DR.Car.L, limit: limit, v: speedNow,
                                   boost: boostAmount(), slipAmt: slipAmt,
@@ -600,13 +679,14 @@
       DR.FX.shakeBy(3 + sev * 9 * Math.min(1.5, hit.power), 0.25);
       bumpFlash = 1;
       if (hit.knock) DR.FX.hazardHit('KNOCKED', '#ff8a5c', sev, DR.Car);
-      else if (hit.spun) DR.FX.hazardHit('TAKEDOWN!', '#ffd76a', sev, DR.Car);
-      else if (hit.shunt) DR.FX.hazardHit('SHUNT!', '#7ce4ff', sev, DR.Car);
+      else if (hit.spun) { DR.Show.notify('TAKEDOWN', 150, '#ffd76a', hit.spun + ' SPUN OUT'); DR.Show.count('takedowns'); }
+      else if (hit.shunt) { DR.Show.notify('SHUNT', 80, '#ff8a3d'); DR.Show.count('shunts'); }
     }
   }
 
   function finishRace() {
-    phase = 'done'; lapFlash = 0;
+    if (raceDone) return;
+    lapFlash = 0;
     standings = null; finishPos = 0;
     if (raceRivals) {
       standings = DR.Rivals.standings({ name: 'YOU', color: '#ffd76a', time: raceClock,
@@ -630,6 +710,58 @@
     } else {
       awardRaceCurrency();
     }
+    var kind = storyEvent ? storyEvent.type : 'race';
+    var ok = storyResult ? storyResult.ok : true;
+    settleRewards(kind, raceRivals ? finishPos : 1, ok);
+    endWithShow(raceRivals ? finishPos : 0,
+                raceRivals ? DR.Show.ordinal(finishPos) + ' PLACE'
+                           : (ok ? 'TARGET BEATEN' : 'OUT OF TIME'));
+  }
+
+  /* Crossing the line with the show on: FINISH, a moment of slow motion,
+     then the results. With it off (tests), straight to the results. */
+  function endWithShow(pos, label) {
+    if (DR.Show.enabled()) {
+      raceDone = true;
+      finishHold = DR.Show.finishDuration();
+      DR.Show.finish({ pos: pos, label: label });
+    } else {
+      phase = 'done';
+    }
+  }
+
+  /* What the race was worth beyond the prize: style points into credits,
+     XP (and any level-up), and stars on a story event. Kept in `results`
+     for the results screen to count up. */
+  function settleRewards(kind, pos, ok) {
+    var st = DR.Show.stats();
+    // Style is a bonus on top of the prize, never bigger than it.
+    var styleCash = Math.min(60, Math.round(st.style / 40));
+    if (styleCash) DR.Save.addCurrency(styleCash);
+    var xpBase = DR.Career.xpFor(kind, pos, ok), xpStyle = Math.round(st.style / 10);
+    var xp = DR.Career.addXp(xpBase + xpStyle);
+    var stars = 0, starAward = null;
+    if (storyEvent) {
+      var margin = 0, me = null, others = [];
+      if (standings) {
+        for (var i = 0; i < standings.length; i++) {
+          if (standings[i].isPlayer) me = standings[i]; else others.push(standings[i].time);
+        }
+        if (me && others.length) margin = Math.min.apply(null, others) - me.time;
+      }
+      var frac = timeTarget > 0 ? (timeTarget - raceTotal) / timeTarget : 0;
+      stars = DR.Career.starsFor({ type: storyEvent.type, ok: ok, pos: pos, margin: margin,
+                                   frac: storyEvent.type === 'time' ? frac : 0, walls: wallHitCount });
+      starAward = DR.Career.awardStars('story:' + storyEvent.id, stars);
+    }
+    results = {
+      kind: kind, pos: pos, ok: ok, styleCash: styleCash, xpBase: xpBase, xpStyle: xpStyle, xp: xp,
+      stars: stars, starAward: starAward,
+      stats: { style: st.style, overtakes: st.overtakes, takedowns: st.takedowns, shunts: st.shunts,
+               drifts: st.drifts, cleanLaps: st.cleanLaps, topKmh: Math.round(st.topKmh), perfect: st.perfect,
+               walls: wallHitCount }
+    };
+    return results;
   }
 
   /* The tutorial: Velocity Ring, the gentlest track, with the racing line
@@ -668,6 +800,9 @@
     var first = !DR.Save.isUnlocked(TUTORIAL_ID);
     doneAward = first ? TUTORIAL_PAY : 0;
     if (first) { DR.Save.unlock(TUTORIAL_ID); DR.Save.addCurrency(doneAward); }
+    // XP and style pay once, like the prize: replaying the lesson is
+    // practice, not a way to farm.
+    if (first) settleRewards('tutorial', 1, true); else results = null;
     doneSel = 1;
   }
   function leaveTutorial() {
@@ -687,10 +822,12 @@
     var ratio = target / Math.max(1, winTime);
     doneAward = Math.round(Math.max(35, Math.min(110, 70 * ratio)));
     DR.Save.addCurrency(doneAward);
+    settleRewards('solo', 1, true);
   }
   function awardRushCurrency() {
     doneAward = Math.round(Math.max(30, Math.min(150, rushScore * 0.6)));
     DR.Save.addCurrency(doneAward);
+    settleRewards('solo', 1, true);
   }
 
   function finishDuelLeg() {
@@ -796,94 +933,67 @@
 
   // Lap read-out. Deliberately small and quiet: this milestone is still about
   // the driving, not the scoreboard.
+  /* The race HUD, arcade style: your place big in a slanted badge top left,
+     lap and time under it, the gap to the cars either side of you (in
+     seconds, with their names), and the map top right. Everything is a
+     number or a word first; colour only helps. */
   function drawHud(ctx2, v) {
-    var x = 40, y = 50, i;
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    ctx2.textAlign = 'left';
-    ctx2.textBaseline = 'top';
-
-    ctx2.font = '700 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(150,196,225,0.85)';
-    ctx2.fillText('LAP', x, y);
-
-    ctx2.font = '800 44px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.lineWidth = 6;
-    ctx2.strokeStyle = 'rgba(4,2,10,0.85)';
+    var UI = DR.UI, x = 18, y = 18;
     var total = lapsFor(mode);
-    ctx2.strokeText(Math.min(lap, total) + '/' + total, x, y + 22);
-    ctx2.fillStyle = '#eaf6ff';
-    ctx2.fillText(Math.min(lap, total) + '/' + total, x, y + 22);
-
-    var bw = 200, bh = 7, by = y + 88;
-    ctx2.fillStyle = 'rgba(255,255,255,0.13)';
-    ctx2.fillRect(x, by, bw, bh);
-    ctx2.fillStyle = '#22e6ff';
-    ctx2.fillRect(x, by, bw * lapProgress(), bh);
-
-    // Running time for the lap you are on.
-    ctx2.font = '700 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(150,196,225,0.8)';
-    ctx2.fillText('THIS LAP', x, y + 108);
-    ctx2.font = '700 38px ' + MONO;
-    ctx2.lineWidth = 5;
-    ctx2.strokeStyle = 'rgba(4,2,10,0.85)';
-    ctx2.strokeText(timing ? fmt(lapTimer) : '--.--', x, y + 130);
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText(timing ? fmt(lapTimer) : '--.--', x, y + 130);
-
-    // The last three, newest at the top. The quickest of them is called out,
-    // so the list says something rather than just listing.
+    if (raceRivals) {
+      var pos = DR.Rivals.position(DR.Car.roadS, false), n = DR.Rivals.all().length + 1;
+      var sw = 1 + bumpFlash * 0.06;
+      UI.panel(ctx2, x, y, 236, 112, { skew: 26, fill: 'rgba(8,6,20,0.82)', stroke: pos === 1 ? UI.C.gold : 'rgba(150,196,225,0.45)', lineWidth: 2,
+                                        accent: pos === 1 ? UI.C.gold : UI.C.magenta });
+      ctx2.save();
+      ctx2.translate(x + 74, y + 92);
+      ctx2.scale(sw, sw);
+      UI.text(ctx2, String(pos), 0, 0, { size: 92, align: 'center', color: pos === 1 ? UI.hotGradient(ctx2, -40, -80, 40, 0) : '#ffffff', stroke: 'rgba(4,2,10,0.9)' });
+      ctx2.restore();
+      UI.text(ctx2, ordinal(pos).replace(/^\d+/, ''), x + 118, y + 58, { size: 30, color: pos === 1 ? UI.C.gold : '#ffffff' });
+      UI.text(ctx2, '/ ' + n, x + 120, y + 94, { size: 26, color: UI.C.dim });
+      UI.text(ctx2, 'POS', x + 196, y + 30, { size: 14, font: UI.SANS, weight: '900', lean: 0, align: 'right', color: UI.C.dim });
+      y += 122;
+    }
+    // Lap and time.
+    UI.panel(ctx2, x, y, 236, 50, { skew: 14, fill: 'rgba(8,6,20,0.8)', stroke: 'rgba(150,196,225,0.35)' });
+    UI.text(ctx2, 'LAP', x + 22, y + 32, { size: 15, font: UI.SANS, weight: '900', lean: 0, color: UI.C.dim });
+    UI.text(ctx2, Math.min(lap, total) + '/' + total, x + 60, y + 36, { size: 28, color: lap >= total ? UI.C.orange : '#ffffff' });
+    UI.text(ctx2, timing ? fmt(lapTimer) : '--.--', x + 216, y + 34, { size: 22, font: UI.MONO, weight: '800', lean: 0, align: 'right', color: UI.C.gold });
+    ctx2.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx2.fillRect(x + 20, y + 42, 196, 3);
+    ctx2.fillStyle = UI.C.cyan;
+    ctx2.fillRect(x + 20, y + 42, 196 * lapProgress(), 3);
+    y += 58;
     if (lapTimes.length) {
-      var best = Math.min.apply(null, lapTimes);
-      ctx2.font = '700 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx2.fillStyle = 'rgba(150,196,225,0.8)';
-      ctx2.fillText('LAST LAPS', x, y + 182);
-
-      for (i = 0; i < lapTimes.length; i++) {
-        var idx = lapTimes.length - 1 - i;          // newest first
-        var t = lapTimes[idx];
-        var row = y + 206 + i * 28;
-        var isBest = t === best && lapTimes.length > 1;
-
-        ctx2.font = '600 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-        ctx2.fillStyle = 'rgba(150,196,225,0.65)';
-        ctx2.fillText('L' + (lap - 1 - i), x, row + 3);   // row 0 is the lap just finished
-
-        ctx2.font = '700 24px ' + MONO;
-        ctx2.fillStyle = isBest ? '#7dffb0' : 'rgba(228,242,252,0.92)';
-        ctx2.fillText(fmt(t), x + 46, row);
-
-        if (isBest) {
-          ctx2.font = '700 16px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-          ctx2.fillStyle = '#7dffb0';
-          ctx2.fillText('BEST', x + 162, row + 6);
-        }
+      UI.text(ctx2, 'BEST ' + fmt(Math.min.apply(null, lapTimes)), x + 22, y + 18, { size: 15, font: UI.MONO, weight: '800', lean: 0, color: UI.C.green });
+      y += 26;
+    }
+    // Gaps to the cars either side of you.
+    if (raceRivals) {
+      var me = DR.Car.roadS, spd = Math.max(200, currentSpeed()), ahead = null, behind = null, rs = DR.Rivals.all();
+      for (var i = 0; i < rs.length; i++) {
+        var d = rs[i].s - me;
+        if (d > 0 && (!ahead || d < ahead.d)) ahead = { d: d, r: rs[i] };
+        if (d < 0 && (!behind || d > behind.d)) behind = { d: d, r: rs[i] };
+      }
+      var gy = y;
+      if (ahead) {
+        UI.text(ctx2, '▲ ' + ahead.r.name, x + 20, gy + 18, { size: 16, font: UI.SANS, weight: '900', lean: 0, color: '#ffffff', maxW: 130 });
+        UI.text(ctx2, '-' + (ahead.d / spd).toFixed(1) + 's', x + 216, gy + 18, { size: 16, font: UI.MONO, weight: '900', lean: 0, align: 'right', color: '#ff9a7a' });
+        gy += 24;
+      }
+      if (behind) {
+        UI.text(ctx2, '▼ ' + behind.r.name, x + 20, gy + 18, { size: 16, font: UI.SANS, weight: '900', lean: 0, color: UI.C.dim, maxW: 130 });
+        UI.text(ctx2, '+' + (-behind.d / spd).toFixed(1) + 's', x + 216, gy + 18, { size: 16, font: UI.MONO, weight: '900', lean: 0, align: 'right', color: UI.C.green });
       }
     }
-
     drawBoostButton(ctx2);
     drawMinimap(ctx2);
-    if (raceRivals) drawPosition(ctx2, v);
-
-    // Crossing the line: one soft swell, no strobe.
-    if (lapFlash > 0) {
-      var k = Math.sin(Math.PI * Math.min(1, lapFlash));
-      ctx2.globalAlpha = k;
-      ctx2.textAlign = 'center';
-      ctx2.font = '800 60px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx2.lineWidth = 8;
-      ctx2.strokeStyle = 'rgba(4,2,10,0.85)';
-      ctx2.strokeText('LAP ' + (lap - 1), v.W * 0.5, v.H * 0.26);
-      ctx2.fillStyle = '#ffd76a';
-      ctx2.fillText('LAP ' + (lap - 1), v.W * 0.5, v.H * 0.26);
-      if (lapTimes.length) {
-        ctx2.font = '700 46px ' + MONO;
-        ctx2.strokeText(fmt(lapTimes[lapTimes.length - 1]), v.W * 0.5, v.H * 0.26 + 66);
-        ctx2.fillStyle = '#eaf6ff';
-        ctx2.fillText(fmt(lapTimes[lapTimes.length - 1]), v.W * 0.5, v.H * 0.26 + 66);
-      }
-      ctx2.globalAlpha = 1;
-      ctx2.textAlign = 'left';
+    // Slipstream, in words, while it's pulling you.
+    if (draftMult > 1.012) {
+      UI.text(ctx2, '» SLIPSTREAM «', v.W * 0.5, 64, { size: 22, align: 'center', color: '#7ce4ff', stroke: 'rgba(4,2,10,0.9)',
+                                                                 alpha: Math.min(1, (draftMult - 1.012) / 0.02) });
     }
   }
 
@@ -892,50 +1002,37 @@
      it turns orange while a boost is pushing you (with the word BOOST, so
      it's never colour alone). km/h is a display scale, not physics: the
      stock car's cruising speed reads 200. */
-  var SPEEDO = { x: 612, y: 1170, r: 66 };
+  var SPEEDO = { x: 606, y: 1160, r: 76 };
   var KMH = 200 / BASE_SPEED_STOCK, SPEEDO_MAX = 360;
   var shownKmh = 0;
   function drawSpeedo(ctx2) {
-    var g = SPEEDO, kmh = currentSpeed() * KMH;
+    // On the grid the car is held, so the needle sits at zero until GO.
+    var UI = DR.UI, g = SPEEDO, kmh = DR.Show.frozen() ? 0 : currentSpeed() * KMH;
     shownKmh += (kmh - shownKmh) * 0.25;                // steady the needle
     var a0 = Math.PI * 0.75, sweep = Math.PI * 1.5;
     var f = Math.max(0, Math.min(1, shownKmh / SPEEDO_MAX));
     var boosting = boostAmount() > 0.05;
-
-    ctx2.beginPath();
-    ctx2.arc(g.x, g.y, g.r, 0, Math.PI * 2);
-    ctx2.fillStyle = 'rgba(10,6,22,0.62)';
-    ctx2.fill();
-    // Track and fill.
-    ctx2.lineCap = 'round';
-    ctx2.lineWidth = 8;
-    ctx2.beginPath();
-    ctx2.arc(g.x, g.y, g.r - 10, a0, a0 + sweep);
-    ctx2.strokeStyle = 'rgba(150,196,225,0.22)';
-    ctx2.stroke();
-    ctx2.beginPath();
-    ctx2.arc(g.x, g.y, g.r - 10, a0, a0 + sweep * Math.max(0.001, f));
-    ctx2.strokeStyle = boosting ? '#ffb24d' : '#41e0ff';
-    ctx2.stroke();
-    ctx2.lineCap = 'butt';
-    // A tick every 60.
-    for (var t = 0; t <= SPEEDO_MAX; t += 60) {
-      var a = a0 + sweep * (t / SPEEDO_MAX);
+    ctx2.save();
+    var bg = ctx2.createRadialGradient(g.x, g.y, 10, g.x, g.y, g.r + 6);
+    bg.addColorStop(0, 'rgba(20,14,40,0.92)'); bg.addColorStop(1, 'rgba(6,4,14,0.92)');
+    ctx2.beginPath(); ctx2.arc(g.x, g.y, g.r + 6, 0, Math.PI * 2);
+    ctx2.fillStyle = bg; ctx2.fill();
+    ctx2.lineWidth = 2; ctx2.strokeStyle = boosting ? UI.C.orange : 'rgba(150,196,225,0.4)'; ctx2.stroke();
+    // Segments: lit up to the speed, cyan into magenta into orange.
+    var N = 30;
+    for (var i = 0; i < N; i++) {
+      var a = a0 + sweep * (i + 0.15) / N, a2 = a0 + sweep * (i + 0.85) / N, lit = (i + 0.5) / N <= f;
       ctx2.beginPath();
-      ctx2.moveTo(g.x + Math.cos(a) * (g.r - 2), g.y + Math.sin(a) * (g.r - 2));
-      ctx2.lineTo(g.x + Math.cos(a) * (g.r + 4), g.y + Math.sin(a) * (g.r + 4));
-      ctx2.lineWidth = 2;
-      ctx2.strokeStyle = 'rgba(190,214,235,0.6)';
+      ctx2.arc(g.x, g.y, g.r - 6, a, a2);
+      ctx2.lineWidth = 10;
+      var q = i / N;
+      ctx2.strokeStyle = !lit ? 'rgba(120,140,170,0.18)' : q < 0.5 ? UI.C.cyan : q < 0.8 ? UI.C.magenta : UI.C.orange;
       ctx2.stroke();
     }
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'middle';
-    ctx2.font = '800 34px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    ctx2.fillStyle = '#eaf6ff';
-    ctx2.fillText(String(Math.round(shownKmh)), g.x, g.y - 2);
-    ctx2.font = '700 15px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = boosting ? '#ffb24d' : 'rgba(150,196,225,0.9)';
-    ctx2.fillText(boosting ? 'BOOST' : 'KM/H', g.x, g.y + 26);
+    ctx2.restore();
+    UI.text(ctx2, String(Math.round(shownKmh)), g.x + 2, g.y + 12, { size: 38, align: 'center', color: '#ffffff' });
+    UI.text(ctx2, boosting ? 'BOOST' : 'KM/H', g.x, g.y + 38, { size: 14, font: UI.SANS, weight: '900', lean: 0, align: 'center',
+                                                             color: boosting ? UI.C.orange : UI.C.dim });
     ctx2.textBaseline = 'alphabetic';
     ctx2.textAlign = 'left';
   }
@@ -1004,7 +1101,7 @@
     ctx2.textAlign = 'center';
     ctx2.font = '700 19px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx2.fillStyle = live ? 'rgba(255,220,170,0.95)' : (ready ? 'rgba(190,240,255,0.9)' : 'rgba(170,190,205,0.6)');
-    ctx2.fillText('BOOST', b.x, b.y + 34);
+    ctx2.fillText('NITRO', b.x, b.y + 34);
     ctx2.textAlign = 'left';
   }
 
@@ -1062,34 +1159,75 @@
     return { x: 64, y: top + i * pitch, w: 592, h: MODE_H };
   }
 
-  // Draw text at the biggest size that still fits `maxW`, down to a floor.
-  function fitText(ctx2, text, x, y, maxW, size, weight, family) {
-    var px2 = size;
-    while (px2 > 18) {
-      ctx2.font = weight + ' ' + px2 + 'px ' + family;
-      if (ctx2.measureText(text).width <= maxW) break;
-      px2 -= 2;
-    }
-    ctx2.fillText(text, x, y);
-  }
 
   function inBox(lx, ly, b) {
     return lx >= b.x && lx <= b.x + b.w && ly >= b.y && ly <= b.y + b.h;
   }
 
-  function drawButton(ctx2, b, text) {
-    ctx2.fillStyle = 'rgba(10,8,24,0.62)';
-    ctx2.fillRect(b.x, b.y, b.w, b.h);
-    ctx2.lineWidth = 1.5;
-    ctx2.strokeStyle = 'rgba(150,196,225,0.40)';
-    ctx2.strokeRect(b.x, b.y, b.w, b.h);
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'middle';
-    ctx2.font = '700 24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(214,234,248,0.92)';
-    ctx2.fillText(text, b.x + b.w * 0.5, b.y + b.h * 0.5 + 1);
+  // Every button in the game: slanted, with its accent edge (ui.js).
+  function drawButton(ctx2, b, text, o) {
+    o = o || {};
+    o.t = clock;
+    DR.UI.button(ctx2, b, text, o);
     ctx2.textAlign = 'left';
     ctx2.textBaseline = 'alphabetic';
+  }
+
+  /* A menu card: the tiles on the title, the modes, the tracks. Slides in
+     from the right with a little overshoot (enter: 0..1), glows when it's
+     the one selected, and says in words whether it's selected or locked. */
+  function drawCard(ctx2, b, o) {
+    var UI = DR.UI, p = UI.outBack(o.enter === undefined ? 1 : o.enter);
+    var dx = (1 - p) * 420;
+    var bx = { x: b.x + dx, y: b.y, w: b.w, h: b.h };
+    ctx2.save();
+    ctx2.globalAlpha *= UI.clamp01(o.enter === undefined ? 1 : o.enter * 1.6);
+    var fill;
+    if (o.primary) {
+      fill = ctx2.createLinearGradient(bx.x, bx.y, bx.x + bx.w, bx.y + bx.h);
+      fill.addColorStop(0, o.on ? 'rgba(255,47,142,0.95)' : 'rgba(170,30,100,0.9)');
+      fill.addColorStop(1, o.on ? 'rgba(255,138,61,0.95)' : 'rgba(150,70,30,0.9)');
+    } else {
+      fill = ctx2.createLinearGradient(bx.x, bx.y, bx.x, bx.y + bx.h);
+      fill.addColorStop(0, o.on ? 'rgba(34,70,110,0.95)' : 'rgba(26,20,50,0.92)');
+      fill.addColorStop(1, o.on ? 'rgba(14,34,60,0.95)' : 'rgba(10,8,22,0.92)');
+    }
+    UI.panel(ctx2, bx.x, bx.y, bx.w, bx.h, {
+      skew: 22, fill: fill,
+      stroke: o.on ? UI.C.cyan : (o.primary ? 'rgba(255,200,160,0.6)' : 'rgba(150,196,225,0.35)'),
+      lineWidth: o.on ? 3 : 1.5, glow: o.on ? 'rgba(34,230,255,0.45)' : null,
+      accent: o.locked ? 'rgba(140,150,170,0.6)' : (o.accent || (o.primary ? UI.C.gold : UI.C.magenta))
+    });
+    if (o.on && o.t !== undefined) {
+      // The same light sweep as a primary button, over the selected card.
+      var ph = (o.t % 3.2) / 0.9;
+      if (ph < 1) {
+        ctx2.save();
+        UI.slant(ctx2, bx.x, bx.y, bx.w, bx.h, 22); ctx2.clip();
+        var sx = bx.x - 80 + (bx.w + 160) * ph;
+        var sg = ctx2.createLinearGradient(sx - 60, 0, sx + 60, 0);
+        sg.addColorStop(0, 'rgba(255,255,255,0)'); sg.addColorStop(0.5, 'rgba(255,255,255,0.16)'); sg.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx2.fillStyle = sg; ctx2.fillRect(sx - 60, bx.y, 120, bx.h);
+        ctx2.restore();
+      }
+    }
+    if (o.draw) o.draw(bx);
+    var tx = bx.x + (o.textX || 40);
+    UI.text(ctx2, o.title, tx, bx.y + (o.titleY || bx.h * 0.5 + (o.sub ? -2 : 12)), {
+      size: o.size || 40, color: o.locked ? 'rgba(170,180,200,0.7)' : '#ffffff',
+      stroke: 'rgba(4,2,10,0.55)', maxW: o.titleW || bx.w - 200
+    });
+    if (o.sub) UI.text(ctx2, o.sub, tx + 4, bx.y + (o.subY || bx.h * 0.5 + 30), {
+      size: 17, font: UI.SANS, weight: '800', lean: 0, color: o.primary ? 'rgba(255,240,220,0.95)' : UI.C.dim, maxW: o.subW || bx.w - 80
+    });
+    var tag = o.locked ? (o.lockText || 'LOCKED') : o.on ? 'TAP AGAIN \u25B8' : (o.badge || '');
+    if (tag) {
+      UI.text(ctx2, tag, bx.x + bx.w - 28, bx.y + (o.tagY || 36), {
+        size: 16, font: UI.SANS, weight: '900', lean: 0, align: 'right',
+        color: o.locked ? '#ffb24d' : o.on ? UI.C.gold : (o.badgeColor || UI.C.green)
+      });
+    }
+    ctx2.restore();
   }
 
   // One quiet line naming both ways in. Someone on a laptop has no way to
@@ -1113,58 +1251,104 @@
   }
 
   var TITLE_ROW_H = 150, TITLE_GAP = 34;
-  function titleBox(i) { return vBoxAt(i, TITLE_ITEMS.length, TITLE_ROW_H, TITLE_GAP); }
+  // The title's tiles: STORY big across the top, QUICK PLAY and GARAGE
+  // side by side, TUTORIAL a strip underneath (same order as TITLE_ITEMS,
+  // which is also the order the arrow keys step through).
+  var TITLE_TILES = [
+    { x: 40, y: 676, w: 640, h: 132 },
+    { x: 40, y: 824, w: 314, h: 116 },
+    { x: 366, y: 824, w: 314, h: 116 },
+    { x: 40, y: 956, w: 640, h: 82 }
+  ];
+  function titleBox(i) { return TITLE_TILES[i]; }
+  var TITLE_CAR_RECT = { x: 150, y: 232, w: 420, h: 398 };
+
+  // The chips along the top of every main screen: level, stars, money.
+  function drawTopBar(ctx2, v, enter) {
+    var UI = DR.UI, p = UI.outCubic(enter === undefined ? 1 : enter);
+    ctx2.save();
+    ctx2.globalAlpha *= p;
+    ctx2.translate(0, (1 - p) * -60);
+    var lv = DR.Career.info();
+    UI.chip(ctx2, 20, 18, 240, 'lvl', lv.level, { frac: lv.frac });
+    UI.chip(ctx2, 272, 18, 130, 'star', DR.Career.totalStars().got);
+    UI.chip(ctx2, 520, 18, 180, 'cr', DR.Save.currency().toLocaleString());
+    ctx2.restore();
+  }
 
   function drawTitle(ctx2, v) {
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '800 78px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText('DRIFT RUN', v.W * 0.5, 190);
-    ctx2.font = '700 24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(180,214,236,0.8)';
-    ctx2.fillText('THE CIRCUIT', v.W * 0.5, 232);
+    var UI = DR.UI, t = phaseT, i;
+    drawTopBar(ctx2, v, UI.step(t, 0.1, 0.4));
 
-    for (var i = 0; i < TITLE_ITEMS.length; i++) {
-      var it = TITLE_ITEMS[i], b = titleBox(i), on = i === titleSel;
-      ctx2.globalAlpha = it.ready ? 1 : 0.55;
-      ctx2.fillStyle = on ? 'rgba(34,120,150,0.28)' : 'rgba(10,8,24,0.55)';
-      ctx2.fillRect(b.x, b.y, b.w, b.h);
-      ctx2.lineWidth = on ? 3 : 1.5;
-      ctx2.strokeStyle = on ? '#41e0ff' : 'rgba(150,196,225,0.35)';
-      ctx2.strokeRect(b.x, b.y, b.w, b.h);
+    // The logo slams in from the left; an underline sweeps after it.
+    var lp = UI.outBack(UI.step(t, 0, 0.55));
+    UI.text(ctx2, 'DRIFT RUN', v.W * 0.5 - (1 - lp) * 500, 176, {
+      size: 92, align: 'center', color: UI.hotGradient(ctx2, 120, 110, 600, 190),
+      stroke: 'rgba(4,2,10,0.95)', strokeW: 10, glow: 'rgba(255,47,142,0.55)', glowBlur: 24
+    });
+    var up = UI.outCubic(UI.step(t, 0.35, 0.5));
+    ctx2.fillStyle = UI.C.magenta; ctx2.fillRect(v.W * 0.5 - 250 * up, 196, 500 * up, 4);
+    ctx2.fillStyle = UI.C.cyan; ctx2.fillRect(v.W * 0.5 - 160 * up, 204, 320 * up, 3);
+    UI.text(ctx2, 'THE CIRCUIT', v.W * 0.5, 234, { size: 20, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.dim, alpha: up });
 
-      ctx2.textAlign = 'left';
-      ctx2.fillStyle = on ? '#eaf6ff' : 'rgba(226,240,250,0.8)';
-      fitText(ctx2, it.name, b.x + 30, b.y + b.h * 0.5 + 14, 340, 46, '800',
-              'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif');
-
-      ctx2.textAlign = 'right';
-      ctx2.font = '700 21px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      if (!it.ready) {
-        ctx2.fillStyle = 'rgba(190,214,235,0.5)';
-        ctx2.fillText('COMING SOON', b.x + b.w - 26, b.y + b.h * 0.5 + 7);
-      } else {
-        var fresh = it.id === 'tutorial' && !DR.Save.isUnlocked(TUTORIAL_ID);
-        ctx2.fillStyle = on || fresh ? '#ffd76a' : 'rgba(190,214,235,0.45)';
-        ctx2.fillText(on ? 'TAP AGAIN ▸' : (fresh ? 'NEW? START HERE' : 'TAP TO SELECT'),
-                      b.x + b.w - 26, b.y + b.h * 0.5 + 7);
-      }
-      ctx2.globalAlpha = 1;
+    // The showroom: light rays, a floor glow, and your car turning on it.
+    var cx = v.W * 0.5, fy = 560;
+    ctx2.save();
+    ctx2.globalAlpha = 0.16 * up;
+    for (i = 0; i < 9; i++) {
+      var a = -Math.PI / 2 + (i - 4) * 0.22 + Math.sin(clock * 0.3) * 0.05;
+      ctx2.beginPath();
+      ctx2.moveTo(cx, fy - 40);
+      ctx2.lineTo(cx + Math.cos(a - 0.05) * 520, fy - 40 + Math.sin(a - 0.05) * 520);
+      ctx2.lineTo(cx + Math.cos(a + 0.05) * 520, fy - 40 + Math.sin(a + 0.05) * 520);
+      ctx2.closePath();
+      ctx2.fillStyle = i % 2 ? UI.C.magenta : UI.C.cyan;
+      ctx2.fill();
     }
-    drawControlsLine(ctx2, v, titleBox(TITLE_ITEMS.length - 1).y + TITLE_ROW_H + 62);
+    ctx2.restore();
+    var fg = ctx2.createRadialGradient(cx, fy, 10, cx, fy, 280);
+    fg.addColorStop(0, 'rgba(34,230,255,0.45)'); fg.addColorStop(0.5, 'rgba(255,47,142,0.16)'); fg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx2.fillStyle = fg;
+    ctx2.save(); ctx2.translate(cx, fy); ctx2.scale(1, 0.22); ctx2.beginPath(); ctx2.arc(0, 0, 280, 0, Math.PI * 2); ctx2.restore();
+    ctx2.fill();
+    var def = DR.Cars.get(DR.Save.selectedCar()) || DR.Cars.get('nightrunner');
+    var col = DR.Save.carColor(def.id) || def.color;
+    var drew = DR.Car3D && DR.Car3D.render({ archetype: def.archetype, color: col,
+                                             yaw: clock * 0.35, rect: TITLE_CAR_RECT });
+    if (!drew) drawProfileCar(ctx2, cx - 10, fy - 30, 1.5, col);
+    UI.text(ctx2, def.name.toUpperCase(), cx, 640, { size: 26, align: 'center', color: '#ffffff', stroke: 'rgba(4,2,10,0.9)', alpha: up });
+    UI.text(ctx2, 'RATING ' + DR.Cars.rating(def.id) + '   •   ' + def.archetype.toUpperCase(), cx, 664,
+            { size: 15, font: UI.SANS, weight: '800', lean: 0, align: 'center', color: UI.C.green, alpha: up });
+
+    // The tiles, arriving one after another.
+    var here = DR.Story.currentCity(), city = DR.Story.cities()[here];
+    var subs = {
+      story: DR.Save.isUnlocked('scene:prologue')
+        ? 'KAI’S LAST RACE  •  CITY ' + (here + 1) + ': ' + city.name
+        : 'KAI’S LAST RACE  •  START YOUR CAREER',
+      quick: 'RACE • PRACTICE • RUSH • DUEL',
+      garage: DR.Save.ownedCars().length + (DR.Save.ownedCars().length === 1 ? ' CAR' : ' CARS') + '  •  UPGRADE',
+      tutorial: DR.Save.isUnlocked(TUTORIAL_ID) ? 'LEARN THE DRIFT AGAIN' : 'NEW? START HERE — +150 CR'
+    };
+    for (i = 0; i < TITLE_ITEMS.length; i++) {
+      var it = TITLE_ITEMS[i], b = titleBox(i);
+      var fresh = it.id === 'tutorial' && !DR.Save.isUnlocked(TUTORIAL_ID);
+      drawCard(ctx2, b, {
+        title: it.name, sub: subs[it.id], on: i === titleSel, t: clock,
+        primary: it.id === 'story', enter: UI.stagger(t, i, 0.08, 0.5, 0.25),
+        size: it.id === 'story' ? 50 : it.id === 'tutorial' ? 30 : 34,
+        titleY: it.id === 'tutorial' ? 40 : undefined, subY: it.id === 'tutorial' ? 66 : undefined,
+        tagY: it.id === 'tutorial' ? 34 : it.id === 'story' ? 36 : b.h - 14,
+        titleW: it.id === 'story' || it.id === 'tutorial' ? b.w - 170 : b.w - 70,
+        badge: fresh ? 'NEW' : '', badgeColor: UI.C.gold
+      });
+    }
+    drawControlsLine(ctx2, v, 1090);
     // Quiet, out of the way, and it asks twice.
     var b2 = RESET_BTN;
-    ctx2.fillStyle = resetArmed > 0 ? 'rgba(120,30,40,0.55)' : 'rgba(10,8,24,0.45)';
-    ctx2.fillRect(b2.x, b2.y, b2.w, b2.h);
-    ctx2.lineWidth = resetArmed > 0 ? 2.5 : 1;
-    ctx2.strokeStyle = resetArmed > 0 ? '#ff8a5c' : 'rgba(150,196,225,0.3)';
-    ctx2.strokeRect(b2.x, b2.y, b2.w, b2.h);
+    drawButton(ctx2, b2, resetArmed > 0 ? 'TAP AGAIN TO ERASE' : 'START OVER', { size: 18, on: resetArmed > 0 });
     ctx2.textAlign = 'center';
     ctx2.textBaseline = 'middle';
-    ctx2.font = '700 21px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = resetArmed > 0 ? '#ffd0b8' : 'rgba(190,214,235,0.7)';
-    ctx2.fillText(resetArmed > 0 ? 'TAP AGAIN TO ERASE' : 'START OVER', b2.x + b2.w * 0.5, b2.y + b2.h * 0.5 + 1);
     if (resetArmed > 0 || resetDone > 0) {
       ctx2.font = '600 19px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
       ctx2.fillStyle = resetDone > 0 ? '#7dffb0' : '#ffb08a';
@@ -1209,16 +1393,25 @@
     if (DR.Save.selectedCar() === def.id) return;
     if (DR.Save.ownsCar(def.id)) {
       DR.Save.selectCar(def.id);
+      garagePop = { kind: 'select', t: 0 };
     } else if (def.cost !== null) {
       DR.Save.buyCar(def.id, def.cost);
-      if (DR.Save.ownsCar(def.id)) DR.Save.selectCar(def.id);
+      if (DR.Save.ownsCar(def.id)) {
+        DR.Save.selectCar(def.id);
+        garagePop = { kind: 'buy', t: 0 };
+        DR.UI.confetti(90, LOGICAL_W / 2, 740, 500);
+      }
     }
   }
+  // The last thing bought or chosen here, for its little celebration.
+  var garagePop = null, garageSwapT = 0, garageShown = -1;
 
   function garageBuyUpgrade(systemId) {
     var def = DR.Cars.roster()[garageSel];
     if (!DR.Save.ownsCar(def.id)) return;
+    var before = DR.Cars.rating(def.id);
     if (!DR.Cars.buyUpgrade(def.id, systemId)) return;
+    garagePop = { kind: 'upgrade', sys: systemId, gain: DR.Cars.rating(def.id) - before, t: 0 };
     // Only refreshes the shared physics state if the car being upgraded is
     // the one actually selected to race — browsing another owned car's
     // upgrades shouldn't touch what's currently loaded into car.js/game.js.
@@ -1249,48 +1442,61 @@
                            ['HANDLING', 'handling'], ['BOOST', 'boost']];
 
   function drawGarage(ctx2, v) {
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var UI = DR.UI, t = phaseT;
     var def = ensureGaragePreview();
     var owned = DR.Save.ownsCar(def.id);
     var isSelected = DR.Save.selectedCar() === def.id;
     var i;
+    // A different car on the turntable: its name and numbers come in fresh.
+    if (garageShown !== garageSel) { garageShown = garageSel; garageSwapT = 0; }
+    var sw = garageSwapT;
+    if (garagePop && garagePop.t > 2) garagePop = null;
 
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '800 44px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText('GARAGE', v.W * 0.5, 118);
-
-    ctx2.textAlign = 'right';
-    ctx2.font = '700 22px ' + MONO;
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText(DR.Save.currency().toLocaleString() + ' CR', v.W - 24, 44);
+    UI.text(ctx2, 'GARAGE', v.W * 0.5, 112, { size: 46, align: 'center', color: UI.hotGradient(ctx2, 200, 70, 520, 120), stroke: 'rgba(4,2,10,0.9)',
+                                             alpha: UI.outCubic(UI.step(t, 0, 0.35)) });
+    UI.chip(ctx2, 532, 34, 160, 'cr', DR.Save.currency().toLocaleString());
     // How fast this car really is, as one number (cars.js): the same number
     // each city asks for on its own screen.
-    ctx2.font = '700 16px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(150,196,225,0.9)';
-    ctx2.fillText('RATING', v.W - 24, 70);
-    ctx2.font = '800 34px ' + MONO;
-    ctx2.fillStyle = '#7dffb0';
-    ctx2.fillText(String(DR.Cars.rating(def.id)), v.W - 24, 104);
-    ctx2.textAlign = 'center';
+    var rating = DR.Cars.rating(def.id);
+    UI.panel(ctx2, 552, 86, 140, 64, { skew: 14, fill: 'rgba(10,8,24,0.86)', stroke: 'rgba(125,255,176,0.5)', accent: UI.C.green });
+    UI.text(ctx2, 'RATING', 578, 108, { size: 12, font: UI.SANS, weight: '900', lean: 0, color: UI.C.dim });
+    UI.text(ctx2, String(rating), 672, 140, { size: 34, align: 'right', color: UI.C.green });
 
-    // One dot per car, so browsing the roster shows its own progress.
-    var n = DR.Cars.roster().length, dotGap = 22, dx = v.W * 0.5 - (n - 1) * dotGap * 0.5;
+    // One pip per car, so browsing the roster shows where you are in it.
+    var n = DR.Cars.roster().length, dotGap = 26, dx = v.W * 0.5 - (n - 1) * dotGap * 0.5;
     for (i = 0; i < n; i++) {
-      ctx2.beginPath();
-      ctx2.arc(dx + i * dotGap, 150, i === garageSel ? 5 : 3.5, 0, Math.PI * 2);
-      ctx2.fillStyle = i === garageSel ? '#41e0ff' : 'rgba(150,196,225,0.35)';
+      var pon = i === garageSel;
+      UI.slant(ctx2, dx + i * dotGap - (pon ? 10 : 6), 142, pon ? 20 : 12, 6, 3);
+      ctx2.fillStyle = pon ? UI.C.cyan : DR.Save.ownsCar(DR.Cars.roster()[i].id) ? 'rgba(125,255,176,0.6)' : 'rgba(150,196,225,0.3)';
       ctx2.fill();
     }
+
+    // The showroom: a spotlight from above and a lit disc on the floor that
+    // the car turns on.
+    var cone = ctx2.createLinearGradient(0, 160, 0, 640);
+    cone.addColorStop(0, 'rgba(34,230,255,0.10)'); cone.addColorStop(1, 'rgba(34,230,255,0)');
+    ctx2.fillStyle = cone;
+    ctx2.beginPath(); ctx2.moveTo(300, 160); ctx2.lineTo(420, 160); ctx2.lineTo(640, 640); ctx2.lineTo(80, 640); ctx2.closePath(); ctx2.fill();
+    var fl = ctx2.createRadialGradient(360, 590, 20, 360, 590, 280);
+    fl.addColorStop(0, 'rgba(255,47,142,0.28)'); fl.addColorStop(0.6, 'rgba(34,230,255,0.10)'); fl.addColorStop(1, 'rgba(34,230,255,0)');
+    ctx2.fillStyle = fl;
+    ctx2.beginPath(); ctx2.ellipse(360, 590, 280, 70, 0, 0, Math.PI * 2); ctx2.fill();
+    ctx2.save();
+    ctx2.strokeStyle = 'rgba(34,230,255,0.45)'; ctx2.lineWidth = 2;
+    ctx2.beginPath(); ctx2.ellipse(360, 590, 230, 52, 0, 0, Math.PI * 2); ctx2.stroke();
+    ctx2.strokeStyle = 'rgba(255,47,142,0.5)'; ctx2.lineWidth = 3;
+    var ra = clock * 0.8;
+    ctx2.beginPath(); ctx2.ellipse(360, 590, 230, 52, 0, ra, ra + 1.2); ctx2.stroke();
+    ctx2.beginPath(); ctx2.ellipse(360, 590, 230, 52, 0, ra + Math.PI, ra + Math.PI + 1.2); ctx2.stroke();
+    ctx2.restore();
 
     // The car itself, turning slowly, in its real colours — a real WebGL
     // model (car3d.js) on a transparent canvas laid over this one, with the
     // hand-rolled Canvas 2D car (car.js) kept only as the fallback for a
     // device that can't do WebGL. The in-race car is untouched either way.
-    _garagePreview.bodyYaw = 0.55 + Math.sin(clock * 0.45) * 0.18;
+    _garagePreview.bodyYaw = 0.55 + Math.sin(clock * 0.45) * 0.18 + (1 - UI.outCubic(UI.step(sw, 0, 0.5))) * 1.2;
     var previewColor = DR.Save.carColor(def.id) || def.color;
-    var drew3D = DR.Car3D && DR.Car3D.render({ archetype: def.archetype, color: previewColor, yaw: _garagePreview.bodyYaw });
+    var drew3D = DR.Car3D && DR.Car3D.render({ archetype: def.archetype, color: previewColor, yaw: _garagePreview.bodyYaw, rect: null });
     if (!drew3D) {
       ctx2.save();
       ctx2.translate(0, -GARAGE_PREVIEW_SHIFT_Y);
@@ -1300,41 +1506,38 @@
     drawGarageArrow(ctx2, GARAGE_LEFT_ARROW, -1);
     drawGarageArrow(ctx2, GARAGE_RIGHT_ARROW, 1);
 
-    ctx2.font = '800 44px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = '#eaf6ff';
-    fitText(ctx2, def.name, v.W * 0.5, 705, 560, 44, '800',
-            'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif');
-
-    ctx2.font = '700 20px ' + MONO;
-    ctx2.fillStyle = '#7dffb0';
-    ctx2.fillText(def.archetype.toUpperCase(), v.W * 0.5, 738);
-
-    ctx2.font = '500 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(180,206,226,0.85)';
-    ctx2.fillText(def.blurb, v.W * 0.5, 768);
+    // Name plate, sliding in with each new car.
+    var np = UI.outCubic(UI.step(sw, 0.05, 0.4));
+    UI.text(ctx2, def.name, v.W * 0.5 + (1 - np) * 120, 708, { size: 46, align: 'center', color: '#ffffff', stroke: 'rgba(4,2,10,0.9)', maxW: 560, alpha: np });
+    var tag = def.archetype.toUpperCase() + (isSelected ? '  •  YOUR RIDE' : owned ? '  •  OWNED' : '');
+    UI.text(ctx2, tag, v.W * 0.5, 740, { size: 17, font: UI.MONO, weight: '900', lean: 0, align: 'center', color: UI.C.green, alpha: np });
+    UI.text(ctx2, def.blurb, v.W * 0.5, 768, { size: 18, font: UI.SANS, weight: '700', lean: 0, align: 'center', color: 'rgba(214,232,246,0.85)', maxW: 640, alpha: np });
 
     // Browsing an owned car can look at either its stats or its upgrades —
     // a locked car has no upgrades to show yet, so it only ever gets the
     // stats view, and the toggle itself doesn't appear.
-    if (owned) drawButton(ctx2, GARAGE_TAB_BTN, garageTab === 'stats' ? 'UPGRADES ▸' : '◂ STATS');
+    if (owned) drawButton(ctx2, GARAGE_TAB_BTN, garageTab === 'stats' ? 'UPGRADES ▸' : '◂ STATS', { size: 16 });
 
     if (garageTab === 'upgrades' && owned) {
       drawGarageUpgrades(ctx2, def);
     } else {
       // Four stat bars, always shown relative to the rest of the roster —
       // the numbers behind them are cars.js's (stock plus any upgrades
-      // already bought), this just draws whatever it says.
-      var barX = 180, barW = 420, rowY = 830, rowH = 40;
-      ctx2.textAlign = 'left';
+      // already bought), this just draws whatever it says. They fill up
+      // each time a car comes onto the turntable.
+      var barX = 190, barW = 400, rowY = 830, rowH = 40;
       for (i = 0; i < GARAGE_STAT_ROWS.length; i++) {
-        var y = rowY + i * rowH;
-        ctx2.font = '700 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-        ctx2.fillStyle = 'rgba(180,206,226,0.85)';
-        ctx2.fillText(GARAGE_STAT_ROWS[i][0], 60, y + 14);
-        ctx2.fillStyle = 'rgba(255,255,255,0.12)';
-        ctx2.fillRect(barX, y, barW, 10);
-        ctx2.fillStyle = isSelected ? '#41e0ff' : '#7dffb0';
-        ctx2.fillRect(barX, y, barW * DR.Cars.statFrac(def, GARAGE_STAT_ROWS[i][1]), 10);
+        var y = rowY + i * rowH, f = DR.Cars.statFrac(def, GARAGE_STAT_ROWS[i][1]);
+        var fp = UI.outCubic(UI.stagger(sw, i, 0.06, 0.5, 0.1));
+        UI.text(ctx2, GARAGE_STAT_ROWS[i][0], 60, y + 14, { size: 17, font: UI.SANS, weight: '900', lean: 0, color: UI.C.dim });
+        var segs = 20;
+        for (var sg = 0; sg < segs; sg++) {
+          var lit = (sg + 0.5) / segs <= f * fp;
+          UI.slant(ctx2, barX + sg * (barW / segs), y, barW / segs - 3, 14, 4);
+          ctx2.fillStyle = lit ? (isSelected ? UI.C.cyan : UI.C.green) : 'rgba(255,255,255,0.10)';
+          ctx2.fill();
+        }
+        UI.text(ctx2, String(Math.round(f * fp * 100)), 660, y + 14, { size: 17, font: UI.MONO, weight: '900', lean: 0, align: 'right', color: '#ffffff' });
       }
 
       // Recolouring only makes sense for a car you actually have.
@@ -1344,20 +1547,35 @@
         for (i = 0; i < pal.length; i++) {
           var b = garageSwatchBox(i, pal.length);
           var on = pal[i].toLowerCase() === curColor;
-          ctx2.fillStyle = pal[i];
-          ctx2.fillRect(b.x, b.y, b.w, b.h);
-          ctx2.lineWidth = on ? 3 : 1;
+          var bp = UI.outBack(UI.stagger(sw, i, 0.03, 0.3, 0.25));
+          ctx2.save();
+          ctx2.translate(b.x + b.w / 2, b.y + b.h / 2); ctx2.scale(bp, bp);
+          UI.slant(ctx2, -b.w / 2, -b.h / 2, b.w, b.h, 8);
+          ctx2.fillStyle = pal[i]; ctx2.fill();
+          ctx2.lineWidth = on ? 3.5 : 1;
           ctx2.strokeStyle = on ? '#ffffff' : 'rgba(255,255,255,0.35)';
-          ctx2.strokeRect(b.x, b.y, b.w, b.h);
+          ctx2.stroke();
+          ctx2.restore();
         }
       }
     }
 
-    var label = isSelected ? 'SELECTED'
-              : owned ? 'TAP TO SELECT'
+    var label = isSelected ? 'SELECTED ✓'
+              : owned ? 'SELECT THIS CAR'
               : def.cost === null ? (def.unlock || 'STORY REWARD ONLY')
-              : 'LOCKED — ' + def.cost + ' CR';
-    drawButton(ctx2, GARAGE_ACTION_BTN, label);
+              : 'BUY — ' + def.cost + ' CR';
+    var canAct = !isSelected && (owned || (def.cost !== null && DR.Save.currency() >= def.cost));
+    drawButton(ctx2, GARAGE_ACTION_BTN, label, { primary: canAct, disabled: !canAct && !isSelected });
+
+    // Just bought, just chosen: say so, big, for a moment.
+    if (garagePop && garagePop.kind !== 'upgrade') {
+      var gp = garagePop.t, a = UI.clamp01(1 - UI.step(gp, 1.2, 0.5)), s2 = UI.outBack(UI.step(gp, 0, 0.35));
+      // Over the name plate: the 3D car's layer would hide it any higher.
+      ctx2.save(); ctx2.translate(v.W / 2, 704); ctx2.scale(s2, s2);
+      UI.panel(ctx2, -200, -34, 400, 64, { skew: 18, fill: UI.hotGradient(ctx2, -200, 0, 200, 0), alpha: a });
+      UI.text(ctx2, garagePop.kind === 'buy' ? 'NEW CAR!' : 'SELECTED', 0, 12, { size: 34, align: 'center', color: '#ffffff', alpha: a });
+      ctx2.restore();
+    }
 
     ctx2.textAlign = 'left';
     drawButton(ctx2, BACK_BTN, '◂ BACK');
@@ -1366,50 +1584,55 @@
   // Four rows, one per upgrade system — every car is upgradable to the same
   // max tier, at a cost scaled off its own price, so a cheap car costs less
   // to fully max than an expensive one, same as buying it in the first
-  // place did.
+  // place did. A purchase pops: the row lights up and the rating it added
+  // floats off it.
   function drawGarageUpgrades(ctx2, def) {
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var UI = DR.UI;
     var systems = DR.Cars.upgradeSystems();
     for (var i = 0; i < systems.length; i++) {
       var sys = systems[i], r = garageUpgradeRowBox(i);
       var tier = DR.Save.upgradeLevel(def.id, sys.id);
       var maxed = DR.Cars.upgradeMaxed(def.id, sys.id);
-
-      ctx2.textAlign = 'left';
-      ctx2.font = '700 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx2.fillStyle = 'rgba(226,240,250,0.92)';
-      ctx2.fillText(sys.name, r.x, r.y + 26);
-
-      // Tier pips: filled dots for what's already bought, hollow for what
-      // isn't — the same "progress at a glance" idea as the roster dots.
-      for (var t = 0; t < DR.Cars.MAX_TIER; t++) {
-        ctx2.beginPath();
-        ctx2.arc(r.x + 10 + t * 22, r.y + 48, 6, 0, Math.PI * 2);
-        ctx2.fillStyle = t < tier ? '#7dffb0' : 'rgba(150,196,225,0.30)';
+      var ep = UI.outCubic(UI.stagger(garageSwapT, i, 0.06, 0.35, 0));
+      var pop = garagePop && garagePop.kind === 'upgrade' && garagePop.sys === sys.id ? garagePop.t : -1;
+      var glow = pop >= 0 ? 1 - UI.step(pop, 0.2, 0.8) : 0;
+      ctx2.save();
+      ctx2.globalAlpha *= ep;
+      ctx2.translate((1 - ep) * 80, 0);
+      UI.panel(ctx2, r.x, r.y, r.w, r.h, { skew: 16, fill: 'rgba(10,8,24,0.86)', stroke: glow > 0 ? 'rgba(125,255,176,' + (0.4 + 0.6 * glow).toFixed(2) + ')' : 'rgba(150,196,225,0.3)',
+                                           lineWidth: glow > 0 ? 3 : 1.2, accent: maxed ? UI.C.gold : UI.C.cyan, glow: glow > 0 ? 'rgba(125,255,176,' + (0.5 * glow).toFixed(2) + ')' : null });
+      UI.text(ctx2, sys.name, r.x + 30, r.y + 28, { size: 20, color: '#ffffff' });
+      // Tier pips: filled for what's already bought, hollow for what isn't.
+      for (var tt = 0; tt < DR.Cars.MAX_TIER; tt++) {
+        var justNow = pop >= 0 && tt === tier - 1;
+        var sc = justNow ? 1 + 0.6 * (1 - UI.outCubic(UI.step(pop, 0, 0.4))) : 1;
+        ctx2.save(); ctx2.translate(r.x + 40 + tt * 28, r.y + 46); ctx2.scale(sc, sc);
+        UI.slant(ctx2, -10, -5, 20, 10, 4);
+        ctx2.fillStyle = tt < tier ? (maxed ? UI.C.gold : UI.C.green) : 'rgba(150,196,225,0.25)';
         ctx2.fill();
+        ctx2.restore();
       }
-
       // What the next tier is worth, in the same rating the cities ask for.
       if (!maxed) {
         var gain = DR.Cars.ratingWith(def.id, sys.id) - DR.Cars.rating(def.id);
-        ctx2.font = '700 17px ' + MONO;
-        ctx2.fillStyle = gain > 0 ? '#7dffb0' : 'rgba(190,214,235,0.6)';
-        ctx2.fillText(gain > 0 ? '+' + gain + ' RATING' : 'HANDLING', r.x + 86, r.y + 54);
+        UI.text(ctx2, gain > 0 ? '+' + gain + ' RATING' : 'HANDLING', r.x + 140, r.y + 52, { size: 15, font: UI.MONO, weight: '900', lean: 0,
+                                                                                         color: gain > 0 ? UI.C.green : UI.C.dim });
+      } else {
+        UI.text(ctx2, 'MAXED', r.x + 140, r.y + 52, { size: 15, font: UI.MONO, weight: '900', lean: 0, color: UI.C.gold });
       }
-
       var b = garageUpgradeBtnBox(i);
-      var btnLabel = maxed ? 'MAXED' : DR.Cars.tierCost(def, tier + 1) + ' CR';
-      ctx2.fillStyle = maxed ? 'rgba(255,255,255,0.06)' : 'rgba(10,8,24,0.62)';
-      ctx2.fillRect(b.x, b.y, b.w, b.h);
-      ctx2.lineWidth = 1.5;
-      ctx2.strokeStyle = maxed ? 'rgba(150,196,225,0.20)' : 'rgba(150,196,225,0.40)';
-      ctx2.strokeRect(b.x, b.y, b.w, b.h);
-      ctx2.textAlign = 'center';
-      ctx2.textBaseline = 'middle';
-      ctx2.font = '700 20px ' + MONO;
-      ctx2.fillStyle = maxed ? 'rgba(190,214,235,0.5)' : '#ffd76a';
-      ctx2.fillText(btnLabel, b.x + b.w * 0.5, b.y + b.h * 0.5 + 1);
-      ctx2.textBaseline = 'alphabetic';
+      var cost = maxed ? 0 : DR.Cars.tierCost(def, tier + 1), afford = !maxed && DR.Save.currency() >= cost;
+      UI.panel(ctx2, b.x, b.y, b.w, b.h, { skew: 12, fill: maxed ? 'rgba(255,255,255,0.05)' : afford ? UI.hotGradient(ctx2, b.x, b.y, b.x + b.w, b.y) : 'rgba(10,8,24,0.7)',
+                                           stroke: maxed ? 'rgba(150,196,225,0.2)' : 'rgba(150,196,225,0.45)' });
+      if (!maxed) UI.coin(ctx2, b.x + 32, b.y + b.h / 2, 10);
+      UI.text(ctx2, maxed ? '✓ DONE' : cost + ' CR', b.x + b.w / 2 + (maxed ? 0 : 12), b.y + b.h / 2 + 7,
+              { size: 19, font: UI.MONO, weight: '900', lean: 0, align: 'center', color: maxed ? UI.C.dim : afford ? '#ffffff' : UI.C.gold });
+      if (pop >= 0 && garagePop.gain > 0) {
+        var fu = UI.step(pop, 0, 1.2);
+        UI.text(ctx2, '+' + garagePop.gain + ' RATING', r.x + 300, r.y + 20 - fu * 40, { size: 22, align: 'center', color: UI.C.green,
+                                                                                     stroke: 'rgba(4,2,10,0.9)', alpha: 1 - fu });
+      }
+      ctx2.restore();
     }
   }
 
@@ -1433,7 +1656,7 @@
   /* The map. Cities sit at fixed spots (story.js, 0..1 across the map
      area), joined in order by a neon road. A tap picks a city; a second
      tap, or ENTER, goes in. */
-  var MAP_AREA = { x: 24, y: 176, w: 672, h: 820 };
+  var MAP_AREA = { x: 24, y: 206, w: 672, h: 790 };
   var MAP_NODE_R = 30;
   var MAP_ENTER_BTN = { x: 400, y: 1170, w: 280, h: 64 };
   var MAP_STORY_BTN = { x: 40, y: 1170, w: 250, h: 64 };
@@ -1472,25 +1695,7 @@
   var DONE_RETRY_BTN  = { x: 60, y: 1120, w: 280, h: 74 };
   var DONE_CONT_BTN   = { x: 380, y: 1120, w: 280, h: 74 };
 
-  // Words wrapped to a width, for the one or two lines of city flavour.
-  function wrapText(ctx2, text, x, y, maxW, lineH) {
-    var words = text.split(' '), line = '', n = 0;
-    for (var i = 0; i < words.length; i++) {
-      var test = line ? line + ' ' + words[i] : words[i];
-      if (ctx2.measureText(test).width > maxW && line) {
-        ctx2.fillText(line, x, y + n * lineH); n++; line = words[i];
-      } else line = test;
-    }
-    if (line) ctx2.fillText(line, x, y + n * lineH);
-  }
 
-  function drawCurrency(ctx2, v) {
-    ctx2.textAlign = 'right';
-    ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '700 22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText(DR.Save.currency().toLocaleString() + ' CR', v.W - 24, 44);
-  }
 
   function rgbOf(c, a) { return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')'; }
   function cityEdge(i) {
@@ -1510,27 +1715,26 @@
 
   /* The map. Drawn, not listed: a dark sheet with a coastline, mountains in
      the north, the ten cities joined by the road you drive between them.
-     Every state is said in words or shapes as well as colour — a padlock
-     on a locked city, a tick on a beaten one, "YOU" over where you are. */
+     Opening it plays out like a campaign map: the sheet fades up, the road
+     draws itself city to city, the cities pop in, and the panel for the
+     chosen one slides up from the bottom. Every state is said in words or
+     shapes as well as colour — a padlock on a locked city, a tick on a
+     beaten one, "YOU" over where you are, stars as a count. */
+  function quadAt(a, c, b, u) {
+    var k = 1 - u;
+    return { x: k * k * a.x + 2 * k * u * c.x + u * u * b.x, y: k * k * a.y + 2 * k * u * c.y + u * u * b.y };
+  }
   function drawStory(ctx2, v) {
-    var SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    var UI = DR.UI, t = phaseT;
     var cities = DR.Story.cities(), i, A = MAP_AREA;
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '800 46px ' + SANS;
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText('THE CIRCUIT', v.W * 0.5, 124);
-    ctx2.font = '700 19px ' + SANS;
-    ctx2.fillStyle = 'rgba(180,214,236,0.85)';
-    ctx2.fillText('KAI’S LAST RACE', v.W * 0.5, 156);
+    UI.header(ctx2, v.W, 'THE CIRCUIT', 'KAI’S LAST RACE', t);
+    drawStoryChips(ctx2, v, UI.step(t, 0.1, 0.4));
 
-    // The sheet.
-    ctx2.fillStyle = 'rgba(8,6,20,0.95)';
-    ctx2.fillRect(A.x, A.y, A.w, A.h);
-    ctx2.lineWidth = 1.5;
-    ctx2.strokeStyle = 'rgba(150,196,225,0.25)';
-    ctx2.strokeRect(A.x, A.y, A.w, A.h);
+    // The sheet, fading up.
+    var sp = UI.outCubic(UI.step(t, 0.05, 0.4));
     ctx2.save();
+    ctx2.globalAlpha *= sp;
+    UI.panel(ctx2, A.x, A.y, A.w, A.h, { skew: 0, fill: 'rgba(8,6,20,0.95)', stroke: 'rgba(150,196,225,0.3)', lineWidth: 1.5 });
     ctx2.beginPath(); ctx2.rect(A.x, A.y, A.w, A.h); ctx2.clip();
     ctx2.strokeStyle = 'rgba(120,160,220,0.06)';
     ctx2.lineWidth = 1;
@@ -1538,7 +1742,7 @@
       ctx2.beginPath(); ctx2.moveTo(A.x + i * A.w / 12, A.y); ctx2.lineTo(A.x + i * A.w / 12, A.y + A.h); ctx2.stroke();
       ctx2.beginPath(); ctx2.moveTo(A.x, A.y + i * A.h / 12); ctx2.lineTo(A.x + A.w, A.y + i * A.h / 12); ctx2.stroke();
     }
-    // Sea to the south and east.
+    // Sea to the south and east, with a slow swell of wave lines on it.
     ctx2.beginPath();
     ctx2.moveTo(A.x, A.y + A.h * 0.975);
     ctx2.quadraticCurveTo(A.x + A.w * 0.40, A.y + A.h * 1.0, A.x + A.w * 0.66, A.y + A.h * 0.965);
@@ -1550,6 +1754,20 @@
     ctx2.strokeStyle = 'rgba(125,227,255,0.35)';
     ctx2.lineWidth = 2;
     ctx2.stroke();
+    ctx2.save();
+    ctx2.clip();
+    ctx2.strokeStyle = 'rgba(125,227,255,0.10)';
+    ctx2.lineWidth = 1.5;
+    for (i = 0; i < 9; i++) {
+      var wy = A.y + A.h * (0.46 + i * 0.06), ph = clock * 0.6 + i;
+      ctx2.beginPath();
+      for (var wx = 0; wx <= A.w; wx += 24) {
+        var yy = wy + Math.sin(wx * 0.03 + ph) * 3;
+        if (wx) ctx2.lineTo(A.x + wx, yy); else ctx2.moveTo(A.x + wx, yy);
+      }
+      ctx2.stroke();
+    }
+    ctx2.restore();
     // Mountains in the north-west.
     ctx2.fillStyle = 'rgba(150,160,210,0.10)';
     for (i = 0; i < 7; i++) {
@@ -1558,14 +1776,19 @@
     }
     ctx2.restore();
 
-    // The road between the cities, in order. Driven stretches glow.
+    // The road between the cities, drawing itself in order. Driven
+    // stretches glow, with a light running along them.
     for (i = 0; i + 1 < cities.length; i++) {
       var a = mapNodeXY(i), b = mapNodeXY(i + 1);
       var open = DR.Story.cityUnlocked(i + 1);
-      var cx = (a.x + b.x) * 0.5 + (b.y - a.y) * 0.18, cy = (a.y + b.y) * 0.5 - (b.x - a.x) * 0.18;
+      var c0 = { x: (a.x + b.x) * 0.5 + (b.y - a.y) * 0.18, y: (a.y + b.y) * 0.5 - (b.x - a.x) * 0.18 };
+      var rp = UI.inOutCubic(UI.step(t, 0.2 + i * 0.07, 0.22));
+      if (rp <= 0) continue;
       ctx2.beginPath();
-      ctx2.moveTo(a.x, a.y);
-      ctx2.quadraticCurveTo(cx, cy, b.x, b.y);
+      for (var k = 0; k <= 24; k++) {
+        var q = quadAt(a, c0, b, rp * k / 24);
+        if (k) ctx2.lineTo(q.x, q.y); else ctx2.moveTo(q.x, q.y);
+      }
       ctx2.setLineDash(open ? [] : [10, 10]);
       ctx2.lineWidth = open ? 10 : 4;
       ctx2.strokeStyle = open ? 'rgba(34,230,255,0.22)' : 'rgba(150,170,200,0.22)';
@@ -1576,13 +1799,24 @@
         ctx2.stroke();
       }
       ctx2.setLineDash([]);
+      if (open && rp >= 1) {
+        var lp = quadAt(a, c0, b, (clock * 0.45 + i * 0.37) % 1);
+        var lg = ctx2.createRadialGradient(lp.x, lp.y, 0, lp.x, lp.y, 14);
+        lg.addColorStop(0, 'rgba(255,255,255,0.9)'); lg.addColorStop(0.4, 'rgba(34,230,255,0.5)'); lg.addColorStop(1, 'rgba(34,230,255,0)');
+        ctx2.fillStyle = lg;
+        ctx2.beginPath(); ctx2.arc(lp.x, lp.y, 14, 0, Math.PI * 2); ctx2.fill();
+      }
     }
 
-    // The cities.
+    // The cities, popping in one after another.
     var here = DR.Story.currentCity();
     for (i = 0; i < cities.length; i++) {
+      var np = UI.outBack(UI.stagger(t, i, 0.07, 0.35, 0.25));
+      if (np <= 0) continue;
       var p = mapNodeXY(i), st = DR.Story.cityState(i), on = i === storySel;
-      var edge = cityEdge(i), r = MAP_NODE_R + (on ? 4 : 0);
+      var edge = cityEdge(i), r = (MAP_NODE_R + (on ? 4 : 0)) * np;
+      ctx2.save();
+      ctx2.globalAlpha *= UI.clamp01(np);
       if (on) {
         // A slow breathe around the chosen city — a glow, never a blink.
         var br = 0.5 + 0.5 * Math.sin(clock * 2.2);
@@ -1592,6 +1826,12 @@
         ctx2.strokeStyle = 'rgba(65,224,255,' + (0.45 + 0.35 * br).toFixed(2) + ')';
         ctx2.stroke();
       }
+      if (st.unlocked) {
+        var halo = ctx2.createRadialGradient(p.x, p.y, r * 0.6, p.x, p.y, r * 2);
+        halo.addColorStop(0, rgbOf(edge, 0.28)); halo.addColorStop(1, rgbOf(edge, 0));
+        ctx2.fillStyle = halo;
+        ctx2.beginPath(); ctx2.arc(p.x, p.y, r * 2, 0, Math.PI * 2); ctx2.fill();
+      }
       ctx2.beginPath();
       ctx2.arc(p.x, p.y, r, 0, Math.PI * 2);
       ctx2.fillStyle = !st.unlocked ? 'rgba(24,22,36,0.95)' : st.bossBeaten ? rgbOf(edge, 0.35) : 'rgba(12,10,28,0.95)';
@@ -1599,63 +1839,70 @@
       ctx2.lineWidth = on ? 4 : 3;
       ctx2.strokeStyle = st.unlocked ? rgbOf(edge, 1) : 'rgba(120,130,150,0.6)';
       ctx2.stroke();
-      ctx2.textAlign = 'center';
-      ctx2.textBaseline = 'middle';
-      if (!st.unlocked) drawPadlockAt(ctx2, p.x, p.y, 0.9, 'rgba(160,170,190,0.9)');
-      else {
-        ctx2.font = '800 24px ' + SANS;
-        ctx2.fillStyle = '#eaf6ff';
-        ctx2.fillText(st.bossBeaten ? '✓' : String(i + 1), p.x, p.y + 1);
+      if (!st.unlocked) drawPadlockAt(ctx2, p.x, p.y, 0.9 * np, 'rgba(160,170,190,0.9)');
+      else UI.text(ctx2, st.bossBeaten ? '✓' : String(i + 1), p.x, p.y + 9, { size: 26, align: 'center', color: '#ffffff', lean: 0 });
+      // Name under the city, in words; stars under that once there are any.
+      UI.text(ctx2, cities[i].name, p.x, p.y + r + 22, {
+        size: on ? 18 : 15, font: UI.SANS, weight: '900', lean: 0, align: 'center', stroke: 'rgba(4,2,10,0.9)', strokeW: 4,
+        color: st.unlocked ? (on ? '#ffffff' : 'rgba(220,234,246,0.85)') : 'rgba(160,170,190,0.7)' });
+      var cs = DR.Career.cityStars(i);
+      if (st.unlocked && cs.got) {
+        UI.star(ctx2, p.x - 18, p.y + r + 38, 7, true);
+        UI.text(ctx2, cs.got + '/' + cs.max, p.x - 6, p.y + r + 44, { size: 13, font: UI.MONO, weight: '800', lean: 0, color: UI.C.gold, stroke: 'rgba(4,2,10,0.9)', strokeW: 3 });
       }
-      // Name under the city, in words.
-      ctx2.textBaseline = 'alphabetic';
-      ctx2.font = (on ? '800 18px ' : '700 15px ') + SANS;
-      ctx2.lineWidth = 4;
-      ctx2.strokeStyle = 'rgba(4,2,10,0.9)';
-      ctx2.strokeText(cities[i].name, p.x, p.y + r + 22);
-      ctx2.fillStyle = st.unlocked ? (on ? '#eaf6ff' : 'rgba(220,234,246,0.85)') : 'rgba(160,170,190,0.7)';
-      ctx2.fillText(cities[i].name, p.x, p.y + r + 22);
       // Where you are.
       if (i === here) {
         var bob = Math.sin(clock * 2.5) * 3;
-        ctx2.fillStyle = '#c8121f';
+        ctx2.fillStyle = UI.C.magenta;
         ctx2.beginPath();
         ctx2.moveTo(p.x, p.y - r - 8 + bob);
         ctx2.lineTo(p.x - 11, p.y - r - 26 + bob);
         ctx2.lineTo(p.x + 11, p.y - r - 26 + bob);
         ctx2.closePath();
         ctx2.fill();
-        ctx2.font = '800 14px ' + SANS;
-        ctx2.fillStyle = '#ffd76a';
-        ctx2.fillText('YOU', p.x, p.y - r - 32 + bob);
+        UI.text(ctx2, 'YOU', p.x, p.y - r - 32 + bob, { size: 15, align: 'center', color: UI.C.gold, stroke: 'rgba(4,2,10,0.9)', strokeW: 4 });
       }
+      ctx2.restore();
     }
 
-    // The chosen city, in words.
+    // The chosen city, on a panel sliding up from the bottom.
     var c = cities[storySel], sst = DR.Story.cityState(storySel);
-    ctx2.textAlign = 'left';
-    ctx2.textBaseline = 'alphabetic';
-    ctx2.fillStyle = '#eaf6ff';
-    fitText(ctx2, c.name, 40, 1046, 420, 34, '800', SANS);
-    ctx2.font = '600 19px ' + SANS;
-    ctx2.fillStyle = 'rgba(190,214,235,0.9)';
+    var pp = UI.outCubic(UI.step(t, 0.35, 0.45)), oy = (1 - pp) * 220;
+    ctx2.save();
+    ctx2.globalAlpha *= pp;
+    ctx2.translate(0, oy);
+    UI.panel(ctx2, 24, 1008, 672, 148, { skew: 24, fill: 'rgba(10,8,24,0.94)', stroke: rgbOf(cityEdge(storySel), 0.7), lineWidth: 2,
+                                         accent: sst.unlocked ? rgbOf(cityEdge(storySel), 1) : 'rgba(120,130,150,0.8)' });
+    UI.text(ctx2, c.name, 52, 1050, { size: 32, color: '#ffffff', maxW: 400 });
     var line1 = !sst.unlocked ? 'LOCKED — BEAT ' + cities[storySel - 1].boss + ' FIRST'
               : 'BOSS: ' + c.boss + '  •  ' + sst.cleared + '/' + sst.total + ' CLEARED' + (sst.bossBeaten ? '  •  DONE ✓' : '');
-    ctx2.fillText(line1, 40, 1080);
-    ctx2.fillStyle = 'rgba(190,214,235,0.75)';
-    ctx2.fillText(sst.unlocked ? c.intro : 'KEEP FOLLOWING THE TRAIL.', 40, 1108);
-    ctx2.textAlign = 'right';
-    ctx2.font = '700 17px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    ctx2.fillStyle = c.reward.car ? '#ffd76a' : 'rgba(125,255,176,0.9)';
-    ctx2.fillText(c.reward.car ? 'PRIZE: CAR' : 'PRIZE: CASH', 680, 1046);
-    ctx2.fillStyle = 'rgba(190,214,235,0.8)';
-    ctx2.fillText('NEEDS ~' + DR.Story.ratingNeed(storySel) + ' RATING', 680, 1140);
+    UI.text(ctx2, line1, 52, 1082, { size: 17, font: UI.SANS, weight: '900', lean: 0, color: UI.C.dim, maxW: 460 });
+    UI.text(ctx2, sst.unlocked ? c.intro : 'KEEP FOLLOWING THE TRAIL.', 52, 1110, { size: 17, font: UI.SANS, weight: '700', lean: 0, color: 'rgba(214,232,246,0.85)', maxW: 600 });
+    UI.text(ctx2, c.reward.car ? 'PRIZE: CAR' : 'PRIZE: CASH', 672, 1044, { size: 16, font: UI.MONO, weight: '900', lean: 0, align: 'right', color: c.reward.car ? UI.C.gold : UI.C.green });
+    var cst = DR.Career.cityStars(storySel);
+    for (i = 0; i < 3; i++) UI.star(ctx2, 580 + i * 34, 1068, 12, cst.got >= (i + 1) * cst.max / 3);
+    UI.text(ctx2, cst.got + '/' + cst.max + ' ★', 672, 1098, { size: 14, font: UI.MONO, weight: '800', lean: 0, align: 'right', color: UI.C.dim });
+    UI.text(ctx2, 'NEEDS ~' + DR.Story.ratingNeed(storySel) + ' RATING', 672, 1140, { size: 15, font: UI.MONO, weight: '800', lean: 0, align: 'right', color: UI.C.dim });
+    ctx2.restore();
 
+    var bp = UI.outCubic(UI.step(t, 0.5, 0.4));
+    ctx2.save(); ctx2.globalAlpha *= bp; ctx2.translate(0, (1 - bp) * 80);
     drawButton(ctx2, MAP_STORY_BTN, '▶ STORY SO FAR');
-    drawButton(ctx2, MAP_ENTER_BTN, sst.unlocked ? 'ENTER CITY ▸' : 'LOCKED');
-    drawCurrency(ctx2, v);
+    drawButton(ctx2, MAP_ENTER_BTN, sst.unlocked ? 'ENTER CITY ▸' : 'LOCKED', { primary: sst.unlocked });
+    ctx2.restore();
     ctx2.textAlign = 'left';
     drawButton(ctx2, BACK_BTN, '◂ TITLE');
+  }
+
+  // Stars and credits, top right, on the story screens.
+  function drawStoryChips(ctx2, v, enter) {
+    var UI = DR.UI, p = UI.outCubic(enter);
+    ctx2.save();
+    ctx2.globalAlpha *= p;
+    ctx2.translate(0, (1 - p) * -60);
+    UI.chip(ctx2, 402, 34, 120, 'star', DR.Career.totalStars().got);
+    UI.chip(ctx2, 532, 34, 160, 'cr', DR.Save.currency().toLocaleString());
+    ctx2.restore();
   }
 
   function bestText(ci, ei) {
@@ -1696,55 +1943,72 @@
   }
 
   function drawCity(ctx2, v) {
-    var SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var UI = DR.UI, t = phaseT;
     var ci = storySel, c = DR.Story.cities()[ci], i;
     var edge = cityEdge(ci);
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '700 17px ' + SANS;
-    ctx2.fillStyle = 'rgba(180,214,236,0.8)';
-    ctx2.fillText('CITY ' + (ci + 1) + ' OF 10  •  BOSS: ' + c.boss, v.W * 0.5, 120);
-    ctx2.fillStyle = '#ffd76a';
-    fitText(ctx2, c.name, v.W * 0.5, 168, 600, 48, '800', SANS);
-    ctx2.font = '500 19px ' + SANS;
-    ctx2.fillStyle = 'rgba(200,222,240,0.9)';
-    ctx2.fillText(c.intro, v.W * 0.5, 204);
+    UI.header(ctx2, v.W, c.name, 'CITY ' + (ci + 1) + ' OF 10  •  BOSS: ' + c.boss, t);
+    drawStoryChips(ctx2, v, UI.step(t, 0.1, 0.4));
+    UI.text(ctx2, c.intro, v.W * 0.5, 222, { size: 18, font: UI.SANS, weight: '700', lean: 0, align: 'center', color: 'rgba(214,232,246,0.9)',
+                                            maxW: 640, alpha: UI.step(t, 0.2, 0.3) });
 
-    // The district: the circuit, drawn as a road in the city's colours.
-    var box = cityMapBox();
-    ctx2.fillStyle = 'rgba(6,4,14,0.72)';
-    ctx2.fillRect(CITY_AREA.x, CITY_AREA.y, CITY_AREA.w, CITY_AREA.h);
-    ctx2.lineWidth = 1.5;
-    ctx2.strokeStyle = rgbOf(edge, 0.35);
-    ctx2.strokeRect(CITY_AREA.x, CITY_AREA.y, CITY_AREA.w, CITY_AREA.h);
+    // The district: the circuit, drawing itself as a road in the city's
+    // colours, a light lapping it once it's drawn.
+    var box = cityMapBox(), ap = UI.outCubic(UI.step(t, 0.05, 0.35));
+    ctx2.save();
+    ctx2.globalAlpha *= ap;
+    UI.panel(ctx2, CITY_AREA.x, CITY_AREA.y, CITY_AREA.w, CITY_AREA.h, { skew: 0, fill: 'rgba(6,4,14,0.78)', stroke: rgbOf(edge, 0.35), lineWidth: 1.5 });
+    ctx2.restore();
     var pts = DR.Road.lapOutline(c.track);
     var pad = box.w * 0.12, iw = box.w - pad * 2, ih = box.h - pad * 2;
-    ctx2.beginPath();
+    var xy = [], len = 0;
     for (i = 0; i < pts.length; i++) {
-      var px = box.x + pad + pts[i].nx * iw, py = box.y + pad + (1 - pts[i].ny) * ih;
-      if (i) ctx2.lineTo(px, py); else ctx2.moveTo(px, py);
+      xy.push({ x: box.x + pad + pts[i].nx * iw, y: box.y + pad + (1 - pts[i].ny) * ih });
+      if (i) len += Math.hypot(xy[i].x - xy[i - 1].x, xy[i].y - xy[i - 1].y);
     }
+    len += Math.hypot(xy[0].x - xy[xy.length - 1].x, xy[0].y - xy[xy.length - 1].y);
+    var dp = UI.inOutCubic(UI.step(t, 0.15, 0.7));
+    ctx2.beginPath();
+    for (i = 0; i < xy.length; i++) { if (i) ctx2.lineTo(xy[i].x, xy[i].y); else ctx2.moveTo(xy[i].x, xy[i].y); }
     ctx2.closePath();
+    ctx2.save();
     ctx2.lineJoin = 'round';
+    if (dp < 1) { ctx2.setLineDash([len * dp, len]); }
     ctx2.lineWidth = 22; ctx2.strokeStyle = 'rgba(20,18,30,0.95)'; ctx2.stroke();
     ctx2.lineWidth = 26; ctx2.strokeStyle = rgbOf(edge, 0.18); ctx2.stroke();
     ctx2.lineWidth = 16; ctx2.strokeStyle = 'rgba(14,12,22,1)'; ctx2.stroke();
     ctx2.lineWidth = 2; ctx2.strokeStyle = rgbOf(edge, 0.9); ctx2.stroke();
-    ctx2.font = '700 15px ' + SANS;
-    ctx2.fillStyle = rgbOf(edge, 0.8);
-    ctx2.fillText('CIRCUIT: ' + DR.Road.tracks()[c.track].name, v.W * 0.5, CITY_AREA.y + CITY_AREA.h - 12);
+    ctx2.restore();
+    if (dp >= 1) {
+      var run = (clock * 0.12) % 1, lx = xy[Math.floor(run * xy.length) % xy.length];
+      var lg = ctx2.createRadialGradient(lx.x, lx.y, 0, lx.x, lx.y, 16);
+      lg.addColorStop(0, 'rgba(255,255,255,0.9)'); lg.addColorStop(0.4, rgbOf(edge, 0.55)); lg.addColorStop(1, rgbOf(edge, 0));
+      ctx2.fillStyle = lg; ctx2.beginPath(); ctx2.arc(lx.x, lx.y, 16, 0, Math.PI * 2); ctx2.fill();
+    }
+    UI.text(ctx2, 'CIRCUIT: ' + DR.Road.tracks()[c.track].name, v.W * 0.5, CITY_AREA.y + CITY_AREA.h - 12,
+            { size: 15, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: rgbOf(edge, 0.85), alpha: ap });
 
-    // The pins.
+    // The pins, dropping onto the map one by one.
     var ev = c.events;
     for (i = 0; i < ev.length; i++) {
-      var p = pinXY(ci, i), on = i === citySel;
+      var pp = UI.stagger(t, i, 0.1, 0.4, 0.5);
+      if (pp <= 0) continue;
+      var bp = UI.outBack(pp), p0 = pinXY(ci, i), p = { x: p0.x, y: p0.y - (1 - bp) * 70 }, on = i === citySel;
       var done = DR.Story.cleared(ci, i), locked = DR.Story.eventLocked(ci, i) && !done;
       var boss = ev[i].type === 'boss';
+      ctx2.save();
+      ctx2.globalAlpha *= UI.clamp01(pp * 2);
+      // The shadow it drops onto.
+      ctx2.fillStyle = 'rgba(0,0,0,' + (0.35 * pp).toFixed(3) + ')';
+      ctx2.beginPath(); ctx2.ellipse(p0.x, p0.y + PIN_R + 6, PIN_R * 0.8 * pp, 6 * pp, 0, 0, Math.PI * 2); ctx2.fill();
       if (on) {
         var br = 0.5 + 0.5 * Math.sin(clock * 2.2);
         ctx2.beginPath(); ctx2.arc(p.x, p.y, PIN_R + 9 + br * 3, 0, Math.PI * 2);
         ctx2.lineWidth = 3; ctx2.strokeStyle = 'rgba(65,224,255,' + (0.5 + 0.35 * br).toFixed(2) + ')'; ctx2.stroke();
+      }
+      if (boss && !locked) {
+        var bg = ctx2.createRadialGradient(p.x, p.y, PIN_R * 0.5, p.x, p.y, PIN_R * 2.2);
+        bg.addColorStop(0, 'rgba(255,215,106,0.35)'); bg.addColorStop(1, 'rgba(255,215,106,0)');
+        ctx2.fillStyle = bg; ctx2.beginPath(); ctx2.arc(p.x, p.y, PIN_R * 2.2, 0, Math.PI * 2); ctx2.fill();
       }
       ctx2.beginPath(); ctx2.arc(p.x, p.y, PIN_R, 0, Math.PI * 2);
       ctx2.fillStyle = locked ? 'rgba(24,22,36,0.96)' : boss ? 'rgba(70,48,10,0.96)' : 'rgba(12,10,28,0.96)';
@@ -1757,50 +2021,65 @@
       if (done) {
         ctx2.beginPath(); ctx2.arc(p.x + PIN_R * 0.72, p.y - PIN_R * 0.72, 11, 0, Math.PI * 2);
         ctx2.fillStyle = '#7dffb0'; ctx2.fill();
-        ctx2.font = '900 14px ' + SANS; ctx2.textBaseline = 'middle';
-        ctx2.fillStyle = '#062a16'; ctx2.fillText('✓', p.x + PIN_R * 0.72, p.y - PIN_R * 0.72 + 1);
-        ctx2.textBaseline = 'alphabetic';
+        UI.text(ctx2, '✓', p.x + PIN_R * 0.72, p.y - PIN_R * 0.72 + 5, { size: 14, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: '#062a16' });
       }
-      var nm = DR.Story.placeName(ci, i);
-      ctx2.font = (on ? '800 17px ' : '700 15px ') + SANS;
-      ctx2.lineWidth = 4; ctx2.strokeStyle = 'rgba(4,2,10,0.92)';
-      var ly = p.y > box.y + box.h * 0.5 ? p.y - PIN_R - 10 : p.y + PIN_R + 22;
-      ctx2.strokeText(nm, p.x, ly);
-      ctx2.fillStyle = on ? '#eaf6ff' : 'rgba(214,232,246,0.85)';
-      ctx2.fillText(nm, p.x, ly);
+      var below = !(p0.y > box.y + box.h * 0.5);
+      var ly = below ? p.y + PIN_R + 22 : p.y - PIN_R - 10;
+      UI.text(ctx2, DR.Story.placeName(ci, i), p.x, ly, { size: on ? 17 : 15, font: UI.SANS, weight: '900', lean: 0, align: 'center',
+                                                          stroke: 'rgba(4,2,10,0.92)', strokeW: 4, color: on ? '#ffffff' : 'rgba(214,232,246,0.85)' });
+      // Stars won here, on the other side of the pin from its name.
+      var ns = DR.Save.stars('story:' + DR.Story.eventId(ci, i));
+      if (!locked) {
+        var sy = below ? p.y - PIN_R - 14 : p.y + PIN_R + 16;
+        for (var s2 = 0; s2 < 3; s2++) UI.star(ctx2, p.x - 18 + s2 * 18, sy, 7, s2 < ns);
+      }
+      ctx2.restore();
     }
 
-    // The chosen event, in words.
+    // The chosen event, on a panel sliding in from the right.
     var st = DR.Story.setup(ci, citySel), selLocked = DR.Story.eventLocked(ci, citySel);
     var selBoss = ev[citySel].type === 'boss';
-    ctx2.textAlign = 'left';
-    ctx2.font = '800 30px ' + SANS;
-    ctx2.fillStyle = selBoss ? '#ffd76a' : '#eaf6ff';
-    ctx2.fillText(st.label + '  •  ' + DR.Story.placeName(ci, citySel), 40, 806);
-    ctx2.font = '600 21px ' + SANS;
-    ctx2.fillStyle = 'rgba(200,222,240,0.92)';
-    ctx2.fillText(selLocked && selBoss ? 'CLEAR THE OTHERS FIRST' : st.requirement, 40, 842);
-    ctx2.font = '700 20px ' + MONO;
-    ctx2.fillStyle = '#7dffb0';
-    ctx2.fillText(st.reward, 40, 876);
-    ctx2.font = '600 18px ' + SANS;
-    ctx2.fillStyle = 'rgba(190,214,235,0.8)';
+    var ep = UI.outCubic(UI.step(t, 0.3, 0.45)), ex = (1 - ep) * 720;
+    ctx2.save();
+    ctx2.globalAlpha *= ep;
+    ctx2.translate(ex, 0);
+    UI.panel(ctx2, 24, 776, 672, 156, { skew: 24, fill: 'rgba(10,8,24,0.94)', stroke: selBoss ? 'rgba(255,215,106,0.7)' : rgbOf(edge, 0.6), lineWidth: 2,
+                                        accent: selBoss ? UI.C.gold : rgbOf(edge, 1) });
+    UI.text(ctx2, st.label + '  •  ' + DR.Story.placeName(ci, citySel), 56, 816, { size: 28, color: selBoss ? UI.C.gold : '#ffffff', maxW: 480 });
+    UI.text(ctx2, selLocked && selBoss ? 'CLEAR THE OTHERS FIRST' : st.requirement, 56, 850, { size: 19, font: UI.SANS, weight: '800', lean: 0, color: 'rgba(214,232,246,0.92)', maxW: 600 });
+    UI.text(ctx2, st.reward, 56, 882, { size: 19, font: UI.MONO, weight: '800', lean: 0, color: UI.C.green, maxW: 600 });
     var status = DR.Story.cleared(ci, citySel) ? 'CLEARED ✓  ' + bestText(ci, citySel) : bestText(ci, citySel);
-    ctx2.fillText(status, 40, 908);
+    UI.text(ctx2, status, 56, 912, { size: 16, font: UI.SANS, weight: '800', lean: 0, color: UI.C.dim });
+    var ns2 = DR.Save.stars('story:' + DR.Story.eventId(ci, citySel));
+    for (i = 0; i < 3; i++) UI.star(ctx2, 586 + i * 32, 808, 12, i < ns2);
+    ctx2.restore();
 
-    var car = DR.Cars.get(DR.Save.selectedCar());
-    ctx2.font = '600 19px ' + SANS;
-    ctx2.fillStyle = 'rgba(180,206,226,0.85)';
-    ctx2.fillText('DRIVING: ' + (car ? car.name.toUpperCase() : ''), 40, 1040);
-    // Is it the car or the driving? The rating says, in a number and a word.
+    // Car or driving? The rating says, as a number, a bar and a word.
     var have = DR.Cars.rating(DR.Save.selectedCar()), need = DR.Story.ratingNeed(ci);
-    ctx2.font = '800 21px ' + SANS;
-    ctx2.fillStyle = have >= need ? '#7dffb0' : '#ffb24d';
-    ctx2.fillText('YOUR RATING ' + have + '  •  BOSS NEEDS ~' + need +
-                  (have >= need ? '  •  READY' : '  •  UPGRADE'), 40, 1076);
+    var rp = UI.outCubic(UI.step(t, 0.4, 0.45)), car = DR.Cars.get(DR.Save.selectedCar());
+    ctx2.save();
+    ctx2.globalAlpha *= rp;
+    ctx2.translate(-(1 - rp) * 720, 0);
+    UI.panel(ctx2, 24, 950, 672, 120, { skew: 24, fill: 'rgba(10,8,24,0.9)', stroke: 'rgba(150,196,225,0.35)',
+                                        accent: have >= need ? UI.C.green : UI.C.orange });
+    UI.text(ctx2, 'DRIVING', 56, 984, { size: 14, font: UI.SANS, weight: '900', lean: 0, color: UI.C.dim });
+    UI.text(ctx2, car ? car.name.toUpperCase() : '', 56, 1016, { size: 26, color: '#ffffff', maxW: 280 });
+    UI.text(ctx2, have >= need ? 'READY' : 'UPGRADE', 664, 1016, { size: 24, align: 'right', color: have >= need ? UI.C.green : UI.C.orange });
+    var lo = Math.min(have, need) - 12, hi = Math.max(have, need) + 8, bx = 56, bw = 600, by = 1036;
+    ctx2.fillStyle = 'rgba(255,255,255,0.12)'; ctx2.fillRect(bx, by, bw, 10);
+    ctx2.fillStyle = have >= need ? UI.C.green : UI.C.orange;
+    ctx2.fillRect(bx, by, bw * UI.clamp01((have - lo) / (hi - lo)) * UI.step(t, 0.5, 0.6), 10);
+    var nx = bx + bw * (need - lo) / (hi - lo);
+    ctx2.fillStyle = '#ffffff'; ctx2.fillRect(nx - 1.5, by - 6, 3, 22);
+    UI.text(ctx2, 'YOU ' + have, bx, by + 30, { size: 14, font: UI.MONO, weight: '800', lean: 0, color: '#ffffff' });
+    UI.text(ctx2, 'BOSS NEEDS ~' + need, Math.min(bx + bw, nx + 60), by + 30, { size: 14, font: UI.MONO, weight: '800', lean: 0, align: 'right', color: UI.C.dim });
+    ctx2.restore();
+
+    var bp2 = UI.outCubic(UI.step(t, 0.5, 0.4));
+    ctx2.save(); ctx2.globalAlpha *= bp2; ctx2.translate(0, (1 - bp2) * 80);
     drawButton(ctx2, CITY_GARAGE_BTN, 'GARAGE ▸');
-    drawButton(ctx2, CITY_START_BTN, selLocked ? 'LOCKED' : 'START ▸');
-    drawCurrency(ctx2, v);
+    drawButton(ctx2, CITY_START_BTN, selLocked ? 'LOCKED' : 'START ▸', { primary: !selLocked });
+    ctx2.restore();
     ctx2.textAlign = 'left';
     drawButton(ctx2, BACK_BTN, '◂ MAP');
   }
@@ -1826,7 +2105,7 @@
     var sc = sceneQueue[0];
     if (!sc) { finishScenes(); return; }
     if (sceneLine < sc.lines.length - 1) { sceneLine++; sceneT = 0; return; }
-    sceneQueue.shift(); sceneLine = 0; sceneT = 0;
+    sceneQueue.shift(); sceneLine = 0; sceneT = 0; phaseT = 0;
     if (!sceneQueue.length) finishScenes();
   }
   function speakerColor(who) {
@@ -1845,7 +2124,7 @@
     return out;
   }
   function drawScene(ctx2, v) {
-    var SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    var UI = DR.UI;
     var sc = sceneQueue[0];
     if (!sc) return;
     // A darker sky, the road, and a car on it: Kai's red, or the speaker's.
@@ -1855,70 +2134,83 @@
     g.addColorStop(1, 'rgba(4,2,10,0.92)');
     ctx2.fillStyle = g;
     ctx2.fillRect(0, 0, v.W, v.H);
+    // Cinema bars, closing in as the scene opens.
+    var cb = UI.outCubic(UI.step(phaseT, 0, 0.5));
+    ctx2.fillStyle = '#000';
+    ctx2.fillRect(0, 0, v.W, 22 * cb);
+    ctx2.fillRect(0, v.H - 22 * cb, v.W, 22 * cb);
     var line = sc.lines[sceneLine];
     var carCol = line.who ? speakerColor(line.who) : '#c8121f';
     var drift = Math.min(1, sceneT / 0.8);
-    drawProfileCar(ctx2, 250 + drift * 30, 640, 1.25, carCol);
+    var enter = UI.outCubic(UI.step(phaseT, 0.1, 0.6));
+    // Light pooled under the cars, in the speaker's colour.
+    var pool = ctx2.createRadialGradient(360, 660, 10, 360, 660, 320);
+    pool.addColorStop(0, 'rgba(255,255,255,0.06)'); pool.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx2.fillStyle = pool; ctx2.fillRect(0, 440, v.W, 360);
+    drawProfileCar(ctx2, 250 + drift * 30 - (1 - enter) * 500, 640, 1.25, carCol);
     if (sc.city === undefined && sceneLine >= 1) drawProfileCar(ctx2, 520, 640, 1.05, '#ffd76a');
 
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '700 18px ' + SANS;
-    ctx2.fillStyle = 'rgba(190,214,235,0.9)';
-    ctx2.fillText(sc.sub || '', v.W * 0.5, 140);
-    ctx2.fillStyle = '#ffd76a';
-    fitText(ctx2, sc.title, v.W * 0.5, 190, 640, 48, '800', SANS);
+    // Title: sub first, then the title slams.
+    var tp = UI.outBack(UI.step(phaseT, 0.05, 0.45));
+    UI.text(ctx2, sc.sub || '', v.W * 0.5, 140, { size: 18, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.dim, alpha: UI.step(phaseT, 0, 0.3) });
+    ctx2.save(); ctx2.translate(v.W * 0.5, 196); ctx2.scale(1.6 - 0.6 * tp, 1.6 - 0.6 * tp);
+    UI.text(ctx2, sc.title, 0, 0, { size: 48, align: 'center', color: UI.hotGradient(ctx2, -260, -40, 260, 10), stroke: 'rgba(4,2,10,0.95)', strokeW: 8,
+                                     maxW: 640, alpha: UI.clamp01(tp) });
+    ctx2.restore();
+    var lw = 200 * UI.outCubic(UI.step(phaseT, 0.3, 0.4));
+    ctx2.fillStyle = UI.C.magenta; ctx2.fillRect(v.W / 2 - lw, 214, lw * 2, 3);
 
     // The panel, with the lines so far: older ones dimmed, the newest
     // fading in (a fade, never a flash).
-    var P = { x: 32, y: 730, w: 656, h: 420 };
-    ctx2.fillStyle = 'rgba(8,6,20,0.88)';
-    ctx2.fillRect(P.x, P.y, P.w, P.h);
-    ctx2.lineWidth = 1.5;
-    ctx2.strokeStyle = 'rgba(150,196,225,0.3)';
-    ctx2.strokeRect(P.x, P.y, P.w, P.h);
+    var pp = UI.outCubic(UI.step(phaseT, 0.15, 0.45));
+    var P = { x: 32, y: 730 + (1 - pp) * 120, w: 656, h: 420 };
+    ctx2.save();
+    ctx2.globalAlpha *= pp;
+    UI.panel(ctx2, P.x, P.y, P.w, P.h, { skew: 20, fill: 'rgba(8,6,20,0.9)', stroke: 'rgba(150,196,225,0.35)', lineWidth: 1.5,
+                                         accent: line.who ? speakerColor(line.who) : UI.C.magenta });
+    var SANS = UI.SANS;
     ctx2.textAlign = 'left';
-    var y = P.y + 44, first = Math.max(0, sceneLine - 2);
+    ctx2.textBaseline = 'alphabetic';
+    var y = P.y + 48, first = Math.max(0, sceneLine - 2);
     for (var i = first; i <= sceneLine; i++) {
       var L = sc.lines[i], cur = i === sceneLine;
-      ctx2.globalAlpha = cur ? Math.min(1, sceneT / 0.35) : 0.45;
+      var la = cur ? Math.min(1, sceneT / 0.35) : 0.45, lx = P.x + 36 + (cur ? (1 - UI.outCubic(Math.min(1, sceneT / 0.35))) * 30 : 0);
+      ctx2.globalAlpha = pp * la;
       if (L.who) {
-        ctx2.font = '800 18px ' + SANS;
-        ctx2.fillStyle = speakerColor(L.who);
-        ctx2.fillText(L.who, P.x + 24, y);
-        y += 28;
+        UI.text(ctx2, L.who, lx, y, { size: 19, color: speakerColor(L.who) });
+        y += 30;
       }
       ctx2.font = (L.who ? '600 23px ' : 'italic 600 23px ') + SANS;
       ctx2.fillStyle = L.who ? '#eaf6ff' : 'rgba(214,232,246,0.95)';
-      var rows = wrapLines(ctx2, L.who ? '“' + L.text + '”' : L.text, P.w - 48);
-      for (var r = 0; r < rows.length; r++) { ctx2.fillText(rows[r], P.x + 24, y); y += 31; }
+      var rows = wrapLines(ctx2, L.who ? '“' + L.text + '”' : L.text, P.w - 72);
+      for (var r = 0; r < rows.length; r++) { ctx2.fillText(rows[r], lx, y); y += 31; }
       y += 16;
     }
-    ctx2.globalAlpha = 1;
+    ctx2.restore();
     var last = sceneLine === sc.lines.length - 1 && sceneQueue.length === 1;
-    ctx2.textAlign = 'center';
     if (last && sc.ending) {
-      ctx2.font = '800 40px ' + SANS;
-      ctx2.fillStyle = '#7dffb0';
-      ctx2.fillText('THE END', v.W * 0.5, 1210);
+      UI.text(ctx2, 'THE END', v.W * 0.5, 1210, { size: 44, align: 'center', color: UI.C.green, stroke: 'rgba(4,2,10,0.9)' });
     } else {
-      ctx2.font = '700 22px ' + SANS;
-      ctx2.fillStyle = '#ffd76a';
-      ctx2.fillText(last ? 'TAP TO CONTINUE ▸' : 'TAP FOR MORE ▸', v.W * 0.5, 1210);
+      var pulse = 0.75 + 0.25 * Math.sin(clock * 3);
+      UI.text(ctx2, last ? 'TAP TO CONTINUE ▸' : 'TAP FOR MORE ▸', v.W * 0.5, 1206, { size: 24, align: 'center', color: UI.C.gold, alpha: pulse * pp });
     }
-    ctx2.font = '600 16px ' + SANS;
-    ctx2.fillStyle = 'rgba(190,214,235,0.6)';
-    ctx2.fillText((sceneLine + 1) + ' / ' + sc.lines.length, v.W * 0.5, 1244);
+    // Progress through the scene, as pips and a count.
+    var n = sc.lines.length;
+    for (i = 0; i < n; i++) {
+      ctx2.fillStyle = i <= sceneLine ? UI.C.cyan : 'rgba(150,196,225,0.25)';
+      ctx2.fillRect(v.W * 0.5 - n * 11 + i * 22, 1226, 16, 4);
+    }
+    UI.text(ctx2, (sceneLine + 1) + ' / ' + n, v.W * 0.5, 1252, { size: 14, font: UI.MONO, weight: '800', lean: 0, align: 'center', color: UI.C.dim });
     ctx2.textAlign = 'left';
     drawButton(ctx2, SCENE_SKIP_BTN, 'SKIP ▸▸');
   }
 
   // A car side-on, from rectangles and circles: low body, cabin, two
   // wheels, a light at each end.
-  function drawProfileCar(ctx2, x, y, sc, col) {
+  function drawProfileCar(ctx2, x, y, sc, col, flip) {
     ctx2.save();
     ctx2.translate(x, y);
-    ctx2.scale(sc, sc);
+    ctx2.scale(flip ? -sc : sc, sc);
     ctx2.fillStyle = 'rgba(0,0,0,0.45)';
     ctx2.beginPath(); ctx2.ellipse(0, 26, 110, 10, 0, 0, Math.PI * 2); ctx2.fill();
     ctx2.fillStyle = col;
@@ -1942,92 +2234,32 @@
   // A time attack's own read-out: the target, and how much of it is left.
   // "LEFT" and "OVER" are written out, not just coloured.
   function drawTimeHud(ctx2, v) {
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var UI = DR.UI;
     var used = timing ? raceTotal + lapTimer : 0;
-    var left = timeTarget - used;
-    var cx2 = v.W * 0.5;
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '700 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(150,196,225,0.85)';
-    ctx2.fillText('TARGET ' + fmt(timeTarget), cx2, 70);
-    ctx2.font = '800 50px ' + MONO;
-    ctx2.lineWidth = 7;
-    ctx2.strokeStyle = 'rgba(4,2,10,0.88)';
-    var txt = left >= 0 ? fmt(left) : '+' + fmt(-left);
-    ctx2.strokeText(txt, cx2, 124);
-    ctx2.fillStyle = left >= 0 ? '#eaf6ff' : '#ff8a6a';
-    ctx2.fillText(txt, cx2, 124);
-    ctx2.font = '800 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = left >= 0 ? '#7dffb0' : '#ff8a6a';
-    ctx2.fillText(left >= 0 ? 'LEFT' : 'OVER', cx2, 148);
-    ctx2.textAlign = 'left';
-  }
-
-  function drawTimeDone(ctx2, v) {
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    var SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    var ok = raceTotal <= timeTarget;
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '800 64px ' + SANS;
-    ctx2.fillStyle = ok ? '#ffd76a' : '#eaf6ff';
-    ctx2.fillText(ok ? 'TARGET BEATEN' : 'TOO SLOW', v.W * 0.5, 280);
-    ctx2.font = '700 24px ' + SANS;
-    ctx2.fillStyle = 'rgba(180,214,236,0.9)';
-    ctx2.fillText(resultsSubtitle(), v.W * 0.5, 322);
-    ctx2.font = '800 80px ' + MONO;
-    ctx2.fillStyle = '#eaf6ff';
-    ctx2.fillText(fmt(raceTotal), v.W * 0.5, 430);
-    ctx2.font = '700 26px ' + MONO;
-    ctx2.fillStyle = ok ? '#7dffb0' : '#ff8a6a';
-    ctx2.fillText('TARGET ' + fmt(timeTarget), v.W * 0.5, 474);
-    for (var i = 0; i < lapTimes.length; i++) {
-      ctx2.font = '700 26px ' + MONO;
-      ctx2.fillStyle = 'rgba(228,242,252,0.9)';
-      ctx2.fillText('LAP ' + (i + 1) + '   ' + fmt(lapTimes[i]), v.W * 0.5, 540 + i * 40);
-    }
-    drawResultsFooter(ctx2, v, 560 + lapTimes.length * 40 + 30);
+    var left = timeTarget - used, over = left < 0;
+    var x = 272, y = 18, w = 240;
+    UI.panel(ctx2, x, y, w, 118, { skew: 20, fill: 'rgba(8,6,20,0.84)', stroke: over ? UI.C.orange : 'rgba(150,196,225,0.45)',
+                                   lineWidth: 2, accent: over ? UI.C.orange : UI.C.green });
+    UI.text(ctx2, 'TARGET ' + fmt(timeTarget), x + w / 2, y + 28, { size: 15, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.dim });
+    UI.text(ctx2, (over ? '+' : '') + fmt(Math.abs(left)), x + w / 2, y + 76, { size: 44, font: UI.MONO, weight: '900', lean: 0, align: 'center',
+                                                                              color: over ? '#ff8a6a' : '#ffffff' });
+    UI.text(ctx2, over ? 'OVER' : 'LEFT', x + w / 2, y + 104, { size: 17, align: 'center', color: over ? '#ff8a6a' : UI.C.green });
   }
 
   function drawModes(ctx2, v) {
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '800 74px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText('DRIFT RUN', v.W * 0.5, 180);
-    ctx2.font = '700 26px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(180,214,236,0.9)';
-    ctx2.fillText('CHOOSE A MODE', v.W * 0.5, 226);
-
+    var UI = DR.UI;
+    UI.header(ctx2, v.W, 'QUICK PLAY', 'CHOOSE A MODE', phaseT);
     for (var i = 0; i < MODES.length; i++) {
-      var b = modeBox(i), on = i === modeSel;
-      ctx2.fillStyle = on ? 'rgba(34,120,150,0.28)' : 'rgba(10,8,24,0.55)';
-      ctx2.fillRect(b.x, b.y, b.w, b.h);
-      ctx2.lineWidth = on ? 3 : 1.5;
-      ctx2.strokeStyle = on ? '#41e0ff' : 'rgba(150,196,225,0.35)';
-      ctx2.strokeRect(b.x, b.y, b.w, b.h);
-
-      ctx2.textAlign = 'left';
-      // Shrunk to fit rather than trusting every mode name to be short. The
-      // first long one, CHECKPOINT RUSH, ran straight through its own
-      // "TAP TO SELECT" label.
-      ctx2.fillStyle = on ? '#eaf6ff' : 'rgba(226,240,250,0.8)';
-      fitText(ctx2, MODES[i].name, b.x + 30, b.y + 58, 358, 40, '800', 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif');
-
-      ctx2.font = '700 20px ' + MONO;
-      ctx2.fillStyle = on ? '#7dffb0' : 'rgba(125,255,176,0.55)';
-      ctx2.fillText(MODES[i].tag, b.x + 30, b.y + 92);
-
-      ctx2.font = '500 21px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx2.fillStyle = 'rgba(180,206,226,0.85)';
-      ctx2.fillText(MODES[i].blurb, b.x + 30, b.y + 126);
-
-      ctx2.textAlign = 'right';
-      ctx2.font = '700 21px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx2.fillStyle = on ? '#ffd76a' : 'rgba(190,214,235,0.45)';
-      ctx2.fillText(on ? 'TAP AGAIN \u25B8' : 'TAP TO SELECT', b.x + b.w - 26, b.y + 58);
+      (function (m) {
+        drawCard(ctx2, modeBox(i), {
+          title: m.name, sub: m.blurb,
+          on: i === modeSel, t: clock, enter: UI.stagger(phaseT, i, 0.07, 0.5, 0.1),
+          size: 38, titleY: 60, subY: 128, subW: 540, accent: [UI.C.magenta, UI.C.cyan, UI.C.orange, UI.C.green][i],
+          draw: function (bx) {
+            UI.text(ctx2, m.tag, bx.x + 44, bx.y + 96, { size: 17, font: UI.MONO, weight: '800', lean: 0, color: UI.C.green });
+          }
+        });
+      })(MODES[i]);
     }
     drawControlsLine(ctx2, v, modeBox(MODES.length - 1).y + MODE_H + 62);
     ctx2.textAlign = 'left';
@@ -2045,227 +2277,236 @@
   }
 
   function drawSelect(ctx2, v) {
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    var tracks = DR.Road.tracks(), i;
-
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '800 74px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText('DRIFT RUN', v.W * 0.5, 168);
-    ctx2.font = '700 26px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(180,214,236,0.9)';
+    var UI = DR.UI, tracks = DR.Road.tracks(), i;
+    var modeName = { race: 'RACE', practice: 'PRACTICE', rush: 'CHECKPOINT RUSH', duel: 'DUEL' }[mode] || 'RACE';
     var sub = mode === 'practice' ? 'CHOOSE YOUR CIRCUIT'
-            : mode === 'rush' ? 'CHOOSE YOUR CIRCUIT  \u2022  BEAT THE CLOCK'
-            : 'CHOOSE YOUR CIRCUIT  \u2022  ' + lapsFor(mode) + ' LAPS';
-    ctx2.fillText(sub, v.W * 0.5, 212);
-
+            : mode === 'rush' ? 'CHOOSE YOUR CIRCUIT  •  BEAT THE CLOCK'
+            : 'CHOOSE YOUR CIRCUIT  •  ' + lapsFor(mode) + ' LAPS';
+    UI.header(ctx2, v.W, modeName, sub, phaseT);
     for (i = 0; i < tracks.length; i++) {
-      var b = cardBox(i), on = i === selected, open = trackOpen(i);
-      ctx2.globalAlpha = open ? 1 : 0.55;
-      ctx2.fillStyle = on ? 'rgba(34,120,150,0.28)' : 'rgba(10,8,24,0.55)';
-      ctx2.fillRect(b.x, b.y, b.w, b.h);
-      ctx2.lineWidth = on ? 3 : 1.5;
-      ctx2.strokeStyle = on ? '#41e0ff' : 'rgba(150,196,225,0.35)';
-      ctx2.strokeRect(b.x, b.y, b.w, b.h);
-
-      drawOutline(ctx2, { x: b.x + 10, y: b.y + 10, w: 126, h: 126 }, i, null, 2);
-
-      var tx = b.x + 152;
-      ctx2.textAlign = 'left';
-      ctx2.fillStyle = on ? '#eaf6ff' : 'rgba(226,240,250,0.8)';
-      fitText(ctx2, tracks[i].name, tx, b.y + 46, 300, 30, '800',
-              'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif');
-
-      // What a clean lap here is worth, so the circuits read as different
-      // lengths rather than just different shapes.
-      ctx2.font = '700 19px ' + MONO;
-      ctx2.fillStyle = on ? '#7dffb0' : 'rgba(125,255,176,0.6)';
-      ctx2.fillText(tracks[i].tag, tx, b.y + 82);
-      ctx2.fillStyle = on ? 'rgba(255,215,106,0.9)' : 'rgba(190,214,235,0.5)';
-      ctx2.fillText('TARGET ' + tracks[i].targetSecs + 's', tx + 150, b.y + 82);
-
-      ctx2.fillStyle = open ? 'rgba(180,206,226,0.85)' : '#ffb24d';
-      fitText(ctx2, open ? tracks[i].blurb : DR.Story.trackLockText(i), tx, b.y + 120, 450, 21, '600',
-              'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif');
-
-      ctx2.textAlign = 'right';
-      ctx2.font = '700 19px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      if (!open) {
-        drawPadlock(ctx2, b.x + b.w - 34, b.y + 40);
-      } else {
-        ctx2.fillStyle = on ? '#ffd76a' : 'rgba(190,214,235,0.5)';
-        ctx2.fillText(on ? 'TAP AGAIN \u25B8' : 'TAP', b.x + b.w - 18, b.y + 46);
-      }
-      ctx2.globalAlpha = 1;
+      (function (i) {
+        var b = cardBox(i), open = trackOpen(i), tr = tracks[i];
+        drawCard(ctx2, b, {
+          title: tr.name, on: i === selected, t: clock, locked: !open,
+          lockText: 'LOCKED', enter: UI.stagger(phaseT, i, 0.06, 0.45, 0.1),
+          size: 30, textX: 160, titleY: 50, titleW: 300,
+          sub: open ? tr.blurb : DR.Story.trackLockText(i), subY: 118, subW: 440,
+          draw: function (bx) {
+            drawOutline(ctx2, { x: bx.x + 18, y: bx.y + 8, w: 130, h: 130 }, i, null, 2);
+            UI.text(ctx2, tr.tag, bx.x + 164, bx.y + 84, { size: 16, font: UI.MONO, weight: '800', lean: 0, color: UI.C.green });
+            UI.text(ctx2, 'TARGET ' + tr.targetSecs + 's', bx.x + 320, bx.y + 84, { size: 16, font: UI.MONO, weight: '800', lean: 0, color: UI.C.gold });
+            if (!open) drawPadlock(ctx2, bx.x + bx.w - 40, bx.y + 76);
+          }
+        });
+      })(i);
     }
     drawControlsLine(ctx2, v, 1248);
     ctx2.textAlign = 'left';
   }
 
-  function drawRushDone(ctx2, v) {
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    ctx2.fillStyle = 'rgba(6,4,16,0.78)';
-    ctx2.fillRect(0, 0, v.W, v.H);
-
-    ctx2.textAlign = 'center';
-    ctx2.font = '800 62px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = '#ff6a5a';
-    ctx2.fillText('TIME UP', v.W * 0.5, 320);
-
-    ctx2.font = '700 24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(180,214,236,0.9)';
-    ctx2.fillText(DR.Road.tracks()[DR.Road.currentTrack()].name, v.W * 0.5, 364);
-
-    ctx2.font = '700 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(150,196,225,0.85)';
-    ctx2.fillText('DISTANCE', v.W * 0.5, 448);
-    ctx2.font = '800 96px ' + MONO;
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText(rushScore + ' m', v.W * 0.5, 540);
-
-    var beat = rushScore >= rushBest && rushScore > 0;
-    ctx2.font = '700 28px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = beat ? '#7dffb0' : 'rgba(190,214,235,0.85)';
-    ctx2.fillText(beat ? 'NEW BEST' : 'BEST  ' + rushBest + ' m', v.W * 0.5, 592);
-
-    ctx2.font = '700 26px ' + MONO;
-    ctx2.fillStyle = 'rgba(228,242,252,0.9)';
-    ctx2.fillText(rushGates + ' GATES', v.W * 0.5, 664);
-    ctx2.fillText(rushLapsDone() + (rushLapsDone() === 1 ? ' LAP' : ' LAPS'), v.W * 0.5, 706);
-
-    ctx2.font = '700 26px ' + MONO;
-    ctx2.fillStyle = '#7dffb0';
-    ctx2.fillText('+' + doneAward + ' CR', v.W * 0.5, 776);
-
-    ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText('TAP TO GO AGAIN', v.W * 0.5, 860);
-    ctx2.textAlign = 'left';
+  /* ------------------------------ RESULTS ------------------------------
+     One results screen for every mode, arriving in stages the way racing
+     games do it: the headline slams in (with a trophy for a podium), the
+     standings slide in, your numbers count up, then what it paid: the
+     prize, style credits, XP filling the level bar (and LEVEL UP if it
+     did), and stars popping in on a story event. A win rains confetti.
+     Any tap on the way skips to the end of the show. */
+  var resultsConfetti = false;
+  var RESULTS_SETTLE = 2.4;   // by then every stage of the results is in
+  function resultsSkippable() {
+    return phase === 'done' && mode !== 'tutorial' && DR.Show.enabled() && phaseT < RESULTS_SETTLE;
   }
-
   function drawDone(ctx2, v) {
     if (mode === 'tutorial') { drawTutorialDone(ctx2, v); return; }
-    if (mode === 'rush') { drawRushDone(ctx2, v); return; }
-    if (mode === 'duel') { drawDuelDone(ctx2, v); return; }
-    if (mode === 'time') {
-      ctx2.fillStyle = 'rgba(6,4,16,0.78)';
-      ctx2.fillRect(0, 0, v.W, v.H);
-      drawTimeDone(ctx2, v);
-      return;
+    var spec = { rows: null, lines: [] };
+    if (mode === 'rush') {
+      var beat = rushScore >= rushBest && rushScore > 0;
+      spec.headline = 'TIME UP'; spec.headColor = '#ff8a6a';
+      spec.sub = DR.Road.tracks()[DR.Road.currentTrack()].name + '  •  CHECKPOINT RUSH';
+      spec.big = rushScore + ' m'; spec.bigLabel = beat ? 'NEW BEST' : 'BEST ' + rushBest + ' m';
+      spec.lines = [rushGates + ' GATES  •  ' + rushLapsDone() + (rushLapsDone() === 1 ? ' LAP' : ' LAPS')];
+    } else if (mode === 'duel') {
+      var winner = duelTimes[1] < duelTimes[0] ? 2 : 1;
+      spec.headline = 'PLAYER ' + winner + ' WINS'; spec.medal = 1;
+      spec.sub = 'DUEL  •  BY ' + Math.abs(duelTimes[0] - duelTimes[1]).toFixed(2) + 's';
+      spec.rows = [0, 1].map(function (i) {
+        return { name: 'PLAYER ' + (i + 1), color: i ? '#7ce4ff' : '#ffd76a', label: fmt(duelTimes[i]), isPlayer: i + 1 === winner };
+      });
+      if (duelTimes[1] < duelTimes[0]) spec.rows.reverse();
+    } else if (mode === 'time') {
+      var ok = raceTotal <= timeTarget;
+      spec.headline = ok ? 'TARGET BEATEN' : 'TOO SLOW'; spec.medal = ok ? 1 : 0;
+      spec.headColor = ok ? null : '#ff8a6a';
+      spec.sub = resultsSubtitle();
+      spec.big = fmt(raceTotal); spec.bigLabel = 'TARGET ' + fmt(timeTarget);
+      spec.lines = lapTimes.map(function (t, i) { return 'LAP ' + (i + 1) + '  ' + fmt(t); });
+    } else if (standings) {
+      var me = null, i;
+      for (i = 0; i < standings.length; i++) if (standings[i].isPlayer) me = standings[i];
+      spec.headline = ordinal(finishPos) + ' PLACE';
+      // A medal for the podium, but last of two is a loss, not a silver.
+      spec.medal = finishPos < standings.length || finishPos === 1 ? finishPos : 0;
+      if (!spec.medal) spec.headColor = '#ff8a6a';
+      spec.sub = resultsSubtitle();
+      spec.big = fmt(me ? me.time : raceTotal);
+      spec.bigLabel = lapTimes.length ? 'BEST LAP ' + fmt(Math.min.apply(null, lapTimes)) : '';
+      spec.rows = standings.map(function (r) {
+        var gap = r.time - me.time;
+        return { name: r.name, color: r.color, isPlayer: r.isPlayer, you: r.isPlayer, boss: r.boss,
+                 label: r.isPlayer ? fmt(r.time) : (r.estimated ? '~' : '') + (gap >= 0 ? '+' : '−') + Math.abs(gap).toFixed(2) };
+      });
+    } else {
+      spec.headline = 'RACE COMPLETE'; spec.sub = resultsSubtitle(); spec.big = fmt(raceTotal);
     }
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    ctx2.fillStyle = 'rgba(6,4,16,0.74)';
-    ctx2.fillRect(0, 0, v.W, v.H);
-
-    if (standings) { drawStandings(ctx2, v); return; }
-
-    ctx2.textAlign = 'center';
-    ctx2.font = '800 64px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText('RACE COMPLETE', v.W * 0.5, 300);
-
-    ctx2.font = '700 24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(180,214,236,0.9)';
-    ctx2.fillText(DR.Road.tracks()[DR.Road.currentTrack()].name, v.W * 0.5, 344);
-
-    ctx2.font = '700 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(150,196,225,0.85)';
-    ctx2.fillText('TOTAL', v.W * 0.5, 420);
-    ctx2.font = '800 86px ' + MONO;
-    ctx2.fillStyle = '#eaf6ff';
-    ctx2.fillText(fmt(raceTotal), v.W * 0.5, 500);
-
-    var best = lapTimes.length ? Math.min.apply(null, lapTimes) : 0;
-    for (var i = 0; i < lapTimes.length; i++) {
-      var y = 600 + i * 62, isBest = lapTimes[i] === best;
-      ctx2.textAlign = 'right';
-      ctx2.font = '700 28px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx2.fillStyle = 'rgba(150,196,225,0.8)';
-      ctx2.fillText('LAP ' + (i + 1), v.W * 0.5 - 24, y);
-      ctx2.textAlign = 'left';
-      ctx2.font = '700 34px ' + MONO;
-      ctx2.fillStyle = isBest ? '#7dffb0' : 'rgba(228,242,252,0.92)';
-      ctx2.fillText(fmt(lapTimes[i]), v.W * 0.5 + 8, y);
-      if (isBest) {
-        ctx2.font = '700 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-        ctx2.fillStyle = '#7dffb0';
-        ctx2.fillText('BEST', v.W * 0.5 + 176, y);
-      }
-    }
-
-    ctx2.textAlign = 'center';
-    ctx2.font = '700 26px ' + MONO;
-    ctx2.fillStyle = '#7dffb0';
-    ctx2.fillText('+' + doneAward + ' CR', v.W * 0.5, 820);
-
-    ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText('TAP TO RACE AGAIN', v.W * 0.5, 880);
-    ctx2.textAlign = 'left';
+    drawResults(ctx2, v, spec);
   }
 
-  /* A race against rivals ends on where you finished, then the whole field.
-     Rival times are shown as a gap to yours, which is the number that
-     actually means something; a rival still out on track when you crossed
-     the line is marked as an estimate rather than pretending it's final. */
-  function drawStandings(ctx2, v) {
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    var cx2 = v.W * 0.5, i, me = null;
-    for (i = 0; i < standings.length; i++) if (standings[i].isPlayer) me = standings[i];
-
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '800 70px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = finishPos === 1 ? '#ffd76a' : '#eaf6ff';
-    ctx2.fillText(ordinal(finishPos) + ' PLACE', cx2, 270);
-    ctx2.font = '700 24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(180,214,236,0.9)';
-    ctx2.fillText(resultsSubtitle(), cx2, 312);
-
-    ctx2.font = '800 52px ' + MONO;
-    ctx2.fillStyle = '#eaf6ff';
-    ctx2.fillText(fmt(raceTotal), cx2, 388);
-    if (lapTimes.length) {
-      ctx2.font = '700 22px ' + MONO;
-      ctx2.fillStyle = '#7dffb0';
-      ctx2.fillText('BEST LAP  ' + fmt(Math.min.apply(null, lapTimes)), cx2, 424);
+  function drawResults(ctx2, v, spec) {
+    var UI = DR.UI, t = phaseT, W = v.W, i;
+    if (t < 0.05 && !resultsConfetti && spec.medal === 1 && DR.Show.enabled()) {
+      resultsConfetti = true;
+      UI.confetti(120, W / 2, 180, 600);
     }
+    if (t > 0.5) resultsConfetti = false;
+    ctx2.fillStyle = 'rgba(6,4,16,0.82)';
+    ctx2.fillRect(0, 0, W, v.H);
+    UI.backdrop(ctx2, W, v.H, clock, spec.medal === 1 ? UI.C.gold : UI.C.cyan);
 
-    var top = 470, rowH = 62, x0 = 70, w = v.W - 140;
-    for (i = 0; i < standings.length; i++) {
-      var r = standings[i], y = top + i * rowH;
-      ctx2.fillStyle = r.isPlayer ? 'rgba(34,120,150,0.30)' : 'rgba(10,8,24,0.55)';
-      ctx2.fillRect(x0, y, w, rowH - 8);
-      if (r.isPlayer) {
-        ctx2.lineWidth = 2;
-        ctx2.strokeStyle = '#41e0ff';
-        ctx2.strokeRect(x0, y, w, rowH - 8);
+    // Headline, slamming down from big.
+    var hp = UI.outBack(UI.step(t, 0, 0.45));
+    var medalCol = spec.medal === 1 ? UI.C.gold : spec.medal === 2 ? UI.C.silver : spec.medal === 3 ? UI.C.bronze : null;
+    if (medalCol) {
+      var tp = UI.outBack(UI.step(t, 0.1, 0.5));
+      ctx2.save();
+      ctx2.globalAlpha = UI.clamp01(tp);
+      // Light behind the trophy: rays, turning slowly.
+      ctx2.globalAlpha *= 0.25;
+      for (i = 0; i < 12; i++) {
+        var a = clock * 0.25 + i * Math.PI / 6;
+        ctx2.beginPath(); ctx2.moveTo(W / 2, 128);
+        ctx2.lineTo(W / 2 + Math.cos(a - 0.07) * 180, 128 + Math.sin(a - 0.07) * 180);
+        ctx2.lineTo(W / 2 + Math.cos(a + 0.07) * 180, 128 + Math.sin(a + 0.07) * 180);
+        ctx2.closePath(); ctx2.fillStyle = medalCol; ctx2.fill();
       }
-      var mid = y + (rowH - 8) * 0.5 + 9;
-      ctx2.textAlign = 'left';
-      ctx2.font = '800 26px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx2.fillStyle = 'rgba(190,214,235,0.9)';
-      ctx2.fillText(ordinal(i + 1), x0 + 18, mid);
-      ctx2.beginPath();
-      ctx2.arc(x0 + 104, mid - 9, 9, 0, Math.PI * 2);
-      ctx2.fillStyle = r.color;
-      ctx2.fill();
-      ctx2.font = '800 26px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx2.fillStyle = r.isPlayer ? '#eaf6ff' : (r.boss ? '#ffd76a' : 'rgba(226,240,250,0.85)');
-      ctx2.fillText(r.name, x0 + 126, mid);
-      ctx2.textAlign = 'right';
-      ctx2.font = '700 24px ' + MONO;
-      var gap = r.time - me.time;
-      var label = r.isPlayer ? 'YOU'
-                : (r.estimated ? '~' : '') + (gap >= 0 ? '+' : '−') + Math.abs(gap).toFixed(2);
-      ctx2.fillStyle = r.isPlayer ? '#ffd76a' : (gap >= 0 ? 'rgba(190,214,235,0.85)' : '#ff9a7a');
-      ctx2.fillText(label, x0 + w - 18, mid);
+      ctx2.restore();
+      UI.trophy(ctx2, W / 2, 128, 1.35 * (0.5 + 0.5 * tp), medalCol);
+    }
+    ctx2.save();
+    ctx2.translate(W / 2, 244);
+    var sc = 2 - hp;
+    ctx2.scale(sc, sc);
+    UI.text(ctx2, spec.headline, 0, 0, { size: 64, align: 'center', stroke: 'rgba(4,2,10,0.95)', strokeW: 10, maxW: 640,
+      color: spec.headColor || (medalCol ? UI.hotGradient(ctx2, -220, -60, 220, 10) : '#ffffff'), alpha: UI.clamp01(hp) });
+    ctx2.restore();
+    UI.text(ctx2, spec.sub || '', W / 2, 282, { size: 18, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.dim, alpha: UI.step(t, 0.2, 0.3) });
+    var y = 300;
+    if (spec.big) {
+      UI.text(ctx2, spec.big, W / 2, y + 52, { size: 50, font: UI.MONO, weight: '900', lean: 0, align: 'center', color: '#ffffff', alpha: UI.step(t, 0.25, 0.3) });
+      if (spec.bigLabel) UI.text(ctx2, spec.bigLabel, W / 2, y + 82, { size: 18, font: UI.MONO, weight: '800', lean: 0, align: 'center', color: UI.C.green, alpha: UI.step(t, 0.3, 0.3) });
+      y += 100;
+    }
+    // Standings, sliding in one by one.
+    if (spec.rows) {
+      for (i = 0; i < spec.rows.length; i++) {
+        var r = spec.rows[i], rp = UI.outCubic(UI.stagger(t, i, 0.08, 0.35, 0.3));
+        var ry = y + i * 54, rx = 60 + (1 - rp) * 500;
+        ctx2.save();
+        ctx2.globalAlpha = rp;
+        UI.panel(ctx2, rx, ry, 600, 46, { skew: 16, fill: r.isPlayer ? 'rgba(40,90,130,0.9)' : 'rgba(12,9,26,0.88)',
+                                          stroke: r.isPlayer ? UI.C.cyan : 'rgba(150,196,225,0.3)', lineWidth: r.isPlayer ? 2.5 : 1.2,
+                                          accent: i === 0 ? UI.C.gold : i === 1 ? UI.C.silver : i === 2 ? UI.C.bronze : 'rgba(120,130,150,0.8)' });
+        UI.text(ctx2, ordinal(i + 1), rx + 34, ry + 32, { size: 22, color: '#ffffff' });
+        ctx2.beginPath(); ctx2.arc(rx + 112, ry + 23, 8, 0, Math.PI * 2); ctx2.fillStyle = r.color; ctx2.fill();
+        UI.text(ctx2, r.name, rx + 132, ry + 32, { size: 22, color: r.isPlayer ? UI.C.gold : r.boss ? UI.C.gold : '#ffffff', maxW: 260 });
+        UI.text(ctx2, r.you ? 'YOU  ' + r.label : r.label, rx + 578, ry + 31, { size: 20, font: UI.MONO, weight: '800', lean: 0, align: 'right',
+                                                                                 color: r.isPlayer ? UI.C.gold : UI.C.dim });
+        ctx2.restore();
+      }
+      y += spec.rows.length * 54 + 8;
+    }
+    for (i = 0; i < spec.lines.length; i++) {
+      UI.text(ctx2, spec.lines[i], W / 2, y + 26 + i * 30, { size: 20, font: UI.MONO, weight: '800', lean: 0, align: 'center', color: '#ffffff', alpha: UI.stagger(t, i, 0.08, 0.3, 0.35) });
+    }
+    y += spec.lines.length * 30 + (spec.lines.length ? 14 : 0);
+
+    // Your numbers, counting up.
+    var R = results;
+    if (R) {
+      var sp = UI.step(t, 0.8, 0.8);
+      var tiles = [
+        ['TOP SPEED', UI.countUp(R.stats.topKmh, sp) + '', 'KM/H'],
+        ['OVERTAKES', UI.countUp(R.stats.overtakes, sp) + '', ''],
+        ['TAKEDOWNS', UI.countUp(R.stats.takedowns + R.stats.shunts, sp) + '', ''],
+        ['STYLE', UI.countUp(R.stats.style, sp) + '', 'PTS']
+      ];
+      for (i = 0; i < tiles.length; i++) {
+        var tx = 40 + i * 162, tpp = UI.outCubic(UI.stagger(t, i, 0.06, 0.3, 0.75));
+        UI.panel(ctx2, tx, y + (1 - tpp) * 30, 150, 74, { skew: 12, fill: 'rgba(12,9,26,0.9)', stroke: 'rgba(150,196,225,0.3)', alpha: tpp });
+        UI.text(ctx2, tiles[i][0], tx + 78, y + 22 + (1 - tpp) * 30, { size: 13, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.dim, alpha: tpp });
+        UI.text(ctx2, tiles[i][1], tx + 78, y + 56 + (1 - tpp) * 30, { size: 28, align: 'center', color: '#ffffff', alpha: tpp });
+      }
+      y += 104;
+      // What it paid.
+      var pp = UI.outCubic(UI.step(t, 1.2, 0.4));
+      UI.panel(ctx2, 40, y, 640, 170, { skew: 22, fill: 'rgba(12,9,26,0.92)', stroke: 'rgba(255,215,106,0.45)', accent: UI.C.gold, alpha: pp });
+      ctx2.save(); ctx2.globalAlpha = pp;
+      var cp = UI.step(t, 1.3, 0.8);
+      UI.coin(ctx2, 84, y + 42, 16);
+      UI.text(ctx2, '+' + UI.countUp(doneAward, cp) + ' CR', 110, y + 52, { size: 30, color: UI.C.gold });
+      var extra = [];
+      if (R.styleCash) extra.push('+' + R.styleCash + ' STYLE');
+      if (R.starAward && R.starAward.cash) extra.push('+' + R.starAward.cash + ' STARS');
+      if (R.xp.cash) extra.push('+' + R.xp.cash + ' LEVEL UP');
+      UI.text(ctx2, extra.join('   '), 76, y + 90, { size: 17, font: UI.MONO, weight: '900', lean: 0, color: UI.C.green, maxW: 440,
+                                                      alpha: UI.step(t, 1.5, 0.3) });
+      // The XP bar, filling from where it was.
+      var xp = R.xp, xpP = UI.step(t, 1.5, 1.0);
+      var lvlShown = xpP < 1 && xp.levelsGained ? xp.before.level : xp.after.level;
+      var fracNow = xp.levelsGained ? (xpP < 0.5 ? xp.before.frac + (1 - xp.before.frac) * (xpP / 0.5) : xp.after.frac * ((xpP - 0.5) / 0.5))
+                                    : xp.before.frac + (xp.after.frac - xp.before.frac) * UI.outCubic(xpP);
+      UI.levelBadge(ctx2, 84, y + 132, 22, xpP >= 0.5 ? xp.after.level : lvlShown);
+      ctx2.fillStyle = 'rgba(255,255,255,0.14)'; ctx2.fillRect(118, y + 126, 400, 12);
+      ctx2.fillStyle = UI.C.cyan; ctx2.fillRect(118, y + 126, 400 * UI.clamp01(fracNow), 12);
+      UI.text(ctx2, '+' + UI.countUp(R.xp.xp, xpP) + ' XP', 530, y + 138, { size: 18, font: UI.MONO, weight: '900', lean: 0, color: UI.C.cyan });
+      if (xp.levelsGained && xpP >= 0.5) {
+        var lp = UI.outBack(UI.step(t, 2.0, 0.4));
+        ctx2.save(); ctx2.translate(W / 2, y); ctx2.scale(lp, lp);
+        UI.panel(ctx2, -150, -26, 300, 46, { skew: 14, fill: UI.hotGradient(ctx2, -150, 0, 150, 0), glow: 'rgba(255,47,142,0.5)' });
+        UI.text(ctx2, 'LEVEL UP!  ' + xp.after.level, 0, 7, { size: 26, align: 'center', color: '#ffffff' });
+        ctx2.restore();
+      }
+      ctx2.restore();
+      // Stars, popping in one at a time.
+      if (storyEvent) {
+        for (i = 0; i < 3; i++) {
+          var stp = UI.outBack(UI.step(t, 1.7 + i * 0.25, 0.35));
+          var got = i < R.stars, isNew = R.starAward && i >= R.starAward.had && i < R.starAward.now;
+          if (stp <= 0) continue;
+          ctx2.save(); ctx2.translate(560 + i * 42, y + 44); ctx2.scale(stp, stp);
+          UI.star(ctx2, 0, 0, 17, got, isNew ? '#ffe98a' : UI.C.gold);
+          ctx2.restore();
+        }
+        UI.text(ctx2, R.stars + ' / 3 STARS', 600, y + 80, { size: 13, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.dim, alpha: UI.step(t, 2.2, 0.3) });
+      }
+      y += 184;
     }
 
-    ctx2.textAlign = 'center';
-    var below = top + standings.length * rowH + 40;
-    drawResultsFooter(ctx2, v, below);
+    // The story's own lines, then the way on.
+    var fp = UI.outCubic(UI.step(t, 1.9, 0.4));
+    if (storyResult) {
+      for (i = 0; i < storyResult.lines.length; i++) {
+        UI.text(ctx2, storyResult.lines[i], W / 2, Math.min(y + 24 + i * 30, 1096) + (1 - fp) * 20, {
+          size: i ? 18 : 22, font: UI.SANS, weight: '900', lean: 0, align: 'center', maxW: 640,
+          color: i ? UI.C.gold : (storyResult.ok ? UI.C.green : UI.C.orange), alpha: fp });
+      }
+      ctx2.save(); ctx2.translate(0, (1 - fp) * 80); ctx2.globalAlpha *= fp;
+      drawDoneButton(ctx2, DONE_RETRY_BTN, 'RETRY', doneSel === 0);
+      drawDoneButton(ctx2, DONE_CONT_BTN, 'CONTINUE', doneSel === 1);
+      ctx2.restore();
+    } else {
+      var pulse = 0.75 + 0.25 * Math.sin(clock * 3);
+      UI.text(ctx2, 'TAP TO RACE AGAIN', W / 2, 1180, { size: 30, align: 'center', color: UI.C.gold, alpha: fp * pulse });
+    }
     ctx2.textAlign = 'left';
   }
 
@@ -2276,48 +2517,8 @@
     return DR.Road.tracks()[DR.Road.currentTrack()].name;
   }
 
-  // Currency earned, and the way back in. Story mode adds its own lines
-  // (cleared or not, a car won, a city opened) through the same footer, so
-  // every results screen reads the same way.
-  function drawResultsFooter(ctx2, v, y) {
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    var SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.textAlign = 'center';
-    if (storyResult) {
-      for (var i = 0; i < storyResult.lines.length; i++) {
-        var first = i === 0;
-        ctx2.font = (first ? '800 28px ' : '700 24px ') + SANS;
-        ctx2.fillStyle = first ? (storyResult.ok ? '#7dffb0' : '#ffb24d') : '#ffd76a';
-        fitText(ctx2, storyResult.lines[i], v.W * 0.5, y + i * 38, 640, first ? 28 : 24,
-                first ? '800' : '700', SANS);
-      }
-      y += storyResult.lines.length * 38 + 16;
-    }
-    ctx2.font = '700 28px ' + MONO;
-    ctx2.fillStyle = '#7dffb0';
-    ctx2.fillText('+' + doneAward + ' CR', v.W * 0.5, y);
-    if (storyResult) {
-      drawDoneButton(ctx2, DONE_RETRY_BTN, 'RETRY', doneSel === 0);
-      drawDoneButton(ctx2, DONE_CONT_BTN, 'CONTINUE', doneSel === 1);
-      return;
-    }
-    ctx2.font = '700 30px ' + SANS;
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText('TAP TO RACE AGAIN', v.W * 0.5, Math.max(y + 70, 880));
-  }
-
   function drawDoneButton(ctx2, b, text, on) {
-    ctx2.fillStyle = on ? 'rgba(34,120,150,0.40)' : 'rgba(10,8,24,0.70)';
-    ctx2.fillRect(b.x, b.y, b.w, b.h);
-    ctx2.lineWidth = on ? 3 : 1.5;
-    ctx2.strokeStyle = on ? '#41e0ff' : 'rgba(150,196,225,0.40)';
-    ctx2.strokeRect(b.x, b.y, b.w, b.h);
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'middle';
-    ctx2.font = '800 28px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = on ? '#ffd76a' : 'rgba(214,234,248,0.9)';
-    ctx2.fillText(text, b.x + b.w * 0.5, b.y + b.h * 0.5 + 1);
-    ctx2.textBaseline = 'alphabetic';
+    drawButton(ctx2, b, text, { primary: on, on: false, size: 28 });
   }
 
   // Which room a Title door leads to. Both unbuilt rooms are still reachable
@@ -2435,6 +2636,8 @@
       }
     } else if (phase === 'handoff') {
       startDuelLeg2();
+    } else if (resultsSkippable()) {
+      phaseT = RESULTS_SETTLE;   // first tap: skip the count-up, show it all
     } else if (phase === 'done' && mode === 'tutorial') {
       if (inBox(lx, ly, DONE_RETRY_BTN)) { startTutorial(); return; }
       leaveTutorial();
@@ -2541,6 +2744,10 @@
   // Practice never ends on its own, so it needs a way out. Handled here
   // rather than in updateMenu, because the menu loop does not run mid-race.
   function handleRaceTap() {
+    if (DR.Show.stage() === 'intro') {
+      if (DR.Input.takeTap()) { DR.Show.skipIntro(); DR.Input.releaseAll(); }
+      return;
+    }
     if (mode !== 'practice' && mode !== 'tutorial') { DR.Input.clearTap(); return; }
     var t = DR.Input.takeTap();
     if (!t) return;
@@ -2585,21 +2792,54 @@
     if (raceRivals && raceRivals.length) DR.Rivals.start(raceRivals);
     else { raceRivals = null; DR.Rivals.clear(); }
     phase = 'racing';
+    raceDone = false; finishHold = 0; results = null; lastPos = raceRivals ? raceRivals.length + 1 : 0;
+    lapWalls = 0; driftRun = 0; draftCool = 0; drafting = false;
+    beginShow();
+  }
+
+  /* What the intro card says, for whatever is about to start. */
+  function beginShow() {
+    var tr = DR.Road.tracks()[DR.Road.currentTrack()];
+    var def = DR.Cars.get(DR.Save.selectedCar()) || DR.Cars.get('nightrunner');
+    var o = { mode: mode, title: tr.name, sub: '', lines: [], boss: null,
+              you: { car: def.name.toUpperCase(), rating: DR.Cars.rating(def.id),
+                     color: DR.Save.carColor(def.id) || def.color } };
+    if (storyEvent) {
+      var c = DR.Story.cities()[storyEvent.city];
+      o.title = storyEvent.label + '  \u2022  ' + DR.Story.placeName(storyEvent.city, storyEvent.event);
+      o.sub = c.name + '  \u2022  CITY ' + (storyEvent.city + 1) + ' OF 10';
+      o.lines = [storyEvent.requirement, storyEvent.reward];
+      if (storyEvent.type === 'boss') {
+        var bc = c.reward.car && DR.Cars.get(c.reward.car);
+        o.title = 'BOSS RACE';
+        o.boss = { name: c.boss, color: c.bossColor, rank: 10 - storyEvent.city,
+                   car: bc ? bc.name.toUpperCase() : 'CUSTOM ' + c.bossArch.toUpperCase(),
+                   rating: DR.Story.ratingNeed(storyEvent.city),
+                   quote: DR.Story.bossQuote(storyEvent.city) };
+      }
+    } else if (mode === 'race') {
+      o.sub = 'QUICK RACE  \u2022  ' + RACE_LAPS + ' LAPS';
+      o.lines = ['FINISH 1ST FOR 120 CR', 'RIVALS: ' + raceRivals.map(function (r) { return r.name; }).join('  \u2022  ')];
+    } else if (mode === 'time') {
+      o.sub = 'TIME ATTACK'; o.lines = ['BEAT ' + fmt(timeTarget) + ' OVER ' + timeLaps + ' LAPS'];
+    } else if (mode === 'rush') {
+      o.sub = 'CHECKPOINT RUSH'; o.lines = ['BEAT THE CLOCK TO EVERY GATE', 'SPIKES AND POTHOLES SLOW YOU DOWN'];
+    } else if (mode === 'duel') {
+      o.sub = 'DUEL  \u2022  PLAYER ' + (duelStage === 2 ? 'TWO' : 'ONE');
+      o.lines = [duelStage === 2 ? 'BEAT PLAYER ONE\u2019S GHOST' : 'SET THE TIME TO BEAT', DUEL_LAPS + ' LAPS'];
+    }
+    DR.Show.begin(o);
   }
 
   // Minimap, top right. The whole lap seen from above, with you on it.
   // North-up rather than rotating, so the shape stays learnable.
-  var MAP = { x: 528, y: 50, w: 164, h: 164 };
+  var MAP = { x: 530, y: 18, w: 170, h: 170 };
   // Practice owns the top of the screen for its guidance, so the map moves
   // down out of its way rather than the two fighting over the same corner.
   var MAP_PRACTICE = { x: 528, y: 900, w: 164, h: 164 };
   function drawMinimap(ctx2, box) {
     var m = box || MAP;
-    ctx2.fillStyle = 'rgba(10,6,22,0.55)';
-    ctx2.fillRect(m.x, m.y, m.w, m.h);
-    ctx2.lineWidth = 1.5;
-    ctx2.strokeStyle = 'rgba(150,196,225,0.35)';
-    ctx2.strokeRect(m.x, m.y, m.w, m.h);
+    DR.UI.panel(ctx2, m.x - 14, m.y, m.w + 20, m.h, { skew: 14, fill: 'rgba(8,6,20,0.72)', stroke: 'rgba(150,196,225,0.4)' });
     if (raceRivals) drawRivalDots(ctx2, m);
     drawOutline(ctx2, m, undefined, lapProgress(), 2);
   }
@@ -2630,37 +2870,6 @@
     return n + (n === 1 ? 'ST' : n === 2 ? 'ND' : n === 3 ? 'RD' : 'TH');
   }
 
-  // Your place in the race, top centre. Written as a word ("2ND"), never
-  // just a colour, and it gets a brief swell when someone leans on you.
-  function drawPosition(ctx2, v) {
-    var pos = DR.Rivals.position(DR.Car.roadS, false);
-    var total = DR.Rivals.all().length + 1;
-    var cx2 = v.W * 0.5;
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '700 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(150,196,225,0.85)';
-    ctx2.fillText('POSITION', cx2, 70);
-    var sz = 58 + Math.round(bumpFlash * 8);
-    ctx2.font = '800 ' + sz + 'px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.lineWidth = 7;
-    ctx2.strokeStyle = 'rgba(4,2,10,0.88)';
-    var txt = ordinal(pos) + ' / ' + total;
-    ctx2.strokeText(txt, cx2, 130);
-    ctx2.fillStyle = pos === 1 ? '#ffd76a' : '#eaf6ff';
-    ctx2.fillText(txt, cx2, 130);
-    // Being towed along is worth knowing: it's what sets up a pass.
-    if (draftMult > 1.012) {
-      ctx2.globalAlpha = Math.min(1, (draftMult - 1.012) / 0.02);
-      ctx2.font = '800 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx2.lineWidth = 5;
-      ctx2.strokeText('\u00BB SLIPSTREAM \u00AB', cx2, 164);
-      ctx2.fillStyle = '#7ce4ff';
-      ctx2.fillText('\u00BB SLIPSTREAM \u00AB', cx2, 164);
-      ctx2.globalAlpha = 1;
-    }
-    ctx2.textAlign = 'left';
-  }
 
   // Did we just run over a pickup?
   function collectPicks() {
@@ -2687,44 +2896,43 @@
   }
 
   function drawTutorialDone(ctx2, v) {
-    var SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    ctx2.fillStyle = 'rgba(6,4,16,0.80)';
-    ctx2.fillRect(0, 0, v.W, v.H);
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '800 60px ' + SANS;
-    ctx2.fillStyle = '#7dffb0';
-    ctx2.fillText('TUTORIAL DONE', v.W * 0.5, 300);
-    var steps = [
-      ['1', 'HOLD THE SIDE THE ROAD TURNS TOWARD'],
-      ['2', 'LET GO AS IT STRAIGHTENS'],
-      ['3', 'DRIFTS FILL BOOST \u2014 USE IT ON STRAIGHTS']
-    ];
-    for (var i = 0; i < steps.length; i++) {
-      var y = 420 + i * 96;
-      ctx2.beginPath();
-      ctx2.arc(96, y - 10, 26, 0, Math.PI * 2);
-      ctx2.fillStyle = 'rgba(255,215,106,0.18)';
-      ctx2.fill();
-      ctx2.lineWidth = 3;
-      ctx2.strokeStyle = '#ffd76a';
-      ctx2.stroke();
-      ctx2.font = '800 28px ' + SANS;
-      ctx2.fillStyle = '#ffd76a';
-      ctx2.fillText(steps[i][0], 96, y);
-      ctx2.textAlign = 'left';
-      fitText(ctx2, steps[i][1], 146, y, 540, 24, '800', SANS);
-      ctx2.textAlign = 'center';
+    var UI = DR.UI, t = phaseT, W = v.W, i;
+    ctx2.fillStyle = 'rgba(6,4,16,0.82)';
+    ctx2.fillRect(0, 0, W, v.H);
+    UI.backdrop(ctx2, W, v.H, clock, UI.C.green);
+    var hp = UI.outBack(UI.step(t, 0, 0.45));
+    ctx2.save(); ctx2.translate(W / 2, 250); ctx2.scale(2 - hp, 2 - hp);
+    UI.text(ctx2, 'TUTORIAL DONE', 0, 0, { size: 64, align: 'center', color: UI.C.green, stroke: 'rgba(4,2,10,0.95)', strokeW: 10, maxW: 640, alpha: UI.clamp01(hp) });
+    ctx2.restore();
+    UI.text(ctx2, 'YOU’RE READY FOR THE STREETS', W / 2, 296, { size: 20, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.dim, alpha: UI.step(t, 0.2, 0.3) });
+    var steps = ['HOLD THE SIDE THE ROAD TURNS TOWARD', 'LET GO AS IT STRAIGHTENS', 'DRIFTS FILL BOOST — USE IT ON STRAIGHTS'];
+    for (i = 0; i < steps.length; i++) {
+      var sp = UI.outCubic(UI.stagger(t, i, 0.12, 0.35, 0.3)), y = 360 + i * 100, x = 40 + (1 - sp) * 600;
+      ctx2.save(); ctx2.globalAlpha = sp;
+      UI.panel(ctx2, x, y, 640, 80, { skew: 18, fill: 'rgba(12,9,26,0.9)', stroke: 'rgba(150,196,225,0.35)', accent: UI.C.gold });
+      UI.text(ctx2, String(i + 1), x + 50, y + 56, { size: 44, align: 'center', color: UI.C.gold });
+      UI.text(ctx2, steps[i], x + 96, y + 50, { size: 22, font: UI.SANS, weight: '900', lean: 0, color: '#ffffff', maxW: 520 });
+      ctx2.restore();
     }
-    ctx2.font = '700 30px ' + MONO;
-    ctx2.fillStyle = '#7dffb0';
-    ctx2.fillText(doneAward ? '+' + doneAward + ' CR' : 'ALREADY PAID OUT', v.W * 0.5, 800);
-    ctx2.font = '700 24px ' + SANS;
-    ctx2.fillStyle = 'rgba(190,214,235,0.9)';
-    ctx2.fillText('STORY MODE STARTS IN PORTSIDE', v.W * 0.5, 1060);
+    var pp = UI.outBack(UI.step(t, 0.8, 0.4));
+    ctx2.save(); ctx2.translate(W / 2, 720); ctx2.scale(pp, pp);
+    if (doneAward) {
+      UI.coin(ctx2, -90, -10, 20);
+      UI.text(ctx2, '+' + UI.countUp(doneAward, UI.step(t, 0.9, 0.7)) + ' CR', 10, 4, { size: 40, align: 'center', color: UI.C.gold });
+    } else {
+      UI.text(ctx2, 'ALREADY PAID OUT', 0, 0, { size: 26, align: 'center', color: UI.C.dim });
+    }
+    ctx2.restore();
+    if (results) {
+      UI.text(ctx2, '+' + results.xp.xp + ' XP', W / 2, 780, { size: 22, font: UI.MONO, weight: '900', lean: 0, align: 'center', color: UI.C.cyan, alpha: UI.step(t, 1.1, 0.3) });
+    }
+    var fp = UI.outCubic(UI.step(t, 1.2, 0.4));
+    UI.text(ctx2, 'STORY MODE STARTS IN PORTSIDE', W / 2, 1060, { size: 22, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: '#ffffff', alpha: fp });
+    ctx2.save(); ctx2.translate(0, (1 - fp) * 80); ctx2.globalAlpha *= fp;
     drawDoneButton(ctx2, DONE_RETRY_BTN, 'AGAIN', doneSel === 0);
     drawDoneButton(ctx2, DONE_CONT_BTN, 'TO STORY', doneSel === 1);
+    ctx2.restore();
+    ctx2.textAlign = 'left';
   }
 
   /* Practice read-out. The line on the road says WHERE; this says WHAT TO DO
@@ -2811,38 +3019,23 @@
      the screen and it turns red AND starts pulsing under five seconds — never
      colour on its own. */
   function drawRushHud(ctx2, v) {
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var UI = DR.UI;
     var cx2 = v.W * 0.5;
     var low = rushTime < 5;
     var pulse = low ? 0.78 + 0.22 * Math.sin(clock * 12) : 1;
 
+    UI.panel(ctx2, cx2 - 170, 18, 340, 236, { skew: 30, fill: 'rgba(8,6,20,0.8)', stroke: low ? '#ff6a5a' : 'rgba(150,196,225,0.45)',
+                                               lineWidth: 2, accent: low ? '#ff6a5a' : UI.C.orange });
+    UI.text(ctx2, low ? 'TIME — HURRY' : 'TIME', cx2, 50, { size: 17, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: low ? '#ff9a8a' : UI.C.dim });
+    UI.text(ctx2, rushTime.toFixed(1), cx2, 134, { size: 90, font: UI.MONO, weight: '900', lean: 0, align: 'center',
+                                                   color: low ? '#ff6a5a' : '#ffffff', stroke: 'rgba(4,2,10,0.9)', alpha: pulse });
+    UI.text(ctx2, 'DISTANCE', cx2, 170, { size: 15, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.dim });
+    UI.text(ctx2, rushScore + ' m', cx2, 212, { size: 40, align: 'center', color: UI.C.gold });
+    if (rushBest > 0) {
+      UI.text(ctx2, 'BEST ' + rushBest + ' m', cx2, 240, { size: 16, font: UI.MONO, weight: '800', lean: 0, align: 'center', color: UI.C.green });
+    }
     ctx2.textAlign = 'center';
     ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '700 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(150,196,225,0.85)';
-    ctx2.fillText('TIME', cx2, 62);
-
-    ctx2.globalAlpha = pulse;
-    ctx2.font = '800 96px ' + MONO;
-    ctx2.lineWidth = 10;
-    ctx2.strokeStyle = 'rgba(4,2,10,0.9)';
-    ctx2.strokeText(rushTime.toFixed(1), cx2, 148);
-    ctx2.fillStyle = low ? '#ff6a5a' : '#eaf6ff';
-    ctx2.fillText(rushTime.toFixed(1), cx2, 148);
-    ctx2.globalAlpha = 1;
-
-    ctx2.font = '700 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(150,196,225,0.8)';
-    ctx2.fillText('DISTANCE', cx2, 190);
-    ctx2.font = '800 46px ' + MONO;
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText(rushScore + ' m', cx2, 236);
-
-    if (rushBest > 0) {
-      ctx2.font = '700 20px ' + MONO;
-      ctx2.fillStyle = 'rgba(125,255,176,0.85)';
-      ctx2.fillText('BEST ' + rushBest + ' m', cx2, 268);
-    }
 
     // Gate bonus, swelling and fading.
     if (cpFlash > 0) {
@@ -2876,7 +3069,7 @@
 
     ctx2.textAlign = 'left';
     drawBoostButton(ctx2);
-    drawMinimap(ctx2, MAP_PRACTICE);
+    drawMinimap(ctx2);
   }
 
   /* Duel read-out: which player is driving, and — for player two — the gap in
@@ -2884,43 +3077,20 @@
      on its own is exactly the sort of thing the brief says must never carry
      information alone. */
   function drawDuelHud(ctx2, v) {
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    var cx2 = v.W * 0.5;
-
-    ctx2.textAlign = 'center';
-    ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '800 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.lineWidth = 6;
-    ctx2.strokeStyle = 'rgba(4,2,10,0.85)';
-    ctx2.strokeText('PLAYER ' + duelStage, cx2, 54);
-    ctx2.fillStyle = duelStage === 1 ? '#ffd76a' : '#7ce4ff';
-    ctx2.fillText('PLAYER ' + duelStage, cx2, 54);
-
-    if (duelStage === 1) {
-      ctx2.font = '600 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx2.fillStyle = 'rgba(180,206,226,0.85)';
-      ctx2.fillText('SET THE TIME  \u2014  ' + DUEL_LAPS + ' LAPS', cx2, 84);
-    } else {
-      ctx2.font = '600 20px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx2.fillStyle = 'rgba(180,206,226,0.85)';
-      ctx2.fillText('TO BEAT  ' + fmt(duelTimes[0]), cx2, 84);
-
+    var UI = DR.UI, x = 272, y = 18, w = 240, cx2 = x + w / 2;
+    var col = duelStage === 1 ? UI.C.gold : '#7ce4ff';
+    UI.panel(ctx2, x, y, w, duelStage === 1 ? 76 : 134, { skew: 20, fill: 'rgba(8,6,20,0.84)', stroke: col, lineWidth: 2, accent: col });
+    UI.text(ctx2, 'PLAYER ' + duelStage, cx2, y + 36, { size: 28, align: 'center', color: col });
+    UI.text(ctx2, duelStage === 1 ? 'SET THE TIME — ' + DUEL_LAPS + ' LAPS' : 'TO BEAT ' + fmt(duelTimes[0]), cx2, y + 60,
+            { size: 15, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.dim, maxW: w - 30 });
+    if (duelStage === 2) {
       if (duelGap !== null) {
         var behind = duelGap > 0;
-        var word = behind ? 'BEHIND' : 'AHEAD';
-        var mag = Math.abs(duelGap);
-        ctx2.font = '800 60px ' + MONO;
-        ctx2.lineWidth = 8;
-        ctx2.strokeStyle = 'rgba(4,2,10,0.9)';
-        ctx2.strokeText((behind ? '+' : '\u2212') + mag.toFixed(2), cx2, 152);
-        ctx2.fillStyle = behind ? '#ff8a6a' : '#7dffb0';
-        ctx2.fillText((behind ? '+' : '\u2212') + mag.toFixed(2), cx2, 152);
-        ctx2.font = '700 24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-        ctx2.fillText(word, cx2, 184);
+        UI.text(ctx2, (behind ? '+' : '\u2212') + Math.abs(duelGap).toFixed(2), cx2, y + 104,
+                { size: 38, font: UI.MONO, weight: '900', lean: 0, align: 'center', color: behind ? '#ff8a6a' : UI.C.green });
+        UI.text(ctx2, behind ? 'BEHIND' : 'AHEAD', cx2, y + 126, { size: 16, align: 'center', color: behind ? '#ff8a6a' : UI.C.green });
       } else {
-        ctx2.font = '700 26px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-        ctx2.fillStyle = '#7dffb0';
-        ctx2.fillText('GHOST HAS FINISHED', cx2, 152);
+        UI.text(ctx2, 'GHOST HAS FINISHED', cx2, y + 110, { size: 18, align: 'center', color: UI.C.green, maxW: w - 30 });
       }
     }
     ctx2.textAlign = 'left';
@@ -2929,76 +3099,21 @@
   // Between the two legs. Deliberately a wall you have to tap through, so the
   // phone actually changes hands before the clock starts again.
   function drawHandoff(ctx2, v) {
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var UI = DR.UI, t = phaseT, W = v.W;
     ctx2.fillStyle = 'rgba(6,4,16,0.86)';
-    ctx2.fillRect(0, 0, v.W, v.H);
-
-    ctx2.textAlign = 'center';
-    ctx2.font = '700 26px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(180,214,236,0.9)';
-    ctx2.fillText('PLAYER 1', v.W * 0.5, 340);
-
-    ctx2.font = '800 96px ' + MONO;
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText(fmt(duelTimes[0]), v.W * 0.5, 434);
-
+    ctx2.fillRect(0, 0, W, v.H);
+    UI.backdrop(ctx2, W, v.H, clock, '#7ce4ff');
+    var p = UI.outBack(UI.step(t, 0, 0.45));
+    UI.panel(ctx2, 60 - (1 - p) * 600, 270, 600, 240, { skew: 30, fill: 'rgba(12,9,26,0.94)', stroke: UI.C.gold, lineWidth: 2.5, accent: UI.C.gold });
+    UI.text(ctx2, 'PLAYER 1 SET', W / 2, 322, { size: 22, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.dim, alpha: p });
+    UI.text(ctx2, fmt(duelTimes[0]), W / 2, 420, { size: 90, font: UI.MONO, weight: '900', lean: 0, align: 'center', color: UI.C.gold, alpha: p });
     var best = lapTimes.length ? Math.min.apply(null, lapTimes) : 0;
-    ctx2.font = '700 24px ' + MONO;
-    ctx2.fillStyle = 'rgba(190,214,235,0.85)';
-    ctx2.fillText('BEST LAP  ' + fmt(best), v.W * 0.5, 480);
-
-    ctx2.font = '800 54px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = '#7ce4ff';
-    ctx2.fillText('PASS THE PHONE', v.W * 0.5, 610);
-
-    ctx2.font = '600 24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = 'rgba(180,206,226,0.9)';
-    ctx2.fillText('Player 2 races Player 1\u2019s ghost', v.W * 0.5, 656);
-
-    ctx2.font = '700 32px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText('TAP WHEN READY', v.W * 0.5, 800);
-    ctx2.textAlign = 'left';
-  }
-
-  function drawDuelDone(ctx2, v) {
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    ctx2.fillStyle = 'rgba(6,4,16,0.80)';
-    ctx2.fillRect(0, 0, v.W, v.H);
-
-    var p1 = duelTimes[0], p2 = duelTimes[1];
-    var winner = p2 < p1 ? 2 : 1;
-    var margin = Math.abs(p1 - p2);
-
-    ctx2.textAlign = 'center';
-    ctx2.font = '800 66px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = winner === 1 ? '#ffd76a' : '#7ce4ff';
-    ctx2.fillText('PLAYER ' + winner + ' WINS', v.W * 0.5, 320);
-
-    ctx2.font = '700 28px ' + MONO;
-    ctx2.fillStyle = 'rgba(190,214,235,0.9)';
-    ctx2.fillText('BY ' + margin.toFixed(2) + 's', v.W * 0.5, 368);
-
-    for (var i = 0; i < 2; i++) {
-      var y = 470 + i * 96, won = (i + 1) === winner;
-      ctx2.textAlign = 'right';
-      ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx2.fillStyle = won ? '#eaf6ff' : 'rgba(150,196,225,0.75)';
-      ctx2.fillText('PLAYER ' + (i + 1), v.W * 0.5 - 28, y);
-      ctx2.textAlign = 'left';
-      ctx2.font = '800 48px ' + MONO;
-      ctx2.fillStyle = won ? (winner === 1 ? '#ffd76a' : '#7ce4ff') : 'rgba(228,242,252,0.8)';
-      ctx2.fillText(fmt(duelTimes[i]), v.W * 0.5 + 8, y);
-    }
-
-    ctx2.textAlign = 'center';
-    ctx2.font = '700 26px ' + MONO;
-    ctx2.fillStyle = '#7dffb0';
-    ctx2.fillText('+' + doneAward + ' CR', v.W * 0.5, 780);
-
-    ctx2.font = '700 30px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText('TAP TO GO AGAIN', v.W * 0.5, 850);
+    UI.text(ctx2, 'BEST LAP  ' + fmt(best), W / 2, 470, { size: 22, font: UI.MONO, weight: '800', lean: 0, align: 'center', color: UI.C.green, alpha: p });
+    var q = UI.outCubic(UI.step(t, 0.3, 0.4));
+    UI.text(ctx2, 'PASS THE PHONE', W / 2 + (1 - q) * 200, 640, { size: 60, align: 'center', color: '#7ce4ff', stroke: 'rgba(4,2,10,0.9)', alpha: q });
+    UI.text(ctx2, 'PLAYER 2 RACES PLAYER 1’S GHOST', W / 2, 690, { size: 22, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: '#ffffff', alpha: q });
+    var pulse = 0.75 + 0.25 * Math.sin(clock * 3);
+    UI.text(ctx2, 'TAP WHEN READY', W / 2, 860, { size: 34, align: 'center', color: UI.C.gold, alpha: UI.step(t, 0.6, 0.3) * pulse });
     ctx2.textAlign = 'left';
   }
 
@@ -3071,6 +3186,8 @@
       if (confirm) tryStoryEvent(storySel, citySel);
     } else if (phase === 'handoff') {
       if (confirm) startDuelLeg2();
+    } else if (confirm && resultsSkippable()) {
+      phaseT = RESULTS_SETTLE;
     } else if (phase === 'done' && mode === 'tutorial') {
       if (st) doneSel = st < 0 ? 0 : 1;
       if (confirm) { if (doneSel === 0) startTutorial(); else leaveTutorial(); }
@@ -3091,7 +3208,15 @@
     // there is exactly one place that can ever get this out of sync with
     // what's on screen — leaving the WebGL layer showing (or hidden) behind
     // is a whole class of bug this avoids for free.
-    if (DR.Car3D) DR.Car3D.show(phase === 'garage');
+    if (DR.Car3D) DR.Car3D.show(phase === 'garage' || phase === 'title');
+    // A new screen: restart its entrance animations and sweep it in.
+    if (phase !== drawnPhase) {
+      var fromRace = drawnPhase === 'racing';
+      drawnPhase = phase;
+      phaseT = 0;
+      garageShown = -1;
+      if (!(fromRace && phase === 'done')) DR.UI.wipe();
+    }
     // Same idea for the city look: worked out from what's on screen every
     // frame, so a city's colours can never leak into Quick Play.
     var themeCity = -1;
@@ -3117,6 +3242,7 @@
         phase === 'story' || phase === 'garage' || phase === 'tutorial' || phase === 'scene') {
       DR.Road.prepareTerrain(null);          // menus sit on the flat
       DR.Road.drawBackground(ctx, menuView());
+      if (phase !== 'scene') DR.UI.backdrop(ctx, v.W, v.H, clock);
       if (phase === 'title') drawTitle(ctx, v);
       else if (phase === 'modes') { drawModes(ctx, v); drawButton(ctx, BACK_BTN, '\u25C2 TITLE'); }
       else if (phase === 'select') { drawSelect(ctx, v); drawButton(ctx, BACK_BTN, '\u25C2 MODES'); }
@@ -3125,6 +3251,8 @@
       else if (phase === 'city') drawCity(ctx, v);
       else if (phase === 'scene') drawScene(ctx, v);
       else if (phase === 'tutorial') drawComingSoon(ctx, v, 'TUTORIAL', 'A guided first drift. Coming soon.');
+      DR.UI.drawConfetti(ctx);
+      DR.UI.drawWipe(ctx, v.W, v.H);
       ctx.restore();
       return;
     }
@@ -3158,17 +3286,26 @@
     DR.FX.drawFlash(ctx, v, rib);
     DR.FX.drawLabels(ctx, v);
     // The results panel owns the screen; the race HUD behind it is clutter.
-    if (phase === 'racing') {
+    // While the intro card is up the HUD stays off: the card is the only
+    // thing to read. It slides in with the countdown lights.
+    var showStage = DR.Show.stage();
+    if (phase === 'racing' && showStage !== 'intro') {
+      ctx.save();
+      if (showStage === 'countdown') ctx.globalAlpha = DR.UI.step(DR.Show.time(), 0, 0.4);
       if (mode === 'practice') drawPracticeHud(ctx, v);
       else if (mode === 'tutorial') drawTutorialHud(ctx, v);
       else if (mode === 'rush') drawRushHud(ctx, v);
-      else { drawHud(ctx, v); drawHint(ctx, v); }
+      else { drawHud(ctx, v); if (showStage !== 'countdown') drawHint(ctx, v); }
       if (mode === 'duel') drawDuelHud(ctx, v);
       if (mode === 'time') drawTimeHud(ctx, v);
       drawSpeedo(ctx);
+      ctx.restore();
     }
+    if (phase === 'racing') DR.Show.draw(ctx, v.W, v.H);
     if (phase === 'handoff') drawHandoff(ctx, v);
     if (phase === 'done') drawDone(ctx, v);
+    DR.UI.drawConfetti(ctx);
+    DR.UI.drawWipe(ctx, v.W, v.H);
 
     ctx.restore();
   }
@@ -3181,6 +3318,10 @@
 
     if (phase === 'racing') handleRaceTap();
     else updateMenu();
+    phaseT += dt;
+    garageSwapT += dt;
+    if (garagePop) garagePop.t += dt;
+    DR.UI.updateFx(dt);
 
     acc += dt;
     var steps = 0;
@@ -3311,6 +3452,9 @@
     toStory: function () { phase = 'story'; storySel = DR.Story.currentCity(); DR.Input.releaseAll(); DR.Input.clearTap(); },
     enterCity: enterCity,
     openStory: openStory,
+    results: function () { return results; },
+    raceDone: function () { return raceDone; },
+    drawProfileCarAt: function (c, x, y, sc, col, flip) { drawProfileCar(c, x, y, sc, col, flip); },
     visitCity: visitCity,
     scene: function () { return sceneQueue[0] ? { title: sceneQueue[0].title, line: sceneLine, lines: sceneQueue[0].lines.length, left: sceneQueue.length } : null; },
     startStoryEvent: startStoryEvent,

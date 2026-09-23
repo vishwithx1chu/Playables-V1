@@ -28,7 +28,9 @@
       upgrades: {},           // carId -> { tires, engine, transmission, nos }, each a tier 0-3
       unlocked: [],           // race ids
       bestResults: {},        // race id -> { value, lowerIsBetter }
-      tutorialDone: false
+      tutorialDone: false,
+      xp: 0,                  // driver experience, all time
+      stars: {}               // story event id -> best stars earned, 0-3
     };
   }
 
@@ -61,6 +63,10 @@
     // code that assumes a newer one.
     if (!parsed || parsed.version !== VERSION) return;
     data = parsed;
+    // Fields added after a save was first written get their defaults, so
+    // an older save keeps its progress rather than being thrown away.
+    if (typeof data.xp !== 'number') data.xp = 0;
+    if (!data.stars || typeof data.stars !== 'object') data.stars = {};
   }
 
   function persist() {
@@ -131,6 +137,16 @@
     return better;
   }
 
+  function xp() { return data.xp || 0; }
+  function addXp(n) { data.xp = Math.max(0, (data.xp || 0) + n); persist(); }
+  function stars(id) { return (data.stars && data.stars[id]) || 0; }
+  function setStars(id, n) {
+    if (!data.stars) data.stars = {};
+    if (n > (data.stars[id] || 0)) { data.stars[id] = n; persist(); return true; }
+    return false;
+  }
+  function allStars() { return data.stars || {}; }
+
   function tutorialDone() { return !!data.tutorialDone; }
   function setTutorialDone() { data.tutorialDone = true; persist(); }
 
@@ -155,6 +171,7 @@
     isUnlocked: isUnlocked, unlock: unlock,
     bestResult: bestResult, recordResult: recordResult,
     tutorialDone: tutorialDone, setTutorialDone: setTutorialDone,
+    xp: xp, addXp: addXp, stars: stars, setStars: setStars, allStars: allStars,
     resetAll: resetAll,
     // Test/inspection only — never used for game logic decisions.
     _raw: function () { return data; },

@@ -36,6 +36,82 @@ touchscreen.
 
 ---
 
+## Current state: Milestone 3.1 — the look and the show
+
+The whole game has been redesigned around one visual language, the way
+racing games like Need for Speed: Most Wanted and Asphalt present
+themselves: slanted panels, heavy italic type, neon cyan and magenta with
+gold for rewards, and everything arriving with motion. It is all still
+drawn in code with system fonts. No image, font or sound files.
+
+**Every screen animates in.** A slanted wipe sweeps between screens. The
+title logo slams in and the menu tiles stagger up. On the map the road
+draws itself city to city, the cities pop in and the info panel slides up.
+In a city the circuit draws itself, event pins drop onto it, and the event
+and car-rating panels slide in from the sides. Story scenes open with
+cinema bars and slide each line in. The garage is a showroom: a
+spotlight, a turntable ring, stat bars that fill up for each car, and a
+pop when you buy a car or an upgrade.
+
+**Races are an event now** ([`src/show.js`](src/show.js)):
+
+- **Intro card.** Every race opens with its name, place and what's at
+  stake. Boss races open on a **VS card** instead: you and your car on one
+  side, the boss, their car, rating and a line of trash talk on the other.
+  Tap to skip.
+- **Start lights.** Three red lights count down, then **GO!** The car is
+  held until then. Press boost the moment it goes green for a **PERFECT
+  START**, a free boost. Press it too early and it's a **JUMP START** with
+  no launch.
+- **Live feed.** Overtakes, takedowns, shunts, long drifts, slipstream and
+  clean laps pop up on the left with **style points**. There are banners
+  for LAP 2/3, FINAL LAP and BEST LAP.
+- **HUD.** A big position badge, a lap chip with a progress bar, time gaps
+  to the cars just ahead and behind, a framed minimap and a segmented
+  speedometer. The HUD stays hidden behind the intro card and fades in
+  with the lights.
+- **Finish.** Chequered bands and a FINISH slam in slow motion, with
+  confetti for a win.
+- **Results.** One screen for every mode, in stages. The headline comes
+  first, with a trophy for the podium. Then the standings slide in, your
+  stats count up (top speed, overtakes, takedowns, style), and the payout
+  counts up too: prize, style bonus, XP filling your level bar, LEVEL UP if
+  it happened, and stars popping in on story events. The first tap skips to
+  the end; the next one moves on.
+
+**Progression** ([`src/career.js`](src/career.js)):
+
+- **Driver level.** Every finished event gives XP, plus your style points.
+  Each level pays a few credits. Your level and XP bar sit on the title
+  screen.
+- **Stars.** Every story event has three: one for clearing it, two for
+  doing it well, three for doing it brilliantly. Each new star pays 10 CR.
+  Stars show on every map city, every event pin and in a total at the top
+  of the story screens, so there's always something to go back for.
+- **Kept in proportion.** Style, levels and stars together add about 30%
+  on top of the story prizes over a whole career. Anything more and
+  upgrades would come early enough to make the cities easy again.
+
+**How to test:**
+
+1. Open `index.html`. The logo slams in, the car turns in the middle, and
+   the tiles slide up. Your level, stars and credits are across the top.
+2. **Story → Enter City → pick the boss.** You get the VS card, then the
+   lights. Tap boost the instant they go green: *PERFECT START +100*.
+3. Race it. Pass someone for *OVERTAKE*, bump someone while boosting for
+   *TAKEDOWN*, hold a long drift for *DRIFT*. Cross the line and watch the
+   finish, then the results count up.
+4. Beat a city event and go back to the map: the city now shows its stars.
+5. **Garage → Upgrades**, buy one: the row lights up and the rating it
+   added floats off it.
+
+Reference note: the design follows common patterns from these games. Their
+screen-by-screen breakdowns (Game UI Database, Interface In Game) couldn't
+be opened from the build machine, so the reference work used search
+summaries and well-known conventions of the genre.
+
+---
+
 ## Current state: Milestone 3.0 — career mode
 
 The game is growing from four standalone modes into a career: ten cities, a
@@ -898,6 +974,9 @@ actually playing. Geometry in code is the only kind of 3D that ships here.
 index.html      the page: one canvas, the scripts below plus lib/three.min.js
 docs/content-plan.md   the map for career mode: cars, upgrades, circuits, cities
 src/save.js     the save file: currency, cars, upgrades, unlocks, best results
+src/ui.js       the look: panels, buttons, type, easing, confetti, screen wipe
+src/career.js   driver level and XP, stars per story event
+src/show.js     race presentation: intro/VS card, start lights, feed, finish
 style.css       stops the page scrolling, zooming or selecting text
 src/input.js    touch, mouse and keyboard  ->  one number: -1, 0 or +1
 src/road.js     the track, and how the road is drawn
