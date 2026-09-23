@@ -434,6 +434,7 @@
       clock += dt;
       if (resetArmed > 0) resetArmed = Math.max(0, resetArmed - dt);
       if (resetDone > 0) resetDone = Math.max(0, resetDone - dt);
+      sceneT += dt;
       return;
     }
     var steer = DR.Input.steer();
@@ -1429,9 +1430,45 @@
 
   // ---------------------------------------------------------------- STORY UI
 
-  function storyRowBox(i) { return { x: 40, y: 214 + i * 100, w: 640, h: 90 }; }
-  function cityEventBox(i) { return { x: 40, y: 336 + i * 162, w: 640, h: 148 }; }
+  /* The map. Cities sit at fixed spots (story.js, 0..1 across the map
+     area), joined in order by a neon road. A tap picks a city; a second
+     tap, or ENTER, goes in. */
+  var MAP_AREA = { x: 24, y: 176, w: 672, h: 820 };
+  var MAP_NODE_R = 30;
+  var MAP_ENTER_BTN = { x: 400, y: 1170, w: 280, h: 64 };
+  var MAP_STORY_BTN = { x: 40, y: 1170, w: 250, h: 64 };
+  function mapNodeXY(i) {
+    var m = DR.Story.mapPos(i);
+    return { x: MAP_AREA.x + 40 + m[0] * (MAP_AREA.w - 80), y: MAP_AREA.y + 30 + m[1] * (MAP_AREA.h - 70) };
+  }
+  function storyRowBox(i) {
+    var p = mapNodeXY(i), r = MAP_NODE_R + 12;
+    return { x: p.x - r, y: p.y - r, w: r * 2, h: r * 2 };
+  }
+  /* The city view: the city's own circuit drawn large, with a pin at each
+     event's spot on it. A tap picks an event; a second tap, or START, runs
+     it. */
+  var CITY_AREA = { x: 40, y: 244, w: 640, h: 520 };
+  var CITY_START_BTN = { x: 380, y: 1164, w: 300, h: 64 };
   var CITY_GARAGE_BTN = { x: 40, y: 1164, w: 300, h: 64 };
+  var PIN_R = 28;
+  function cityMapBox() {
+    var sz = Math.min(CITY_AREA.w, CITY_AREA.h);
+    return { x: CITY_AREA.x + (CITY_AREA.w - sz) * 0.5, y: CITY_AREA.y, w: sz, h: sz };
+  }
+  function pinXY(ci, ei) {
+    var n = DR.Story.cities()[ci].events.length;
+    var f = n === 3 ? [0.14, 0.48, 0.82][ei] : [0.10, 0.34, 0.58, 0.82][ei];
+    var box = cityMapBox(), pts = DR.Road.lapOutline(DR.Story.cities()[ci].track), best = pts[0];
+    for (var i = 0; i < pts.length; i++) if (Math.abs(pts[i].f - f) < Math.abs(best.f - f)) best = pts[i];
+    var pad = box.w * 0.12;
+    return { x: box.x + pad + best.nx * (box.w - pad * 2), y: box.y + pad + (1 - best.ny) * (box.h - pad * 2) };
+  }
+  function cityEventBox(i) {
+    var p = pinXY(storySel, i), r = PIN_R + 12;
+    return { x: p.x - r, y: p.y - r, w: r * 2, h: r * 2 };
+  }
+  var SCENE_SKIP_BTN = { x: 524, y: 34, w: 156, h: 56 };
   var DONE_RETRY_BTN  = { x: 60, y: 1120, w: 280, h: 74 };
   var DONE_CONT_BTN   = { x: 380, y: 1120, w: 280, h: 74 };
 
@@ -1455,55 +1492,167 @@
     ctx2.fillText(DR.Save.currency().toLocaleString() + ' CR', v.W - 24, 44);
   }
 
-  /* The map: all ten cities in order. Every row says in words whether it's
-     open, how much of it is cleared, and what its boss pays — so the state
-     of the championship is readable without knowing what the colours mean. */
+  function rgbOf(c, a) { return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')'; }
+  function cityEdge(i) {
+    var t = DR.Story.themeFor(i);
+    return (t && t.edge) || [65, 224, 255];
+  }
+
+  function drawPadlockAt(ctx2, x, y, sc, color) {
+    ctx2.lineWidth = 3 * sc;
+    ctx2.strokeStyle = color;
+    ctx2.beginPath();
+    ctx2.arc(x, y - 4 * sc, 7 * sc, Math.PI, 0);
+    ctx2.stroke();
+    ctx2.fillStyle = color;
+    ctx2.fillRect(x - 10 * sc, y - 4 * sc, 20 * sc, 15 * sc);
+  }
+
+  /* The map. Drawn, not listed: a dark sheet with a coastline, mountains in
+     the north, the ten cities joined by the road you drive between them.
+     Every state is said in words or shapes as well as colour — a padlock
+     on a locked city, a tick on a beaten one, "YOU" over where you are. */
   function drawStory(ctx2, v) {
     var SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    var cities = DR.Story.cities(), i;
+    var cities = DR.Story.cities(), i, A = MAP_AREA;
     ctx2.textAlign = 'center';
     ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '800 52px ' + SANS;
+    ctx2.font = '800 46px ' + SANS;
     ctx2.fillStyle = '#ffd76a';
-    ctx2.fillText('THE CIRCUIT', v.W * 0.5, 146);
-    ctx2.font = '700 22px ' + SANS;
+    ctx2.fillText('THE CIRCUIT', v.W * 0.5, 124);
+    ctx2.font = '700 19px ' + SANS;
     ctx2.fillStyle = 'rgba(180,214,236,0.85)';
-    ctx2.fillText('TEN CITIES  •  TEN BOSSES  •  ONE CHAMPION', v.W * 0.5, 186);
+    ctx2.fillText('KAI’S LAST RACE', v.W * 0.5, 156);
 
-    for (i = 0; i < cities.length; i++) {
-      var c = cities[i], b = storyRowBox(i), st = DR.Story.cityState(i), on = i === storySel;
-      ctx2.globalAlpha = st.unlocked ? 1 : 0.5;
-      ctx2.fillStyle = on ? 'rgba(34,120,150,0.30)' : 'rgba(10,8,24,0.62)';
-      ctx2.fillRect(b.x, b.y, b.w, b.h);
-      ctx2.lineWidth = on ? 3 : 1.5;
-      ctx2.strokeStyle = on ? '#41e0ff' : 'rgba(150,196,225,0.32)';
-      ctx2.strokeRect(b.x, b.y, b.w, b.h);
-
-      ctx2.textAlign = 'center';
-      ctx2.font = '800 34px ' + SANS;
-      ctx2.fillStyle = st.bossBeaten ? '#7dffb0' : '#eaf6ff';
-      ctx2.fillText(String(i + 1), b.x + 36, b.y + 58);
-
-      ctx2.textAlign = 'left';
-      ctx2.fillStyle = on ? '#eaf6ff' : 'rgba(226,240,250,0.9)';
-      fitText(ctx2, c.name, b.x + 76, b.y + 42, 330, 30, '800', SANS);
-      ctx2.font = '600 18px ' + SANS;
-      ctx2.fillStyle = 'rgba(180,206,226,0.85)';
-      var sub = !st.unlocked ? 'LOCKED — BEAT ' + cities[i - 1].boss
-              : st.bossBeaten ? 'BOSS BEATEN  •  ' + st.cleared + '/' + st.total + ' CLEARED'
-              : 'BOSS: ' + c.boss + '  •  ' + st.cleared + '/' + st.total + ' CLEARED';
-      ctx2.fillText(sub, b.x + 76, b.y + 72);
-
-      ctx2.textAlign = 'right';
-      ctx2.font = '700 17px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-      ctx2.fillStyle = c.reward.car ? '#ffd76a' : 'rgba(125,255,176,0.9)';
-      ctx2.fillText(c.reward.car ? 'PRIZE: CAR' : 'PRIZE: CASH', b.x + b.w - 20, b.y + 38);
-      ctx2.font = '700 18px ' + SANS;
-      ctx2.fillStyle = st.bossBeaten ? '#7dffb0' : (st.unlocked ? (on ? '#ffd76a' : 'rgba(190,214,235,0.6)') : 'rgba(190,214,235,0.5)');
-      ctx2.fillText(st.bossBeaten ? 'DONE ✓' : (!st.unlocked ? 'LOCKED' : (on ? 'TAP AGAIN ▸' : 'OPEN')),
-                    b.x + b.w - 20, b.y + 70);
-      ctx2.globalAlpha = 1;
+    // The sheet.
+    ctx2.fillStyle = 'rgba(8,6,20,0.95)';
+    ctx2.fillRect(A.x, A.y, A.w, A.h);
+    ctx2.lineWidth = 1.5;
+    ctx2.strokeStyle = 'rgba(150,196,225,0.25)';
+    ctx2.strokeRect(A.x, A.y, A.w, A.h);
+    ctx2.save();
+    ctx2.beginPath(); ctx2.rect(A.x, A.y, A.w, A.h); ctx2.clip();
+    ctx2.strokeStyle = 'rgba(120,160,220,0.06)';
+    ctx2.lineWidth = 1;
+    for (i = 1; i < 12; i++) {
+      ctx2.beginPath(); ctx2.moveTo(A.x + i * A.w / 12, A.y); ctx2.lineTo(A.x + i * A.w / 12, A.y + A.h); ctx2.stroke();
+      ctx2.beginPath(); ctx2.moveTo(A.x, A.y + i * A.h / 12); ctx2.lineTo(A.x + A.w, A.y + i * A.h / 12); ctx2.stroke();
     }
+    // Sea to the south and east.
+    ctx2.beginPath();
+    ctx2.moveTo(A.x, A.y + A.h * 0.975);
+    ctx2.quadraticCurveTo(A.x + A.w * 0.40, A.y + A.h * 1.0, A.x + A.w * 0.66, A.y + A.h * 0.965);
+    ctx2.quadraticCurveTo(A.x + A.w * 0.97, A.y + A.h * 0.92, A.x + A.w * 0.95, A.y + A.h * 0.62);
+    ctx2.quadraticCurveTo(A.x + A.w * 0.93, A.y + A.h * 0.50, A.x + A.w, A.y + A.h * 0.44);
+    ctx2.lineTo(A.x + A.w, A.y + A.h); ctx2.lineTo(A.x, A.y + A.h); ctx2.closePath();
+    ctx2.fillStyle = 'rgba(30,80,140,0.28)';
+    ctx2.fill();
+    ctx2.strokeStyle = 'rgba(125,227,255,0.35)';
+    ctx2.lineWidth = 2;
+    ctx2.stroke();
+    // Mountains in the north-west.
+    ctx2.fillStyle = 'rgba(150,160,210,0.10)';
+    for (i = 0; i < 7; i++) {
+      var mx0 = A.x + A.w * (0.04 + i * 0.07), my0 = A.y + A.h * (0.26 + (i % 2) * 0.03);
+      ctx2.beginPath(); ctx2.moveTo(mx0 - 34, my0 + 30); ctx2.lineTo(mx0, my0 - 34); ctx2.lineTo(mx0 + 34, my0 + 30); ctx2.closePath(); ctx2.fill();
+    }
+    ctx2.restore();
+
+    // The road between the cities, in order. Driven stretches glow.
+    for (i = 0; i + 1 < cities.length; i++) {
+      var a = mapNodeXY(i), b = mapNodeXY(i + 1);
+      var open = DR.Story.cityUnlocked(i + 1);
+      var cx = (a.x + b.x) * 0.5 + (b.y - a.y) * 0.18, cy = (a.y + b.y) * 0.5 - (b.x - a.x) * 0.18;
+      ctx2.beginPath();
+      ctx2.moveTo(a.x, a.y);
+      ctx2.quadraticCurveTo(cx, cy, b.x, b.y);
+      ctx2.setLineDash(open ? [] : [10, 10]);
+      ctx2.lineWidth = open ? 10 : 4;
+      ctx2.strokeStyle = open ? 'rgba(34,230,255,0.22)' : 'rgba(150,170,200,0.22)';
+      ctx2.stroke();
+      if (open) {
+        ctx2.lineWidth = 3.5;
+        ctx2.strokeStyle = '#22e6ff';
+        ctx2.stroke();
+      }
+      ctx2.setLineDash([]);
+    }
+
+    // The cities.
+    var here = DR.Story.currentCity();
+    for (i = 0; i < cities.length; i++) {
+      var p = mapNodeXY(i), st = DR.Story.cityState(i), on = i === storySel;
+      var edge = cityEdge(i), r = MAP_NODE_R + (on ? 4 : 0);
+      if (on) {
+        // A slow breathe around the chosen city — a glow, never a blink.
+        var br = 0.5 + 0.5 * Math.sin(clock * 2.2);
+        ctx2.beginPath();
+        ctx2.arc(p.x, p.y, r + 10 + br * 4, 0, Math.PI * 2);
+        ctx2.lineWidth = 3;
+        ctx2.strokeStyle = 'rgba(65,224,255,' + (0.45 + 0.35 * br).toFixed(2) + ')';
+        ctx2.stroke();
+      }
+      ctx2.beginPath();
+      ctx2.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx2.fillStyle = !st.unlocked ? 'rgba(24,22,36,0.95)' : st.bossBeaten ? rgbOf(edge, 0.35) : 'rgba(12,10,28,0.95)';
+      ctx2.fill();
+      ctx2.lineWidth = on ? 4 : 3;
+      ctx2.strokeStyle = st.unlocked ? rgbOf(edge, 1) : 'rgba(120,130,150,0.6)';
+      ctx2.stroke();
+      ctx2.textAlign = 'center';
+      ctx2.textBaseline = 'middle';
+      if (!st.unlocked) drawPadlockAt(ctx2, p.x, p.y, 0.9, 'rgba(160,170,190,0.9)');
+      else {
+        ctx2.font = '800 24px ' + SANS;
+        ctx2.fillStyle = '#eaf6ff';
+        ctx2.fillText(st.bossBeaten ? '✓' : String(i + 1), p.x, p.y + 1);
+      }
+      // Name under the city, in words.
+      ctx2.textBaseline = 'alphabetic';
+      ctx2.font = (on ? '800 18px ' : '700 15px ') + SANS;
+      ctx2.lineWidth = 4;
+      ctx2.strokeStyle = 'rgba(4,2,10,0.9)';
+      ctx2.strokeText(cities[i].name, p.x, p.y + r + 22);
+      ctx2.fillStyle = st.unlocked ? (on ? '#eaf6ff' : 'rgba(220,234,246,0.85)') : 'rgba(160,170,190,0.7)';
+      ctx2.fillText(cities[i].name, p.x, p.y + r + 22);
+      // Where you are.
+      if (i === here) {
+        var bob = Math.sin(clock * 2.5) * 3;
+        ctx2.fillStyle = '#c8121f';
+        ctx2.beginPath();
+        ctx2.moveTo(p.x, p.y - r - 8 + bob);
+        ctx2.lineTo(p.x - 11, p.y - r - 26 + bob);
+        ctx2.lineTo(p.x + 11, p.y - r - 26 + bob);
+        ctx2.closePath();
+        ctx2.fill();
+        ctx2.font = '800 14px ' + SANS;
+        ctx2.fillStyle = '#ffd76a';
+        ctx2.fillText('YOU', p.x, p.y - r - 32 + bob);
+      }
+    }
+
+    // The chosen city, in words.
+    var c = cities[storySel], sst = DR.Story.cityState(storySel);
+    ctx2.textAlign = 'left';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.fillStyle = '#eaf6ff';
+    fitText(ctx2, c.name, 40, 1046, 420, 34, '800', SANS);
+    ctx2.font = '600 19px ' + SANS;
+    ctx2.fillStyle = 'rgba(190,214,235,0.9)';
+    var line1 = !sst.unlocked ? 'LOCKED — BEAT ' + cities[storySel - 1].boss + ' FIRST'
+              : 'BOSS: ' + c.boss + '  •  ' + sst.cleared + '/' + sst.total + ' CLEARED' + (sst.bossBeaten ? '  •  DONE ✓' : '');
+    ctx2.fillText(line1, 40, 1080);
+    ctx2.fillStyle = 'rgba(190,214,235,0.75)';
+    ctx2.fillText(sst.unlocked ? c.intro : 'KEEP FOLLOWING THE TRAIL.', 40, 1108);
+    ctx2.textAlign = 'right';
+    ctx2.font = '700 17px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    ctx2.fillStyle = c.reward.car ? '#ffd76a' : 'rgba(125,255,176,0.9)';
+    ctx2.fillText(c.reward.car ? 'PRIZE: CAR' : 'PRIZE: CASH', 680, 1046);
+    ctx2.fillStyle = 'rgba(190,214,235,0.8)';
+    ctx2.fillText('NEEDS ~' + DR.Story.ratingNeed(storySel) + ' RATING', 680, 1140);
+
+    drawButton(ctx2, MAP_STORY_BTN, '▶ STORY SO FAR');
+    drawButton(ctx2, MAP_ENTER_BTN, sst.unlocked ? 'ENTER CITY ▸' : 'LOCKED');
     drawCurrency(ctx2, v);
     ctx2.textAlign = 'left';
     drawButton(ctx2, BACK_BTN, '◂ TITLE');
@@ -1516,79 +1665,278 @@
     return ev.type === 'race' ? 'BEST ' + ordinal(b.value) : 'BEST ' + fmt(b.value);
   }
 
+  /* The city view. The city's own circuit drawn big, in the city's neon,
+     with a pin at each place something happens: a flag for a race, a
+     stopwatch for a time attack, a crown for the boss. Pick one, and the
+     panel underneath says what it asks and what it pays. */
+  function drawEventIcon(ctx2, type, x, y, col) {
+    ctx2.fillStyle = col;
+    ctx2.strokeStyle = col;
+    if (type === 'race') {
+      // A chequered flag.
+      ctx2.fillRect(x - 10, y - 12, 2.5, 24);
+      for (var q = 0; q < 6; q++) {
+        if ((q + Math.floor(q / 3)) % 2) continue;
+        ctx2.fillRect(x - 7 + (q % 3) * 6, y - 12 + Math.floor(q / 3) * 6, 6, 6);
+      }
+      ctx2.lineWidth = 1.5;
+      ctx2.strokeRect(x - 7, y - 12, 18, 12);
+    } else if (type === 'time') {
+      ctx2.lineWidth = 3;
+      ctx2.beginPath(); ctx2.arc(x, y + 2, 11, 0, Math.PI * 2); ctx2.stroke();
+      ctx2.beginPath(); ctx2.moveTo(x, y + 2); ctx2.lineTo(x, y - 5); ctx2.moveTo(x, y + 2); ctx2.lineTo(x + 6, y + 4); ctx2.stroke();
+      ctx2.fillRect(x - 3, y - 13, 6, 4);
+    } else {
+      // A crown.
+      ctx2.beginPath();
+      ctx2.moveTo(x - 13, y + 9); ctx2.lineTo(x - 13, y - 6); ctx2.lineTo(x - 6, y + 1);
+      ctx2.lineTo(x, y - 10); ctx2.lineTo(x + 6, y + 1); ctx2.lineTo(x + 13, y - 6); ctx2.lineTo(x + 13, y + 9);
+      ctx2.closePath(); ctx2.fill();
+    }
+  }
+
   function drawCity(ctx2, v) {
     var SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     var ci = storySel, c = DR.Story.cities()[ci], i;
+    var edge = cityEdge(ci);
     ctx2.textAlign = 'center';
     ctx2.textBaseline = 'alphabetic';
-    ctx2.font = '700 18px ' + SANS;
+    ctx2.font = '700 17px ' + SANS;
     ctx2.fillStyle = 'rgba(180,214,236,0.8)';
-    ctx2.fillText('CITY ' + (ci + 1) + ' OF 10', v.W * 0.5, 118);
+    ctx2.fillText('CITY ' + (ci + 1) + ' OF 10  •  BOSS: ' + c.boss, v.W * 0.5, 120);
     ctx2.fillStyle = '#ffd76a';
-    fitText(ctx2, c.name, v.W * 0.5, 170, 600, 54, '800', SANS);
-    ctx2.font = '700 22px ' + SANS;
-    ctx2.fillStyle = '#eaf6ff';
-    ctx2.fillText('BOSS: ' + c.boss, v.W * 0.5, 206);
-    ctx2.font = '500 21px ' + SANS;
-    ctx2.fillStyle = 'rgba(190,214,235,0.9)';
-    wrapText(ctx2, c.intro, v.W * 0.5, 242, 620, 27);
-    ctx2.font = '600 18px ' + SANS;
-    ctx2.fillStyle = 'rgba(125,255,176,0.85)';
-    ctx2.fillText('RECOMMENDED: ' + c.spec, v.W * 0.5, 312);
+    fitText(ctx2, c.name, v.W * 0.5, 168, 600, 48, '800', SANS);
+    ctx2.font = '500 19px ' + SANS;
+    ctx2.fillStyle = 'rgba(200,222,240,0.9)';
+    ctx2.fillText(c.intro, v.W * 0.5, 204);
 
+    // The district: the circuit, drawn as a road in the city's colours.
+    var box = cityMapBox();
+    ctx2.fillStyle = 'rgba(6,4,14,0.72)';
+    ctx2.fillRect(CITY_AREA.x, CITY_AREA.y, CITY_AREA.w, CITY_AREA.h);
+    ctx2.lineWidth = 1.5;
+    ctx2.strokeStyle = rgbOf(edge, 0.35);
+    ctx2.strokeRect(CITY_AREA.x, CITY_AREA.y, CITY_AREA.w, CITY_AREA.h);
+    var pts = DR.Road.lapOutline(c.track);
+    var pad = box.w * 0.12, iw = box.w - pad * 2, ih = box.h - pad * 2;
+    ctx2.beginPath();
+    for (i = 0; i < pts.length; i++) {
+      var px = box.x + pad + pts[i].nx * iw, py = box.y + pad + (1 - pts[i].ny) * ih;
+      if (i) ctx2.lineTo(px, py); else ctx2.moveTo(px, py);
+    }
+    ctx2.closePath();
+    ctx2.lineJoin = 'round';
+    ctx2.lineWidth = 22; ctx2.strokeStyle = 'rgba(20,18,30,0.95)'; ctx2.stroke();
+    ctx2.lineWidth = 26; ctx2.strokeStyle = rgbOf(edge, 0.18); ctx2.stroke();
+    ctx2.lineWidth = 16; ctx2.strokeStyle = 'rgba(14,12,22,1)'; ctx2.stroke();
+    ctx2.lineWidth = 2; ctx2.strokeStyle = rgbOf(edge, 0.9); ctx2.stroke();
+    ctx2.font = '700 15px ' + SANS;
+    ctx2.fillStyle = rgbOf(edge, 0.8);
+    ctx2.fillText('CIRCUIT: ' + DR.Road.tracks()[c.track].name, v.W * 0.5, CITY_AREA.y + CITY_AREA.h - 12);
+
+    // The pins.
     var ev = c.events;
     for (i = 0; i < ev.length; i++) {
-      var b = cityEventBox(i), st = DR.Story.setup(ci, i), on = i === citySel;
-      var locked = DR.Story.eventLocked(ci, i), done = DR.Story.cleared(ci, i);
+      var p = pinXY(ci, i), on = i === citySel;
+      var done = DR.Story.cleared(ci, i), locked = DR.Story.eventLocked(ci, i) && !done;
       var boss = ev[i].type === 'boss';
-      ctx2.globalAlpha = locked ? 0.5 : 1;
-      ctx2.fillStyle = on ? 'rgba(34,120,150,0.30)' : (boss ? 'rgba(60,40,10,0.55)' : 'rgba(10,8,24,0.62)');
-      ctx2.fillRect(b.x, b.y, b.w, b.h);
-      ctx2.lineWidth = on ? 3 : 1.5;
-      ctx2.strokeStyle = on ? '#41e0ff' : (boss ? 'rgba(255,215,106,0.55)' : 'rgba(150,196,225,0.32)');
-      ctx2.strokeRect(b.x, b.y, b.w, b.h);
-
-      ctx2.textAlign = 'left';
-      ctx2.font = '800 30px ' + SANS;
-      ctx2.fillStyle = boss ? '#ffd76a' : '#eaf6ff';
-      ctx2.fillText(st.label, b.x + 24, b.y + 44);
-      ctx2.font = '600 20px ' + SANS;
-      ctx2.fillStyle = 'rgba(200,222,240,0.92)';
-      ctx2.fillText(st.requirement, b.x + 24, b.y + 82);
-      ctx2.font = '700 19px ' + MONO;
-      ctx2.fillStyle = '#7dffb0';
-      ctx2.fillText(st.reward, b.x + 24, b.y + 118);
-
-      ctx2.textAlign = 'right';
-      ctx2.font = '800 20px ' + SANS;
-      var status = done ? 'CLEARED ✓' : locked ? 'LOCKED' : on ? 'TAP AGAIN ▸' : 'TAP TO SELECT';
-      ctx2.fillStyle = done ? '#7dffb0' : locked ? 'rgba(190,214,235,0.6)' : (on ? '#ffd76a' : 'rgba(190,214,235,0.6)');
-      ctx2.fillText(status, b.x + b.w - 22, b.y + 44);
-      ctx2.font = '600 17px ' + SANS;
-      ctx2.fillStyle = 'rgba(190,214,235,0.75)';
-      if (locked && boss) ctx2.fillText('CLEAR THE OTHERS FIRST', b.x + b.w - 22, b.y + 82);
-      else ctx2.fillText(bestText(ci, i), b.x + b.w - 22, b.y + 82);
-      ctx2.globalAlpha = 1;
+      if (on) {
+        var br = 0.5 + 0.5 * Math.sin(clock * 2.2);
+        ctx2.beginPath(); ctx2.arc(p.x, p.y, PIN_R + 9 + br * 3, 0, Math.PI * 2);
+        ctx2.lineWidth = 3; ctx2.strokeStyle = 'rgba(65,224,255,' + (0.5 + 0.35 * br).toFixed(2) + ')'; ctx2.stroke();
+      }
+      ctx2.beginPath(); ctx2.arc(p.x, p.y, PIN_R, 0, Math.PI * 2);
+      ctx2.fillStyle = locked ? 'rgba(24,22,36,0.96)' : boss ? 'rgba(70,48,10,0.96)' : 'rgba(12,10,28,0.96)';
+      ctx2.fill();
+      ctx2.lineWidth = 3;
+      ctx2.strokeStyle = locked ? 'rgba(130,140,160,0.7)' : boss ? '#ffd76a' : rgbOf(edge, 1);
+      ctx2.stroke();
+      if (locked) drawPadlockAt(ctx2, p.x, p.y, 0.8, 'rgba(160,170,190,0.9)');
+      else drawEventIcon(ctx2, ev[i].type, p.x, p.y, boss ? '#ffd76a' : '#eaf6ff');
+      if (done) {
+        ctx2.beginPath(); ctx2.arc(p.x + PIN_R * 0.72, p.y - PIN_R * 0.72, 11, 0, Math.PI * 2);
+        ctx2.fillStyle = '#7dffb0'; ctx2.fill();
+        ctx2.font = '900 14px ' + SANS; ctx2.textBaseline = 'middle';
+        ctx2.fillStyle = '#062a16'; ctx2.fillText('✓', p.x + PIN_R * 0.72, p.y - PIN_R * 0.72 + 1);
+        ctx2.textBaseline = 'alphabetic';
+      }
+      var nm = DR.Story.placeName(ci, i);
+      ctx2.font = (on ? '800 17px ' : '700 15px ') + SANS;
+      ctx2.lineWidth = 4; ctx2.strokeStyle = 'rgba(4,2,10,0.92)';
+      var ly = p.y > box.y + box.h * 0.5 ? p.y - PIN_R - 10 : p.y + PIN_R + 22;
+      ctx2.strokeText(nm, p.x, ly);
+      ctx2.fillStyle = on ? '#eaf6ff' : 'rgba(214,232,246,0.85)';
+      ctx2.fillText(nm, p.x, ly);
     }
 
-    // What you're driving, and where to go to make it quicker.
-    var car = DR.Cars.get(DR.Save.selectedCar());
+    // The chosen event, in words.
+    var st = DR.Story.setup(ci, citySel), selLocked = DR.Story.eventLocked(ci, citySel);
+    var selBoss = ev[citySel].type === 'boss';
     ctx2.textAlign = 'left';
+    ctx2.font = '800 30px ' + SANS;
+    ctx2.fillStyle = selBoss ? '#ffd76a' : '#eaf6ff';
+    ctx2.fillText(st.label + '  •  ' + DR.Story.placeName(ci, citySel), 40, 806);
+    ctx2.font = '600 21px ' + SANS;
+    ctx2.fillStyle = 'rgba(200,222,240,0.92)';
+    ctx2.fillText(selLocked && selBoss ? 'CLEAR THE OTHERS FIRST' : st.requirement, 40, 842);
+    ctx2.font = '700 20px ' + MONO;
+    ctx2.fillStyle = '#7dffb0';
+    ctx2.fillText(st.reward, 40, 876);
+    ctx2.font = '600 18px ' + SANS;
+    ctx2.fillStyle = 'rgba(190,214,235,0.8)';
+    var status = DR.Story.cleared(ci, citySel) ? 'CLEARED ✓  ' + bestText(ci, citySel) : bestText(ci, citySel);
+    ctx2.fillText(status, 40, 908);
+
+    var car = DR.Cars.get(DR.Save.selectedCar());
     ctx2.font = '600 19px ' + SANS;
     ctx2.fillStyle = 'rgba(180,206,226,0.85)';
-    ctx2.fillText('CIRCUIT: ' + DR.Road.tracks()[c.track].name, 40, 1000);
-    ctx2.fillText('DRIVING: ' + (car ? car.name.toUpperCase() : ''), 40, 1030);
+    ctx2.fillText('DRIVING: ' + (car ? car.name.toUpperCase() : ''), 40, 1040);
     // Is it the car or the driving? The rating says, in a number and a word.
     var have = DR.Cars.rating(DR.Save.selectedCar()), need = DR.Story.ratingNeed(ci);
     ctx2.font = '800 21px ' + SANS;
     ctx2.fillStyle = have >= need ? '#7dffb0' : '#ffb24d';
-    ctx2.fillText('YOUR RATING ' + have + '  \u2022  BOSS NEEDS ~' + need +
-                  (have >= need ? '  \u2022  READY' : '  \u2022  UPGRADE'), 40, 1070);
+    ctx2.fillText('YOUR RATING ' + have + '  •  BOSS NEEDS ~' + need +
+                  (have >= need ? '  •  READY' : '  •  UPGRADE'), 40, 1076);
     drawButton(ctx2, CITY_GARAGE_BTN, 'GARAGE ▸');
+    drawButton(ctx2, CITY_START_BTN, selLocked ? 'LOCKED' : 'START ▸');
     drawCurrency(ctx2, v);
     ctx2.textAlign = 'left';
     drawButton(ctx2, BACK_BTN, '◂ MAP');
+  }
+
+  /* ------------------------------ STORY CARDS ------------------------------
+     A scene is a title, and lines revealed one tap at a time over the city
+     it happens in: that city's own sky, a car on the horizon, and the words
+     in a panel below. Speakers get their name in their own colour (and in
+     words — never colour alone). SKIP is always there. */
+  var sceneQueue = [], sceneLine = 0, sceneT = 0, sceneThen = null;
+  function showScenes(list, then) {
+    sceneQueue = list.slice();
+    sceneLine = 0; sceneT = 0; sceneThen = then || null;
+    phase = 'scene';
+    DR.Input.releaseAll(); DR.Input.clearTap();
+  }
+  function finishScenes() {
+    var f = sceneThen;
+    sceneQueue = []; sceneThen = null;
+    if (f) f(); else phase = 'story';
+  }
+  function sceneAdvance() {
+    var sc = sceneQueue[0];
+    if (!sc) { finishScenes(); return; }
+    if (sceneLine < sc.lines.length - 1) { sceneLine++; sceneT = 0; return; }
+    sceneQueue.shift(); sceneLine = 0; sceneT = 0;
+    if (!sceneQueue.length) finishScenes();
+  }
+  function speakerColor(who) {
+    var cities = DR.Story.cities();
+    for (var i = 0; i < cities.length; i++) if (cities[i].boss === who) return cities[i].bossColor;
+    return who === 'WRENCH' ? '#ff9a5c' : '#ffd76a';
+  }
+  function wrapLines(ctx2, text, maxW) {
+    var words = text.split(' '), line = '', out = [];
+    for (var i = 0; i < words.length; i++) {
+      var test = line ? line + ' ' + words[i] : words[i];
+      if (ctx2.measureText(test).width > maxW && line) { out.push(line); line = words[i]; }
+      else line = test;
+    }
+    if (line) out.push(line);
+    return out;
+  }
+  function drawScene(ctx2, v) {
+    var SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    var sc = sceneQueue[0];
+    if (!sc) return;
+    // A darker sky, the road, and a car on it: Kai's red, or the speaker's.
+    var g = ctx2.createLinearGradient(0, 0, 0, v.H);
+    g.addColorStop(0, 'rgba(4,2,10,0.35)');
+    g.addColorStop(0.55, 'rgba(4,2,10,0.55)');
+    g.addColorStop(1, 'rgba(4,2,10,0.92)');
+    ctx2.fillStyle = g;
+    ctx2.fillRect(0, 0, v.W, v.H);
+    var line = sc.lines[sceneLine];
+    var carCol = line.who ? speakerColor(line.who) : '#c8121f';
+    var drift = Math.min(1, sceneT / 0.8);
+    drawProfileCar(ctx2, 250 + drift * 30, 640, 1.25, carCol);
+    if (sc.city === undefined && sceneLine >= 1) drawProfileCar(ctx2, 520, 640, 1.05, '#ffd76a');
+
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '700 18px ' + SANS;
+    ctx2.fillStyle = 'rgba(190,214,235,0.9)';
+    ctx2.fillText(sc.sub || '', v.W * 0.5, 140);
+    ctx2.fillStyle = '#ffd76a';
+    fitText(ctx2, sc.title, v.W * 0.5, 190, 640, 48, '800', SANS);
+
+    // The panel, with the lines so far: older ones dimmed, the newest
+    // fading in (a fade, never a flash).
+    var P = { x: 32, y: 730, w: 656, h: 420 };
+    ctx2.fillStyle = 'rgba(8,6,20,0.88)';
+    ctx2.fillRect(P.x, P.y, P.w, P.h);
+    ctx2.lineWidth = 1.5;
+    ctx2.strokeStyle = 'rgba(150,196,225,0.3)';
+    ctx2.strokeRect(P.x, P.y, P.w, P.h);
+    ctx2.textAlign = 'left';
+    var y = P.y + 44, first = Math.max(0, sceneLine - 2);
+    for (var i = first; i <= sceneLine; i++) {
+      var L = sc.lines[i], cur = i === sceneLine;
+      ctx2.globalAlpha = cur ? Math.min(1, sceneT / 0.35) : 0.45;
+      if (L.who) {
+        ctx2.font = '800 18px ' + SANS;
+        ctx2.fillStyle = speakerColor(L.who);
+        ctx2.fillText(L.who, P.x + 24, y);
+        y += 28;
+      }
+      ctx2.font = (L.who ? '600 23px ' : 'italic 600 23px ') + SANS;
+      ctx2.fillStyle = L.who ? '#eaf6ff' : 'rgba(214,232,246,0.95)';
+      var rows = wrapLines(ctx2, L.who ? '“' + L.text + '”' : L.text, P.w - 48);
+      for (var r = 0; r < rows.length; r++) { ctx2.fillText(rows[r], P.x + 24, y); y += 31; }
+      y += 16;
+    }
+    ctx2.globalAlpha = 1;
+    var last = sceneLine === sc.lines.length - 1 && sceneQueue.length === 1;
+    ctx2.textAlign = 'center';
+    if (last && sc.ending) {
+      ctx2.font = '800 40px ' + SANS;
+      ctx2.fillStyle = '#7dffb0';
+      ctx2.fillText('THE END', v.W * 0.5, 1210);
+    } else {
+      ctx2.font = '700 22px ' + SANS;
+      ctx2.fillStyle = '#ffd76a';
+      ctx2.fillText(last ? 'TAP TO CONTINUE ▸' : 'TAP FOR MORE ▸', v.W * 0.5, 1210);
+    }
+    ctx2.font = '600 16px ' + SANS;
+    ctx2.fillStyle = 'rgba(190,214,235,0.6)';
+    ctx2.fillText((sceneLine + 1) + ' / ' + sc.lines.length, v.W * 0.5, 1244);
+    ctx2.textAlign = 'left';
+    drawButton(ctx2, SCENE_SKIP_BTN, 'SKIP ▸▸');
+  }
+
+  // A car side-on, from rectangles and circles: low body, cabin, two
+  // wheels, a light at each end.
+  function drawProfileCar(ctx2, x, y, sc, col) {
+    ctx2.save();
+    ctx2.translate(x, y);
+    ctx2.scale(sc, sc);
+    ctx2.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx2.beginPath(); ctx2.ellipse(0, 26, 110, 10, 0, 0, Math.PI * 2); ctx2.fill();
+    ctx2.fillStyle = col;
+    ctx2.beginPath();
+    ctx2.moveTo(-100, 12); ctx2.lineTo(-96, -6); ctx2.lineTo(-40, -14); ctx2.lineTo(-10, -36);
+    ctx2.lineTo(44, -36); ctx2.lineTo(74, -12); ctx2.lineTo(102, -6); ctx2.lineTo(104, 12);
+    ctx2.closePath(); ctx2.fill();
+    ctx2.fillStyle = 'rgba(10,14,24,0.85)';
+    ctx2.beginPath(); ctx2.moveTo(-4, -31); ctx2.lineTo(40, -31); ctx2.lineTo(62, -13); ctx2.lineTo(-30, -13); ctx2.closePath(); ctx2.fill();
+    ctx2.fillStyle = '#111';
+    ctx2.beginPath(); ctx2.arc(-60, 14, 17, 0, Math.PI * 2); ctx2.fill();
+    ctx2.beginPath(); ctx2.arc(66, 14, 17, 0, Math.PI * 2); ctx2.fill();
+    ctx2.fillStyle = '#555';
+    ctx2.beginPath(); ctx2.arc(-60, 14, 7, 0, Math.PI * 2); ctx2.fill();
+    ctx2.beginPath(); ctx2.arc(66, 14, 7, 0, Math.PI * 2); ctx2.fill();
+    ctx2.fillStyle = '#fff4c8'; ctx2.fillRect(96, -4, 8, 6);
+    ctx2.fillStyle = '#ff3a3a'; ctx2.fillRect(-100, -4, 6, 6);
+    ctx2.restore();
   }
 
   // A time attack's own read-out: the target, and how much of it is left.
@@ -1984,7 +2332,7 @@
   function enterTitleItem(i) {
     var it = TITLE_ITEMS[i];
     if (it.id === 'quick') phase = 'modes';
-    else if (it.id === 'story') { phase = 'story'; storySel = DR.Story.currentCity(); }
+    else if (it.id === 'story') openStory();
     else if (it.id === 'garage') {
       garageReturn = 'title';
       garageSel = rosterIndexOf(DR.Save.selectedCar());
@@ -2049,16 +2397,22 @@
       }
     } else if (phase === 'story') {
       if (inBox(lx, ly, BACK_BTN)) { phase = 'title'; return; }
+      if (inBox(lx, ly, MAP_ENTER_BTN)) { visitCity(storySel); return; }
+      if (inBox(lx, ly, MAP_STORY_BTN)) { replayStory(); return; }
       for (i = 0; i < DR.Story.cities().length; i++) {
         if (inBox(lx, ly, storyRowBox(i))) {
-          if (storySel === i) enterCity(i);
+          if (storySel === i) visitCity(i);
           else storySel = i;
           return;
         }
       }
+    } else if (phase === 'scene') {
+      if (inBox(lx, ly, SCENE_SKIP_BTN)) { finishScenes(); return; }
+      sceneAdvance();
     } else if (phase === 'city') {
       if (inBox(lx, ly, BACK_BTN)) { phase = 'story'; return; }
       if (inBox(lx, ly, CITY_GARAGE_BTN)) { openGarage('city'); return; }
+      if (inBox(lx, ly, CITY_START_BTN)) { tryStoryEvent(storySel, citySel); return; }
       var evs = DR.Story.cities()[storySel].events;
       for (i = 0; i < evs.length; i++) {
         if (inBox(lx, ly, cityEventBox(i))) {
@@ -2099,6 +2453,38 @@
     }
   }
 
+  /* Into Story: the first time, a new career starts with the prologue. */
+  function openStory() {
+    storySel = DR.Story.currentCity();
+    var go = function () { phase = 'story'; storySel = DR.Story.currentCity(); };
+    if (!DR.Save.isUnlocked('scene:prologue')) {
+      DR.Save.unlock('scene:prologue');
+      showScenes([DR.Story.prologue()], go);
+    } else go();
+  }
+  // Into a city from the map: the first visit, its arrival scene plays.
+  function visitCity(ci) {
+    if (!DR.Story.cityUnlocked(ci)) return;
+    var key = 'scene:in:' + DR.Story.cities()[ci].id;
+    if (!DR.Save.isUnlocked(key)) {
+      DR.Save.unlock(key);
+      storySel = ci;
+      showScenes([DR.Story.arrivalScene(ci)], function () { enterCity(ci); });
+    } else enterCity(ci);
+  }
+  // Everything that's happened so far, in order: the prologue, and every
+  // city's scenes up to where you are.
+  function replayStory() {
+    var list = [DR.Story.prologue()], n = DR.Story.cities().length;
+    for (var i = 0; i < n; i++) {
+      var id = DR.Story.cities()[i].id;
+      if (!DR.Save.isUnlocked('scene:in:' + id)) break;      // only what you've seen
+      list.push(DR.Story.arrivalScene(i));
+      if (DR.Story.bossBeaten(i)) list.push(DR.Story.aftermathScene(i));
+    }
+    showScenes(list, function () { phase = 'story'; });
+  }
+
   function enterCity(ci) {
     if (!DR.Story.cityUnlocked(ci)) return;
     storySel = ci;
@@ -2123,14 +2509,21 @@
   }
 
   function leaveStoryResults() {
-    var ev = storyEvent;
+    var ev = storyEvent, first = storyResult && storyResult.firstClear;
     storyEvent = null; storyResult = null;
     // Beating a boss sends you to the map, where the next city has just
-    // opened; anything else goes back to the city you were in.
+    // opened; anything else goes back to the city you were in. The first
+    // time a boss falls, what they tell you plays first.
     var boss = ev && DR.Story.cities()[ev.city].events[ev.event].type === 'boss';
-    if (boss && DR.Story.bossBeaten(ev.city) && ev.city + 1 < DR.Story.cities().length) {
-      storySel = ev.city + 1;
+    var toMap = function () {
+      storySel = Math.min(ev.city + 1, DR.Story.cities().length - 1);
       phase = 'story';
+    };
+    if (boss && DR.Story.bossBeaten(ev.city)) {
+      if (first) {
+        DR.Save.unlock('scene:out:' + DR.Story.cities()[ev.city].id);
+        showScenes([DR.Story.aftermathScene(ev.city)], toMap);
+      } else toMap();
     } else {
       enterCity(ev ? ev.city : storySel);
     }
@@ -2669,7 +3062,9 @@
         var nc = DR.Story.cities().length;
         storySel = ((storySel + st) % nc + nc) % nc;
       }
-      if (confirm) enterCity(storySel);
+      if (confirm) visitCity(storySel);
+    } else if (phase === 'scene') {
+      if (confirm) sceneAdvance();
     } else if (phase === 'city') {
       var ne = DR.Story.cities()[storySel].events.length;
       if (st) citySel = ((citySel + st) % ne + ne) % ne;
@@ -2701,6 +3096,7 @@
     // frame, so a city's colours can never leak into Quick Play.
     var themeCity = -1;
     if (phase === 'city') themeCity = storySel;
+    else if (phase === 'scene' && sceneQueue[0] && sceneQueue[0].city !== undefined) themeCity = sceneQueue[0].city;
     else if (storyEvent && (phase === 'racing' || phase === 'done')) themeCity = storyEvent.city;
     DR.Road.setTheme(themeCity >= 0 ? DR.Story.themeFor(themeCity) : null);
 
@@ -2718,7 +3114,7 @@
     ctx.translate(sh.x, sh.y);
 
     if (phase === 'title' || phase === 'modes' || phase === 'select' || phase === 'city' ||
-        phase === 'story' || phase === 'garage' || phase === 'tutorial') {
+        phase === 'story' || phase === 'garage' || phase === 'tutorial' || phase === 'scene') {
       DR.Road.prepareTerrain(null);          // menus sit on the flat
       DR.Road.drawBackground(ctx, menuView());
       if (phase === 'title') drawTitle(ctx, v);
@@ -2727,6 +3123,7 @@
       else if (phase === 'garage') drawGarage(ctx, v);
       else if (phase === 'story') drawStory(ctx, v);
       else if (phase === 'city') drawCity(ctx, v);
+      else if (phase === 'scene') drawScene(ctx, v);
       else if (phase === 'tutorial') drawComingSoon(ctx, v, 'TUTORIAL', 'A guided first drift. Coming soon.');
       ctx.restore();
       return;
@@ -2898,6 +3295,10 @@
       if (kind === 'doneRetry') return DONE_RETRY_BTN;
       if (kind === 'doneContinue') return DONE_CONT_BTN;
       if (kind === 'reset') return RESET_BTN;
+      if (kind === 'mapEnter') return MAP_ENTER_BTN;
+      if (kind === 'mapStory') return MAP_STORY_BTN;
+      if (kind === 'cityStart') return CITY_START_BTN;
+      if (kind === 'sceneSkip') return SCENE_SKIP_BTN;
       if (kind === 'garageUpgrade') return garageUpgradeBtnBox(i);
       return null;
     },
@@ -2909,6 +3310,9 @@
     standings: function () { return standings; },
     toStory: function () { phase = 'story'; storySel = DR.Story.currentCity(); DR.Input.releaseAll(); DR.Input.clearTap(); },
     enterCity: enterCity,
+    openStory: openStory,
+    visitCity: visitCity,
+    scene: function () { return sceneQueue[0] ? { title: sceneQueue[0].title, line: sceneLine, lines: sceneQueue[0].lines.length, left: sceneQueue.length } : null; },
     startStoryEvent: startStoryEvent,
     storySel: function () { return storySel; },
     citySel: function () { return citySel; },

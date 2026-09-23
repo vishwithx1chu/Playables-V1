@@ -261,6 +261,19 @@ the slipstream, then try to pass. Hitting its back corner spins it.
 To test: Garage shows RATING top right; open a city to see READY or
 UPGRADE; in a race, boost into the back of a rival.
 
+**Story mode: Kai's Last Race.** Story mode now has a story and a map.
+Your older brother Kai died in the championship race against Apex; the
+league called it an accident, but his car was sabotaged. You rebuild his
+car and race city by city, each boss giving you a clue, until you beat
+Apex and the evidence gets him arrested. Short story cards play the first
+time you start, arrive in each city and beat each boss (always
+skippable; STORY SO FAR replays them). The city list is replaced by a
+drawn map of the ten cities joined by a road, and each city opens onto
+its own circuit with a pin for every event.
+
+To test it: START OVER on the title, then STORY. Read or skip the
+prologue, tap PORTSIDE twice, and pick a pin.
+
 ## Current state, before career mode: Milestone 2.5
 
 Four modes, picked from the screen the game opens on:

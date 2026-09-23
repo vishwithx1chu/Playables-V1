@@ -183,55 +183,222 @@
   var CITIES = [
     { id: 'portside', name: 'PORTSIDE', track: MAZE, boss: 'FENDER', bossColor: '#3fa9f5', bossArch: 'sport',
       reward: { car: 'harbormaster' }, crew: ['DECKHAND', 'BILGE', 'RUST'],
-      intro: 'Fog off the water, cranes in the dark. Fender runs the docks.',
+      intro: 'Where Kai started. Fender knows something.',
       spec: 'Your starter car is enough.',
       events: [{ type: 'race', need: 3 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
     { id: 'sundown', name: 'SUNDOWN STRIP', track: RING, boss: 'MIRAGE', bossColor: '#ffb347', bossArch: 'compact',
       reward: { cash: true }, crew: ['DUNE', 'SCORCH', 'HAZE'],
-      intro: 'Desert dusk and long straights. Mirage is never where you think.',
+      intro: 'Mirage sells what gets overheard. Wrench passed through here.',
       spec: 'Your starter car, driven well.',
       events: [{ type: 'race', need: 3 }, { type: 'race', need: 2 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
     { id: 'oldquarter', name: 'OLD QUARTER', track: UNDER, boss: 'CUTLASS', bossColor: '#ffcf6a', bossArch: 'compact',
       reward: { cash: true }, crew: ['COBBLE', 'LANTERN', 'ALLEY'],
-      intro: 'Cobbles and sodium lamps. Cutlass knows every corner blind.',
+      intro: 'Cutlass keeps the ledgers. Somebody paid for that job.',
       spec: 'Tier 1 on every upgrade.',
       events: [{ type: 'race', need: 3 }, { type: 'time', laps: 2 }, { type: 'time', laps: 3 }, { type: 'boss' }] },
     { id: 'coastal', name: 'COASTAL RUN', track: COAST, boss: 'RIPTIDE', bossColor: '#1de9b6', bossArch: 'sport',
       reward: { car: 'riptide' }, crew: ['SWELL', 'CURRENT', 'SPRAY'],
-      intro: 'Cliffs, ocean, and a road that never stops curving.',
+      intro: 'Riptide raced Kai more than anyone.',
       spec: 'Tier 1 everywhere, Engine and Tyres at tier 2.',
       events: [{ type: 'race', need: 2 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
     { id: 'steel', name: 'STEEL DISTRICT', track: GRAND, boss: 'FOUNDRY', bossColor: '#ff5a36', bossArch: 'muscle',
       reward: { car: 'foundry' }, crew: ['RIVET', 'SLAG', 'ANVIL'],
-      intro: 'Sparks and steam. Foundry drives like the furnaces never close.',
+      intro: 'Foundry builds Apex’s cars, and knew Wrench.',
       spec: 'Tier 2 on every upgrade.',
       events: [{ type: 'race', need: 2 }, { type: 'race', need: 1 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
     { id: 'downtown', name: 'NEON DOWNTOWN', track: MAZE, boss: 'VERTEX', bossColor: '#ff2fd8', bossArch: 'muscle',
       reward: { cash: true }, crew: ['PIXEL', 'STROBE', 'GRID'],
-      intro: 'A canyon of neon towers. Vertex owns every one of them.',
+      intro: 'Vertex runs the cameras. The footage was wiped.',
       spec: 'Tier 2 everywhere, or Foundry at tier 1.',
       events: [{ type: 'race', need: 2 }, { type: 'time', laps: 2 }, { type: 'time', laps: 3 }, { type: 'boss' }] },
     { id: 'highpass', name: 'HIGH PASS', track: RING, boss: 'GLACIER', bossColor: '#bfefff', bossArch: 'compact',
       reward: { car: 'glacier' }, crew: ['FROST', 'SUMMIT', 'THAW'],
-      intro: 'Mountain dusk, thin cold air. Glacier doesn’t slide. Ever.',
+      intro: 'Glacier was the marshal that night.',
       spec: 'A fully upgraded starter, or Foundry at tier 1-2.',
       events: [{ type: 'race', need: 2 }, { type: 'race', need: 1 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
     { id: 'underpass', name: 'THE UNDERPASS', track: UNDER, boss: 'UNDERTOW', bossColor: '#2a5cff', bossArch: 'sport',
       reward: { car: 'undertow' }, crew: ['DRAIN', 'ECHO', 'SLICK'],
-      intro: 'Wet concrete under the city. Undertow pulls you under.',
+      intro: 'Wrench is hiding down here.',
       spec: 'Foundry at tier 2, or another boss car upgraded.',
       events: [{ type: 'race', need: 1 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
     { id: 'skyline', name: 'SKYLINE AVE', track: COAST, boss: 'HALO', bossColor: '#ffd76a', bossArch: 'muscle',
       reward: { cash: true }, crew: ['SPIRE', 'BEACON', 'AURA'],
-      intro: 'The bridge, the tallest skyline, and Halo waiting at the top.',
+      intro: 'Halo has the commissioner’s ear.',
       spec: 'Foundry at tier 2 or better.',
       events: [{ type: 'race', need: 1 }, { type: 'race', need: 1 }, { type: 'time', laps: 2 }, { type: 'boss' }] },
     { id: 'circuit', name: 'THE CIRCUIT', track: FINALE, boss: 'APEX', bossColor: '#ffd76a', bossArch: 'sport',
       reward: { car: 'apex' }, crew: ['ACE', 'MAVERICK', 'LEGEND'],
-      intro: 'Every city, one lap. Apex is the one everyone measures themselves against.',
+      intro: 'Apex. The final. The truth.',
       spec: 'Foundry at tier 2, or any boss car well upgraded.',
       events: [{ type: 'race', need: 1 }, { type: 'time', laps: 3 }, { type: 'boss' }] }
   ];
+
+  /* ------------------------------ THE STORY ------------------------------
+     Kai's Last Race. Told in short cards between races — never a wall of
+     text, always skippable. Written for a general 13+ audience: what
+     happened to Kai is said plainly but never shown.
+
+     Each line is { who, text }. `who` empty is you, telling it; a name is
+     someone speaking (drawn in their colour). */
+  var PROLOGUE = {
+    title: 'KAI’S LAST RACE', sub: 'A NEW CAREER',
+    lines: [
+      { who: '', text: 'Three years ago, my brother Kai was the fastest driver the Circuit had ever seen.' },
+      { who: '', text: 'The night he raced Apex for the championship, his steering locked on the final corner. Kai never came home.' },
+      { who: '', text: 'The league called it an accident and closed the file. Then I found his car in a scrapyard. The steering had been cut. Clean. On purpose.' },
+      { who: '', text: 'I rebuilt it. The Nightrunner was Kai’s. Now it’s mine.' },
+      { who: '', text: 'Ten cities stand between me and Apex. I’m going to race every one of them, find out who did this, and make the whole league hear the truth.' }
+    ]
+  };
+
+  // Per city: where each event happens (one name per event, boss last),
+  // where the city sits on the map (0..1 across and down the map area),
+  // what's said on arriving, and what's learned after its boss falls.
+  var NARRATIVE = {
+    portside: {
+      places: ['THE DOCKS', 'CRANE ROAD', 'FENDER’S YARD'],
+      map: [0.16, 0.90],
+      arrive: [
+        { who: '', text: 'Portside. Kai started here, racing the docks for pocket money.' },
+        { who: 'FENDER', text: 'Kai’s little brother? Let’s see if it runs in the family.' }
+      ],
+      after: [
+        { who: 'FENDER', text: 'You drive like him. Listen — the week before the final, Kai’s car came through my docks for a refit.' },
+        { who: 'FENDER', text: 'A mechanic called Wrench did the work. Paid in cash. He was gone the next morning.' },
+        { who: 'FENDER', text: 'Take the Harbormaster. Find Wrench.' }
+      ]
+    },
+    sundown: {
+      places: ['MOTEL STRIP', 'DRY LAKE', 'CANYON RUN', 'MIRAGE MILE'],
+      map: [0.46, 0.84],
+      arrive: [
+        { who: '', text: 'Sundown Strip. Mirage races for money, and sells whatever gets overheard.' },
+        { who: 'MIRAGE', text: 'Information costs. Beat me and it’s free.' }
+      ],
+      after: [
+        { who: 'MIRAGE', text: 'Wrench? Came through here flashing a roll of cash, bragging about one big job.' },
+        { who: 'MIRAGE', text: 'Last I heard, he was headed for the Old Quarter.' }
+      ]
+    },
+    oldquarter: {
+      places: ['MARKET STREETS', 'CLOCK TOWER', 'CATHEDRAL LOOP', 'CUTLASS’S GARAGE'],
+      map: [0.80, 0.88],
+      arrive: [
+        { who: '', text: 'The Old Quarter. Every garage here keeps a ledger, and Cutlass owns most of the garages.' },
+        { who: 'CUTLASS', text: 'You want to read my books? Earn it.' }
+      ],
+      after: [
+        { who: 'CUTLASS', text: 'Here. An order for steering parts, for Kai’s car, the week before the final.' },
+        { who: '', text: 'Paid from an account called APEX RACING.' },
+        { who: '', text: 'Apex paid for it. Now I need proof that will stand up in front of the league.' }
+      ]
+    },
+    coastal: {
+      places: ['LIGHTHOUSE', 'CLIFF ROAD', 'RIPTIDE POINT'],
+      map: [0.84, 0.66],
+      arrive: [
+        { who: '', text: 'The cliff road. Riptide raced Kai more times than anyone alive.' },
+        { who: 'RIPTIDE', text: 'Kai never once beat me here. Let’s see if you can.' }
+      ],
+      after: [
+        { who: 'RIPTIDE', text: 'Kai was the only driver Apex was ever afraid of. After that final, Apex had everything.' },
+        { who: 'RIPTIDE', text: 'Take my car. Beat Apex in it.' }
+      ]
+    },
+    steel: {
+      places: ['RAIL YARD', 'FURNACE ROW', 'SMELTER GATE', 'FOUNDRY’S SHOP'],
+      map: [0.52, 0.62],
+      arrive: [
+        { who: '', text: 'Steel District. Foundry’s shop builds half the cars in the league, Apex’s included.' },
+        { who: 'FOUNDRY', text: 'I build for champions. Show me you’re worth a spanner.' }
+      ],
+      after: [
+        { who: 'FOUNDRY', text: 'Wrench worked here once. After the final, Apex hired him away. Gave him a job in the Underpass, out of sight.' },
+        { who: 'FOUNDRY', text: 'Take my car. It’s the best thing I ever built. Go and get him.' }
+      ]
+    },
+    downtown: {
+      places: ['CAMERA TOWER', 'NEON ARCADE', 'PLAZA RUN', 'VERTEX TOWER'],
+      map: [0.18, 0.58],
+      arrive: [
+        { who: '', text: 'Neon Downtown. Vertex runs the league’s cameras. Every race is recorded.' },
+        { who: 'VERTEX', text: 'Everybody wants to see a replay. Nobody wants to race me for it.' }
+      ],
+      after: [
+        { who: 'VERTEX', text: 'The footage of Kai’s last race was wiped the next morning. On the champion’s orders.' },
+        { who: 'VERTEX', text: 'I kept a copy. It shows someone at his car on the grid, before the start.' }
+      ]
+    },
+    highpass: {
+      places: ['SWITCHBACKS', 'SUMMIT STATION', 'ICE BRIDGE', 'GLACIER PEAK'],
+      map: [0.20, 0.34],
+      arrive: [
+        { who: '', text: 'High Pass. Glacier was the race marshal the night Kai raced Apex.' },
+        { who: 'GLACIER', text: 'I know why you’re here. Race first. Talk after.' }
+      ],
+      after: [
+        { who: 'GLACIER', text: 'I saw Wrench at Kai’s car on the grid. I said nothing. I was scared of what Apex would do.' },
+        { who: 'GLACIER', text: 'I’ll say it now. On the record. Take my car, and finish this.' }
+      ]
+    },
+    underpass: {
+      places: ['STORM DRAINS', 'TUNNEL NINE', 'UNDERTOW’S DEN'],
+      map: [0.52, 0.40],
+      arrive: [
+        { who: '', text: 'The Underpass. Wet concrete, no cameras. Wrench is hiding down here, working for Undertow.' },
+        { who: 'UNDERTOW', text: 'Nobody comes down here looking for a race. You came looking for trouble.' }
+      ],
+      after: [
+        { who: 'WRENCH', text: 'Apex told me it would only slow him down. I never thought... I’m sorry.' },
+        { who: 'WRENCH', text: 'I’ll tell the league everything. But Apex has to lose first, in front of everyone. Or no one will listen.' },
+        { who: 'UNDERTOW', text: 'Take my car. You’ll need it where you’re going.' }
+      ]
+    },
+    skyline: {
+      places: ['BRIDGE DECK', 'ROOFTOP RING', 'OBSERVATION RUN', 'HALO SPIRE'],
+      map: [0.82, 0.30],
+      arrive: [
+        { who: '', text: 'Skyline Avenue. Halo drives for the league commissioner, and has the commissioner’s ear.' },
+        { who: 'HALO', text: 'You want the commissioner to listen? Then give the commissioner a reason.' }
+      ],
+      after: [
+        { who: 'HALO', text: 'The commissioner will be at the final. Win it, and your evidence goes up on every screen in the Circuit.' },
+        { who: 'HALO', text: 'Lose, and it goes nowhere. Don’t lose.' }
+      ]
+    },
+    circuit: {
+      places: ['THE GRID', 'PIT LANE', 'THE FINAL'],
+      map: [0.50, 0.10],
+      arrive: [
+        { who: '', text: 'The Circuit. One lap built from every city. Apex is on the grid, in the spot where Kai’s name used to be.' },
+        { who: 'APEX', text: 'Your brother was good. Not good enough. Neither are you.' }
+      ],
+      after: [
+        { who: '', text: 'I cross the line first. The crowd goes quiet as every screen in the Circuit changes.' },
+        { who: '', text: 'The footage from the grid. Wrench’s confession. The ledger from the Old Quarter.' },
+        { who: '', text: 'The league police are waiting in Apex’s pit. Apex leaves in handcuffs, past everyone who ever cheered for him.' },
+        { who: '', text: 'Kai’s name goes back to the top of the board, where it always belonged.' },
+        { who: '', text: 'They hand me the keys to Apex’s car. I’ll race it. But the Nightrunner stays with me. It was Kai’s. Now it’s ours.' }
+      ]
+    }
+  };
+
+  function narrative(ci) { return NARRATIVE[CITIES[ci].id]; }
+  function placeName(ci, ei) {
+    var n = narrative(ci);
+    return (n && n.places[ei]) || ('EVENT ' + (ei + 1));
+  }
+  function mapPos(ci) { return narrative(ci).map; }
+  function arrivalScene(ci) {
+    var c = CITIES[ci];
+    return { title: c.name, sub: 'CITY ' + (ci + 1) + ' OF ' + CITIES.length, city: ci, lines: narrative(ci).arrive };
+  }
+  function aftermathScene(ci) {
+    var c = CITIES[ci];
+    var last = ci === CITIES.length - 1;
+    return { title: last ? 'THE TRUTH' : c.boss + ' IS BEATEN', sub: c.name, city: ci,
+             lines: narrative(ci).after, ending: last };
+  }
 
   // ---- The difficulty curve, in one place ------------------------------
   /* Each city asks for a car of a certain speed. Written as a table, not a
@@ -439,6 +606,8 @@
     bossBeaten: bossBeaten, cleared: cleared, eventLocked: eventLocked,
     currentCity: currentCity, setup: setup, resolve: resolve, themeFor: themeFor,
     eventId: eventId, bossIndex: bossIndex, ratingNeed: ratingNeed,
+    prologue: function () { return PROLOGUE; }, arrivalScene: arrivalScene,
+    aftermathScene: aftermathScene, placeName: placeName, mapPos: mapPos,
     trackUnlocked: trackUnlocked, trackLockText: trackLockText, trackCity: trackCity,
     // Exposed so tests and the balance pass can read the curve directly.
     curve: { crewSkill: crewSkill, bossSkill: bossSkill, timeFactor: timeFactor }

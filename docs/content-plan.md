@@ -150,22 +150,55 @@ hill.
   distance is unchanged on every screen shape.
 - Cost: about 0.04ms a frame.
 
-## The story
+## The story: Kai's Last Race
 
-**You start with nothing but a car and a reputation to make.** The Circuit
-is an underground night-racing league that runs across ten cities. Each city
-is run by a boss — a name, a car, a signature line through their home track —
-and the only way through is to out-drive their crew, then beat them
-outright. Win, and the city opens the way to the next. Lose enough races and
-you're just out a night's earnings; there's always another shot.
+**A new career, and a revenge story.** Kai, your older brother, was the
+fastest driver the Circuit had ever seen. The night he raced Apex for the
+championship, his steering locked on the final corner and he never came
+home. The league called it an accident. You find his car in a scrapyard
+with the steering cut on purpose, rebuild it (the Nightrunner, the car
+you start with, was Kai's), and set out to race your way to Apex and
+prove what happened.
 
-The championship ends in **The Circuit** itself — a finale lap built from
-pieces of every city before it — against **Apex**, the racer everyone else
-in the league measures themselves against. Beating Apex doesn't just end the
-game: it's the only way to unlock Apex's own car, which is never for sale.
+Written for a general 13+ audience: what happened to Kai is said plainly
+but never shown. The story is told in short cards (`drawScene` in
+`src/game.js`, text in `src/story.js`), one line per tap, always
+skippable, drawn over the city it happens in.
 
-That's the whole story — enough to give ten cities and ten bosses a reason to
-exist, without a wall of text between the player and the wheel.
+**When the cards play**
+- Going into Story for the first time: the prologue ("A NEW CAREER").
+- Entering a city for the first time: its arrival (who runs it, and a line
+  from its boss).
+- Beating a boss for the first time: what they tell you, then the map
+  with the next city open.
+- STORY SO FAR on the map replays everything you've seen, in order.
+
+**The trail, city by city**
+
+| City | What you learn |
+|---|---|
+| Portside | Kai's car went through the docks for a refit; a mechanic called Wrench did it, paid in cash |
+| Sundown Strip | Wrench was flashing cash, headed for the Old Quarter |
+| Old Quarter | A ledger: steering parts for Kai's car, paid by APEX RACING |
+| Coastal Run | Kai was the only driver Apex feared |
+| Steel District | Apex hired Wrench after the final and hid him in the Underpass |
+| Neon Downtown | The race footage was wiped on the champion's orders, but Vertex kept a copy showing someone at Kai's car |
+| High Pass | Glacier, the race marshal, saw Wrench at Kai's car and will say so on the record |
+| The Underpass | Wrench confesses: Apex ordered it. He'll testify if Apex loses in front of everyone |
+| Skyline Ave | Win the final and the evidence goes up on every screen |
+| The Circuit | You win; the evidence plays; Apex is arrested; Kai's name goes back to the top. THE END |
+
+**The map.** A drawn map, not a list: the ten cities on a dark sheet with
+a coastline and mountains, joined in order by the road between them.
+Driven stretches glow, locked ones are dashed; locked cities show a
+padlock, beaten ones a tick, and YOU marks where you are. Tap a city to
+see it underneath (boss, progress, prize, rating needed), tap again or
+ENTER CITY to go in. Arrow keys and space work too.
+
+**The city view.** The city's own circuit drawn large in its colours,
+with a pin at each event's named place (THE DOCKS, CRANE ROAD, FENDER'S
+YARD...): a flag for a race, a stopwatch for a time attack, a crown for
+the boss. Tap a pin to see what it asks and pays; tap again or START.
 
 ## The cars
 
