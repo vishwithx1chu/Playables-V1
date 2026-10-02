@@ -1,0 +1,37 @@
+/* Drift Run — Milestone 1
+   The page is only a frame for the canvas: no scrolling, no zooming, no text
+   selection, so a thumb held on the glass never does anything but steer. */
+
+:root { color-scheme: dark; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: #05040a;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  touch-action: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
+/* Focusable, so a click can hand it the keyboard inside an iframe — but with
+   no focus ring, because it is a game and not a form field. */
+#stage:focus { outline: none; }
+
+#stage {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}

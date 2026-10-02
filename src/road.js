@@ -1,0 +1,2271 @@
+/* road.js — a real circuit in world space, and the camera that follows it.
+   The track is no longer a strip that slides sideways: it is a line that
+   genuinely turns, built by integrating curvature along its length. That is
+   what makes a 180 degree hairpin possible at all. */
+
+(function (DR) {
+  'use strict';
+
+  var BASE_HW = 226;         // straights: road is 452 units wide
+  var CORNER_EXTRA = 52;     // corners widen by up to this much per side
+  var TIGHTEST_K = 1 / 600;  // curvature of the tightest corner on the track
+  var WIDEN_WIN = 30;        // smoothing window, in samples either side (240 units)
+  var WALL_OFF = 6;          // barrier face, just outside the painted edge
+  var WALL_H   = 66;         // and this tall — comfortably over the car's roofline
+  var HALF_W = BASE_HW;      // kept for anything asking for the nominal width
+  var SAMPLE = 8;            // world units between stored centreline points
+
+  /* ---------------------------- THE CAMERA ----------------------------
+     Sits CAM_BACK behind the car, turned to face the way the car is going,
+     high enough that the car lands on CAR_Y. Lower CAM_BACK for a more
+     dramatic angle, raise it to flatten back toward top-down. */
+  // Tilt is really HORIZON_Y: the further down the screen the horizon sits,
+  // the more level — and so the lower — the camera is. About 38 degrees now,
+  // down from 47. Going much lower costs forward visibility fast, because a
+  // level camera squashes the road ahead into a thin band.
+  // Useful identity: the car sits FOCAL x tan(tilt) below the horizon. So at a
+  // fixed low tilt, a longer FOCAL buys back sky, a bigger car and a wider
+  // road all at once — it only costs field of view to the sides.
+  var HORIZON_Y = 574;       // 32 degree tilt, zoomed right in
+  var CAR_Y     = 880;
+  var CAM_BACK  = 280;       // right up behind the car
+  var FOCAL     = 489;
+  // Nothing closer than this can be drawn. It has to be SMALL: sideways-on at
+  // the edge of the road, the tarmac beside the camera runs a long way back
+  // past it, and a near plane set generously just clipped that away and left
+  // the road looking like it stopped a car's length behind you.
+  var NEAR      = 34;
+  var LOOKAHEAD = 2600;      // world units of road drawn ahead of the car
+  var K         = (CAR_Y - HORIZON_Y) * CAM_BACK;
+  var SC_CAR    = FOCAL / CAM_BACK;
+  /* -------------------------------------------------------------------- */
+
+  var CHEVRON_LEAD = 1100;
+  var HAIRPIN_LEAD = 1595;
+
+  /* ----------------------------- THE TRACKS -----------------------------
+     Three layouts in the character of the real circuit archetypes: one fast
+     and flowing, one tight and technical, one balanced. Not traced from any
+     particular circuit — real ones are full of corners far tighter than this
+     car can physically carve, so a faithful copy would simply be undriveable.
+
+     Two rules every layout obeys: no corner radius anywhere near MIN_RADIUS
+     (504, the tightest circle the car can hold), and the left and right
+     degrees cancel exactly, so a lap comes back to the heading it started on
+     and the thing drives like a circuit rather than a spiral. */
+  var TRACKS = [
+    { name: 'VELOCITY RING', blurb: 'Long straights, fast sweepers', tag: 'FAST',
+      targetSecs: 25, pace: 869, picks: 4, hills: 135, lap: [
+      { kind:'str', len:1600 },
+      { kind:'turn', dir: 1, r:1000, deg: 90 },
+      { kind:'str', len:1300 },
+      { kind:'turn', dir:-1, r:1100, deg: 60 },
+      { kind:'str', len: 900 },
+      { kind:'turn', dir: 1, r: 640, deg:170, hairpin:true },
+      { kind:'str', len:1200 },
+      { kind:'turn', dir:-1, r:1000, deg: 60 },
+      { kind:'str', len: 800 },
+      { kind:'turn', dir: 1, r: 950, deg: 90 },
+      { kind:'str', len:1100 },
+      { kind:'turn', dir:-1, r: 900, deg: 55 },
+      { kind:'turn', dir: 1, r:1050, deg: 55 },
+      { kind:'turn', dir: 1, r: 760, deg: 45 },
+      { kind:'turn', dir:-1, r: 760, deg: 45 },
+      { kind:'str', len: 900 },
+      { kind:'turn', dir: 1, r: 980, deg: 90 },
+      { kind:'str', len: 800 },
+      { kind:'turn', dir:-1, r: 950, deg: 50 },
+      { kind:'str', len: 700 },
+      { kind:'turn', dir: 1, r:1000, deg: 90 },
+      { kind:'str', len:1000 }
+    ]},
+    { name: 'HARBOUR MAZE', blurb: 'Barely a straight on it', tag: 'TECHNICAL',
+      targetSecs: 32, pace: 858, picks: 5, hills: 60, lap: [
+      { kind:'str', len: 400 },
+      { kind:'turn', dir: 1, r: 640, deg: 90 },
+      { kind:'str', len: 250 },
+      { kind:'turn', dir:-1, r: 620, deg: 60 },
+      { kind:'str', len: 200 },
+      { kind:'turn', dir: 1, r: 600, deg:170, hairpin:true },
+      { kind:'str', len: 300 },
+      { kind:'turn', dir: 1, r: 680, deg: 55 },
+      { kind:'turn', dir:-1, r: 680, deg: 55 },
+      { kind:'str', len: 220 },
+      { kind:'turn', dir: 1, r: 620, deg: 55 },
+      { kind:'str', len: 260 },
+      { kind:'turn', dir: 1, r: 660, deg: 50 },
+      { kind:'turn', dir:-1, r: 660, deg: 50 },
+      { kind:'turn', dir: 1, r: 660, deg: 50 },
+      { kind:'str', len: 240 },
+      { kind:'turn', dir:-1, r: 700, deg: 45 },
+      { kind:'str', len: 280 },
+      { kind:'turn', dir: 1, r: 640, deg: 60 },
+      { kind:'str', len: 200 },
+      { kind:'turn', dir:-1, r: 620, deg: 55 },
+      { kind:'turn', dir: 1, r: 620, deg: 55 },
+      { kind:'str', len: 300 },
+      { kind:'turn', dir: 1, r: 700, deg: 40 },
+      { kind:'str', len: 260 },
+      { kind:'turn', dir:-1, r: 680, deg: 40 },
+      { kind:'str', len: 240 },
+      { kind:'turn', dir: 1, r: 660, deg: 40 },
+      { kind:'str', len: 420 }
+    ]},
+    { name: 'GRAND CIRCUIT', blurb: 'Four big corners, hairpin, esses', tag: 'BALANCED',
+      targetSecs: 40, pace: 868, picks: 6, hills: 105, lap: [
+      { kind:'str', len: 900 },
+      { kind:'turn', dir: 1, r: 820, deg: 90 },
+      { kind:'str', len: 500 },
+      { kind:'turn', dir:-1, r: 700, deg: 60 },
+      { kind:'str', len: 350 },
+      { kind:'turn', dir: 1, r: 620, deg:175, hairpin:true },
+      { kind:'str', len: 600 },
+      { kind:'turn', dir:-1, r: 760, deg: 60 },
+      { kind:'str', len: 400 },
+      { kind:'turn', dir: 1, r: 880, deg: 90 },
+      { kind:'str', len: 550 },
+      { kind:'turn', dir: 1, r: 660, deg: 55 },
+      { kind:'turn', dir:-1, r: 660, deg: 55 },
+      { kind:'turn', dir: 1, r: 660, deg: 55 },
+      { kind:'str', len: 350 },
+      { kind:'turn', dir:-1, r: 720, deg: 55 },
+      { kind:'str', len: 500 },
+      { kind:'turn', dir: 1, r: 900, deg: 90 },
+      { kind:'str', len: 450 },
+      { kind:'turn', dir:-1, r: 700, deg: 55 },
+      { kind:'turn', dir: 1, r: 840, deg: 90 },
+      { kind:'str', len: 600 },
+      { kind:'turn', dir: 1, r: 700, deg: 50 },
+      { kind:'turn', dir:-1, r: 750, deg: 50 },
+      { kind:'str', len: 500 }
+    ]},
+    // Story circuits (Phase 7). Each is unlocked for Quick Play once Story
+    // mode reaches the first city that races on it (see src/story.js).
+    { name: 'COASTAL RUN', blurb: 'Long cliffside sweepers', tag: 'FLOWING',
+      targetSecs: 30, pace: 865, picks: 5, hills: 170, lap: [
+      { kind:'str', len:1200 },
+      { kind:'turn', dir: 1, r:1100, deg: 70 },
+      { kind:'str', len: 500 },
+      { kind:'turn', dir:-1, r:1200, deg: 50 },
+      { kind:'turn', dir: 1, r:1000, deg: 80 },
+      { kind:'str', len: 700 },
+      { kind:'turn', dir: 1, r: 900, deg:120 },
+      { kind:'str', len: 400 },
+      { kind:'turn', dir:-1, r:1000, deg: 60 },
+      { kind:'turn', dir:-1, r:1100, deg: 40 },
+      { kind:'str', len: 600 },
+      { kind:'turn', dir: 1, r: 950, deg: 90 },
+      { kind:'str', len: 300 },
+      { kind:'turn', dir: 1, r:1200, deg: 60 },
+      { kind:'turn', dir:-1, r: 900, deg: 50 },
+      { kind:'str', len: 800 },
+      { kind:'turn', dir: 1, r:1000, deg:140 },
+      { kind:'str', len: 500 },
+      { kind:'turn', dir:-1, r:1100, deg: 35 },
+      { kind:'turn', dir: 1, r:1100, deg: 35 },
+      { kind:'str', len: 400 }
+    ]},
+    { name: 'UNDERPASS', blurb: 'City blocks and a hairpin', tag: 'TIGHT',
+      targetSecs: 30, pace: 858, picks: 5, hills: 50, lap: [
+      { kind:'str', len: 500 },
+      { kind:'turn', dir: 1, r: 620, deg: 90 },
+      { kind:'str', len: 350 },
+      { kind:'turn', dir:-1, r: 600, deg: 90 },
+      { kind:'str', len: 300 },
+      { kind:'turn', dir: 1, r: 620, deg: 90 },
+      { kind:'str', len: 250 },
+      { kind:'turn', dir: 1, r: 640, deg: 90 },
+      { kind:'str', len: 400 },
+      { kind:'turn', dir:-1, r: 620, deg: 60 },
+      { kind:'turn', dir: 1, r: 620, deg: 70 },
+      { kind:'str', len: 300 },
+      { kind:'turn', dir: 1, r: 600, deg:170, hairpin:true },
+      { kind:'str', len: 450 },
+      { kind:'turn', dir:-1, r: 650, deg: 90 },
+      { kind:'str', len: 250 },
+      { kind:'turn', dir: 1, r: 640, deg: 90 },
+      { kind:'str', len: 300 },
+      { kind:'turn', dir: 1, r: 660, deg: 45 },
+      { kind:'turn', dir:-1, r: 660, deg: 45 },
+      { kind:'str', len: 750 }
+    ]},
+    // The finale: a piece of every circuit before it, in the order the
+    // story visits them — a fast sweeper, maze esses, the hairpin, cliff
+    // curves, city blocks, and the ring's flick to finish.
+    { name: 'THE CIRCUIT', blurb: 'A piece of every city', tag: 'FINALE',
+      targetSecs: 45, pace: 865, picks: 6, hills: 150, lap: [
+      { kind:'str', len:1300 },
+      { kind:'turn', dir: 1, r:1000, deg: 90 },
+      { kind:'str', len: 900 },
+      { kind:'turn', dir:-1, r:1100, deg: 60 },
+      { kind:'str', len: 500 },
+      { kind:'turn', dir:-1, r: 640, deg: 60 },
+      { kind:'turn', dir: 1, r: 640, deg: 60 },
+      { kind:'turn', dir:-1, r: 640, deg: 60 },
+      { kind:'str', len: 400 },
+      { kind:'turn', dir: 1, r: 620, deg:170, hairpin:true },
+      { kind:'str', len: 800 },
+      { kind:'turn', dir:-1, r:1200, deg: 50 },
+      { kind:'turn', dir: 1, r:1000, deg: 80 },
+      { kind:'str', len: 600 },
+      { kind:'turn', dir: 1, r: 620, deg: 90 },
+      { kind:'str', len: 300 },
+      { kind:'turn', dir:-1, r: 600, deg: 90 },
+      { kind:'str', len: 300 },
+      { kind:'turn', dir: 1, r: 620, deg: 90 },
+      { kind:'str', len: 700 },
+      { kind:'turn', dir:-1, r: 760, deg: 45 },
+      { kind:'turn', dir: 1, r: 760, deg: 45 },
+      { kind:'str', len: 600 },
+      { kind:'turn', dir: 1, r: 900, deg:100 },
+      { kind:'str', len: 800 }
+    ]}
+  ];
+
+  /* A lap that comes back to its starting heading still does not come back to
+     its starting POINT, which is why the maps looked like rally stages rather
+     than circuits. Closing it is a two-unknown problem: walk the lap, measure
+     how far the end misses the start, then stretch or shrink the straights
+     until the miss cancels — spread across EVERY straight, in the smallest
+     change that does the job, so the layout keeps its character.
+
+     The same pass also aims for a target LENGTH, because a lap is supposed to
+     take a set number of seconds. Length pulls hard in the early passes and
+     fades out, so the last passes are free to concentrate on shutting the
+     loop; landing a hair off the target time beats leaving a visible gap.
+
+     The final step is a uniform scale onto the exact target. Scaling a closed
+     loop leaves it closed, so this costs nothing — but it scales the corner
+     radii too, which is why the result is checked against the car's tightest
+     possible circle afterwards. Solved once per track and cached. */
+  /* `pace` is how many world units a clean lap covers per second — measured
+     from a real driven lap, not guessed. targetSecs x pace is the length the
+     solver aims for, which is how "this circuit should take 25 seconds" turns
+     into an actual circuit. */
+  var _closed = {};
+  function closedLap(t) {
+    if (_closed[t]) return _closed[t];
+    var def = TRACKS[t].lap, i;
+    var targetLen = TRACKS[t].targetSecs ? TRACKS[t].targetSecs * TRACKS[t].pace : 0;
+
+    function walk(lens, radii) {
+      var h = 0, x = 0, y = 0, straights = [], STEP = 8;
+      for (var j = 0; j < def.length; j++) {
+        var seg = def[j];
+        if (seg.kind === 'str') {
+          straights.push({ i: j, s: Math.sin(h), c: Math.cos(h) });
+          x += Math.sin(h) * lens[j]; y += Math.cos(h) * lens[j];
+        } else {
+          var sg = radii ? { kind: 'turn', dir: seg.dir, r: radii[j], deg: seg.deg } : seg;
+          var total = segLength(sg);
+          for (var u = 0; u < total; u += STEP) {
+            var k = segCurvature(sg, u + STEP * 0.5);
+            h += k * STEP * 0.5;
+            x += Math.sin(h) * STEP; y += Math.cos(h) * STEP;
+            h += k * STEP * 0.5;
+          }
+        }
+      }
+      return { x: x, y: y, straights: straights };
+    }
+
+    var lens = [];
+    for (i = 0; i < def.length; i++) lens[i] = def[i].kind === 'str' ? def[i].len : 0;
+
+    var turnLen = 0;
+    for (i = 0; i < def.length; i++) if (def[i].kind === 'turn') turnLen += segLength(def[i]);
+
+    var PASSES = 40;
+    for (var pass = 0; pass < PASSES; pass++) {
+      var anneal = Math.max(0, 1 - pass / (PASSES * 0.6));
+      if (targetLen && anneal > 0) {
+        var straightNow = 0;
+        for (i = 0; i < lens.length; i++) straightNow += lens[i];
+        var want = targetLen - turnLen;
+        if (straightNow > 1 && want > 0) {
+          var kk = 1 + (want / straightNow - 1) * anneal;
+          for (i = 0; i < lens.length; i++) {
+            if (def[i].kind === 'str') lens[i] = Math.max(130, lens[i] * kk);
+          }
+        }
+      }
+
+      var w = walk(lens);
+      if (Math.sqrt(w.x * w.x + w.y * w.y) < 0.5) break;
+      var ss = 0, sc = 0, cc = 0, A;
+      for (i = 0; i < w.straights.length; i++) {
+        A = w.straights[i]; ss += A.s * A.s; sc += A.s * A.c; cc += A.c * A.c;
+      }
+      var det = ss * cc - sc * sc;
+      if (Math.abs(det) < 1e-6) break;
+      var u2 = (-w.x * cc + w.y * sc) / det;
+      var v2 = (-w.y * ss + w.x * sc) / det;
+      for (i = 0; i < w.straights.length; i++) {
+        A = w.straights[i];
+        lens[A.i] = Math.max(130, lens[A.i] + A.s * u2 + A.c * v2);
+      }
+    }
+
+    var out = [];
+    for (i = 0; i < def.length; i++) {
+      out[i] = def[i].kind === 'str'
+        ? { kind: 'str', len: lens[i] }
+        : { kind: 'turn', dir: def[i].dir, r: def[i].r, deg: def[i].deg, hairpin: !!def[i].hairpin };
+    }
+
+    if (targetLen) {
+      var now = 0;
+      for (i = 0; i < out.length; i++) now += segLength(out[i]);
+      var s2 = targetLen / now;
+      for (i = 0; i < out.length; i++) {
+        if (out[i].kind === 'str') out[i].len *= s2; else out[i].r *= s2;
+      }
+    }
+
+    _closed[t] = out;
+    return out;
+  }
+
+  var curTrack = 2;
+  function LAP() { return closedLap(curTrack); }
+  function trackList() { return TRACKS; }
+  function currentTrack() { return curTrack; }
+  function setTrack(i) {
+    curTrack = Math.max(0, Math.min(TRACKS.length - 1, i | 0));
+    _lapLen = 0;
+    reset();
+  }
+
+  var INTRO_LEN = 1100;      // run-up before the start line
+
+  // One lap is the whole LAP list once. Computed on demand, then remembered.
+  var _lapLen = 0;
+  function lapLength() {
+    if (!_lapLen) { var L = LAP(); for (var i = 0; i < L.length; i++) _lapLen += segLength(L[i]); }
+    return _lapLen;
+  }
+
+  // One lap's shape, walked once and cached, for the minimap. Normalised into
+  // a unit box with the arc length kept alongside so a car can be placed on it.
+  var _outline = {};
+  function lapOutline(which) {
+    var t = (which === undefined) ? curTrack : which;
+    if (_outline[t]) return _outline[t];
+    var lapDef = closedLap(t);
+    var pts = [], x = 0, y = 0, h = 0, s = 0, STEP = 30;
+    for (var i = 0; i < lapDef.length; i++) {
+      var seg = lapDef[i], len = segLength(seg);
+      // NOT `t`: that is the track index this result gets cached under, and
+      // reusing it here quietly cached every outline under a distance instead,
+      // so the minimap rebuilt the whole lap on every single frame.
+      for (var u = 0; u < len; u += STEP) {
+        var k = segCurvature(seg, u + STEP * 0.5);
+        h += k * STEP * 0.5;
+        x += Math.sin(h) * STEP; y += Math.cos(h) * STEP;
+        h += k * STEP * 0.5;
+        s += STEP;
+        pts.push({ x: x, y: y, s: s });
+      }
+    }
+    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, j;
+    for (j = 0; j < pts.length; j++) {
+      if (pts[j].x < minX) minX = pts[j].x;
+      if (pts[j].x > maxX) maxX = pts[j].x;
+      if (pts[j].y < minY) minY = pts[j].y;
+      if (pts[j].y > maxY) maxY = pts[j].y;
+    }
+    var span = Math.max(maxX - minX, maxY - minY) || 1;
+    var total = s;
+    for (j = 0; j < pts.length; j++) {
+      pts[j].nx = (pts[j].x - (minX + maxX) / 2) / span + 0.5;
+      pts[j].ny = (pts[j].y - (minY + maxY) / 2) / span + 0.5;
+      pts[j].f = pts[j].s / total;
+    }
+    _outline[t] = pts;
+    return pts;
+  }
+
+  /* Boost pickups. There is now a fixed, hand-placed set per circuit — four
+     plus a big one on the Ring, five plus one on the Maze, six plus one on the
+     Grand — and the same set comes round every lap from lap one. Scattering
+     them randomly made boost something that happened TO you; a fixed set makes
+     their positions part of the racing line, so learning where they are is
+     worth something. */
+  var PICK_SMALL = 0.20, PICK_BIG = 0.55;
+  var picks = [], pickGenLap = 0, pickIdx = 0;
+
+  // Where each corner and straight sits along one lap, measured in arc length
+  // from the start line. Built once per track.
+  var _segTable = {};
+  function lapSegTable(t) {
+    if (_segTable[t]) return _segTable[t];
+    var L = closedLap(t), tab = [], s = 0;
+    for (var i = 0; i < L.length; i++) {
+      var len = segLength(L[i]);
+      tab.push({ s0: s, s1: s + len, len: len,
+                 turn: L[i].kind === 'turn', dir: L[i].dir || 0,
+                 r: L[i].r || 0, hairpin: !!L[i].hairpin });
+      s += len;
+    }
+    tab.total = s;
+    _segTable[t] = tab;
+    return tab;
+  }
+
+  var _plan = {};
+  function pickPlan(t) {
+    if (_plan[t]) return _plan[t];
+    var tab = lapSegTable(t), L = tab.total;
+    var n = TRACKS[t].picks || 5;
+    var list = [], i, j;
+
+    function segAtLap(s) {
+      s = s - Math.floor(s / L) * L;
+      for (var q = 0; q < tab.length; q++) if (s >= tab[q].s0 && s < tab[q].s1) return tab[q];
+      return tab[tab.length - 1];
+    }
+
+    // Spread evenly round the lap, then slid to the straightest spot nearby.
+    // A pickup buried mid-corner is not a choice — you are already using all
+    // the road. On a straight, crossing for it costs you your entry line.
+    for (i = 0; i < n; i++) {
+      var want = L * (i + 0.5) / n;
+      var win = L / (3 * n), best = want, bestK = 1e9;
+      for (j = -win; j <= win; j += 30) {
+        var g = segAtLap(want + j);
+        var k = g.turn ? 1 / g.r : 0;
+        if (k < bestK - 1e-9) { bestK = k; best = want + j; }
+      }
+      // Alternating sides, so collecting the lot means weaving across the road.
+      list.push({ s: (best % L + L) % L, lat: (i % 2 ? 1 : -1) * 0.58,
+                  val: PICK_SMALL, big: false });
+    }
+
+    // The big one guards the hairpin exit, on the inside, where the car is
+    // still sliding wide. Taking it means giving up the easy line out of the
+    // slowest corner on the track — which is the point.
+    var hp = null;
+    for (i = 0; i < tab.length; i++) if (tab[i].hairpin) { hp = tab[i]; break; }
+    if (!hp) {
+      hp = tab[0];
+      for (i = 0; i < tab.length; i++) if (!tab[i].turn && tab[i].len > hp.len) hp = tab[i];
+    }
+    var bigS = (hp.s1 + 320) % L;
+
+    // The big one is placed by the corner it guards, so it can land on top of
+    // an evenly-spread small one. Two pickups you collect in the same instant
+    // read as one, so shove the small one clear.
+    var SEP = 700;
+    for (i = 0; i < list.length; i++) {
+      var d = list[i].s - bigS;
+      if (d > L * 0.5) d -= L; else if (d < -L * 0.5) d += L;
+      if (Math.abs(d) < SEP) {
+        list[i].s = ((bigS + (d < 0 ? -SEP : SEP)) % L + L) % L;
+      }
+    }
+    list.push({ s: bigS, lat: 0.82 * (hp.dir || 1), val: PICK_BIG, big: true });
+
+    list.sort(function (a, b) { return a.s - b.s; });
+    _plan[t] = list;
+    return list;
+  }
+
+  function ensurePicks(sMax) {
+    var plan = pickPlan(curTrack), L = lapLength(), i;
+    while (INTRO_LEN + pickGenLap * L <= sMax) {
+      var base = INTRO_LEN + pickGenLap * L;
+      for (i = 0; i < plan.length; i++) {
+        picks.push({ s: base + plan[i].s, lat: plan[i].lat, val: plan[i].val,
+                     big: plan[i].big, taken: false, id: pickIdx++ });
+      }
+      pickGenLap++;
+    }
+  }
+
+  function trimPicks(sMin) {
+    while (picks.length && picks[0].s < sMin) picks.shift();
+  }
+
+  function pickList() { return picks; }
+
+  function resetPicks() { picks = []; pickGenLap = 0; pickIdx = 0; }
+
+  // A pickup floats above the tarmac, bobbing and turning.
+  function drawPicks(ctx, view, time) {
+    ensurePicks(view.carS + LOOKAHEAD);
+    var p = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+    for (var i = 0; i < picks.length; i++) {
+      var k = picks[i];
+      if (k.taken) continue;
+      if (k.s < view.carS - 200 || k.s > view.carS + LOOKAHEAD) continue;
+      var idx = indexAt(k.s);
+      var hh = ch[idx], nx = Math.cos(hh), ny = -Math.sin(hh);
+      var off = k.lat * widthAtIndex(idx);
+      var bob = 34 + Math.sin(time * 2.6 + k.id) * 9;
+      project3(cx[idx] + nx * off, cy[idx] + ny * off, bob, view, p);
+      if (!p.vis) continue;
+      var r = 34 * p.sc;
+      if (r < 2.5) continue;
+
+      // A beam up from the tarmac, so it is obvious from a long way back.
+      var gp = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+      project3(cx[idx] + nx * off, cy[idx] + ny * off, 0, view, gp);
+      if (gp.vis) {
+        var bw = Math.max(2, 15 * p.sc);
+        var bg = ctx.createLinearGradient(0, gp.y, 0, p.y - r);
+        bg.addColorStop(0, k.big ? 'rgba(255,123,224,0.00)' : 'rgba(255,178,77,0.00)');
+        bg.addColorStop(1, k.big ? 'rgba(255,168,238,0.40)' : 'rgba(255,215,106,0.38)');
+        ctx.fillStyle = bg;
+        ctx.fillRect(gp.x - bw * 0.5, p.y - r, bw, gp.y - (p.y - r));
+      }
+
+      var spin = time * 2.2 + k.id;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+
+      ctx.globalAlpha = k.big ? 0.42 : 0.30;
+      ctx.beginPath();
+      ctx.arc(0, 0, r * (k.big ? 2.0 : 1.5), 0, Math.PI * 2);
+      ctx.fillStyle = k.big ? '#ff7be0' : '#ffb24d';
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      if (k.big) { ctx.scale(1.35, 1.35); }
+
+      // A chevron that turns on the spot, squashed to fake the rotation.
+      ctx.scale(Math.max(0.22, Math.abs(Math.cos(spin))), 1);
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.62, r * 0.42);
+      ctx.lineTo(0, -r * 0.52);
+      ctx.lineTo(r * 0.62, r * 0.42);
+      ctx.lineTo(0, r * 0.06);
+      ctx.closePath();
+      ctx.fillStyle = k.big ? '#ffa8ee' : '#ffd76a';
+      ctx.strokeStyle = k.big ? '#ffe6fb' : '#fff3cf';
+      ctx.lineWidth = Math.max(1, r * 0.1);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  /* ------------------------------- HAZARDS -------------------------------
+     Checkpoint Rush scatters spike strips and potholes down the road. Two
+     rules keep them fair, and they are not negotiable:
+
+     1. A hazard NEVER spans the road. Every one of them leaves most of the
+        tarmac clear, so there is always a line through — the worst a hazard
+        can do is take your line away, never your lap.
+     2. A hazard never sits in a corner tight enough that you have no room to
+        move. On a hairpin you are already using all the road; dropping
+        something in there is not difficulty, it is a coin toss.
+
+     Both follow from the brief's hardest rule: a crash must never feel
+     unavoidable. */
+  var HAZ_SPIKE_W  = 0.34;    // half-width, as a fraction of the road half-width
+  var HAZ_PIT_W    = 0.17;
+  var HAZ_SPIKE_L  = 74;      // how far along the road a strip reaches
+  var HAZ_PIT_L    = 58;
+  var HAZ_GENTLE_R = 900;     // corners tighter than this get left alone
+  var HAZ_CLEAR    = 460;     // keep this far from a checkpoint or each other
+  var HAZ_WARN     = 820;     // warning marker this far up the road
+
+  /* Gates are a fixed DISTANCE apart, not a fixed count per lap. A quarter of
+     Velocity Ring is six seconds and a quarter of Grand Circuit is ten, so
+     counting them per lap would have made the same clock generous on one
+     circuit and brutal on another. Spacing them by distance and then rounding
+     to a whole number per lap keeps every gate about six seconds from the
+     last, and keeps them landing back on the start line. */
+  var CP_SPACING   = 5200;
+
+  var hazards = [], hazGenLap = 0, hazIdx = 0;
+
+  // Deterministic noise. Every run of Checkpoint Rush therefore meets the same
+  // hazards in the same places, which is what makes comparing two scores mean
+  // anything at all.
+  function hash1(n) {
+    var x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function cpCount() { return Math.max(3, Math.round(lapLength() / CP_SPACING)); }
+  function checkpointAt(i) { return lapLength() * (i / cpCount()); }
+
+  // How many hazards a given lap gets. The road gets busier the longer you
+  // survive, which is most of what makes a long run hard rather than just long.
+  function hazardCount(lapNo) {
+    return Math.min(9, 3 + lapNo);
+  }
+
+  function hazardPlan(t, lapNo) {
+    var tab = lapSegTable(t), L = tab.total;
+    var count = hazardCount(lapNo), list = [], i, j;
+
+    function segAtLap(s) {
+      s = s - Math.floor(s / L) * L;
+      for (var q = 0; q < tab.length; q++) if (s >= tab[q].s0 && s < tab[q].s1) return tab[q];
+      return tab[tab.length - 1];
+    }
+    function gentle(s) {
+      var g = segAtLap(s);
+      return !g.turn || g.r >= HAZ_GENTLE_R;
+    }
+    function nearCheckpoint(s) {
+      for (var c = 0; c < cpCount(); c++) {
+        var d = Math.abs(s - checkpointAt(c));
+        if (d > L * 0.5) d = L - d;
+        if (d < HAZ_CLEAR) return true;
+      }
+      return false;
+    }
+    function nearAnother(s) {
+      for (var k = 0; k < list.length; k++) {
+        var d = Math.abs(s - list[k].s);
+        if (d > L * 0.5) d = L - d;
+        if (d < HAZ_CLEAR) return true;
+      }
+      return false;
+    }
+
+    for (i = 0; i < count; i++) {
+      var seed = lapNo * 977 + i * 131 + t * 17;
+      var want = L * (i + 0.5) / count + (hash1(seed) - 0.5) * (L / count) * 0.5;
+      want = ((want % L) + L) % L;
+
+      // Walk outward from the wanted spot until somewhere legal turns up.
+      var found = -1;
+      for (j = 0; j < 90; j++) {
+        var off = (j % 2 ? -1 : 1) * Math.ceil(j / 2) * 60;
+        var s = ((want + off) % L + L) % L;
+        if (gentle(s) && !nearCheckpoint(s) && !nearAnother(s)) { found = s; break; }
+      }
+      if (found < 0) continue;
+
+      var spike = hash1(seed * 3 + 7) > 0.42;
+      var halfW = spike ? HAZ_SPIKE_W : HAZ_PIT_W;
+      // Placed so the hazard's far edge always stops short of the barrier,
+      // and so the clear side is never narrower than the car needs.
+      var room = 0.92 - halfW;
+      var lat = (hash1(seed * 5 + 3) * 2 - 1) * room;
+      list.push({ s: found, lat: lat, halfW: halfW, spike: spike,
+                  len: spike ? HAZ_SPIKE_L : HAZ_PIT_L });
+    }
+    list.sort(function (a, b) { return a.s - b.s; });
+    return list;
+  }
+
+  function ensureHazards(sMax) {
+    var L = lapLength(), i;
+    while (INTRO_LEN + hazGenLap * L <= sMax) {
+      var base = INTRO_LEN + hazGenLap * L;
+      var plan = hazardPlan(curTrack, hazGenLap);
+      for (i = 0; i < plan.length; i++) {
+        hazards.push({ s: base + plan[i].s, lat: plan[i].lat, halfW: plan[i].halfW,
+                       spike: plan[i].spike, len: plan[i].len, hit: false, id: hazIdx++ });
+      }
+      hazGenLap++;
+    }
+  }
+
+  function trimHazards(sMin) {
+    while (hazards.length && hazards[0].s < sMin) hazards.shift();
+  }
+
+  function hazardList() { return hazards; }
+  function resetHazards() { hazards = []; hazGenLap = 0; hazIdx = 0; }
+
+  // A patch of tarmac given in arc length and in lateral offset as a fraction
+  // of the road's half-width, so it keeps its share of the road wherever the
+  // road is wide or narrow.
+  function roadPatch(ctx, rib, s0, s1, k0, k1) {
+    for (var i = 0; i < rib.count - 1; i++) {
+      var a = rib[i], b = rib[i + 1];
+      if (!a.ok || !b.ok) continue;
+      if (b.s < s0 || a.s > s1) continue;
+      var aw = a.oR - a.oL, bw = b.oR - b.oL;
+      var fa1 = (k0 * a.hw - a.oL) / aw, fa2 = (k1 * a.hw - a.oL) / aw;
+      var fb1 = (k0 * b.hw - b.oL) / bw, fb2 = (k1 * b.hw - b.oL) / bw;
+      var ax1 = a.lx + (a.rx - a.lx) * fa1, ay1 = a.ly + (a.ry - a.ly) * fa1;
+      var ax2 = a.lx + (a.rx - a.lx) * fa2, ay2 = a.ly + (a.ry - a.ly) * fa2;
+      var bx1 = b.lx + (b.rx - b.lx) * fb1, by1 = b.ly + (b.ry - b.ly) * fb1;
+      var bx2 = b.lx + (b.rx - b.lx) * fb2, by2 = b.ly + (b.ry - b.ly) * fb2;
+      ctx.moveTo(ax1, ay1); ctx.lineTo(ax2, ay2);
+      ctx.lineTo(bx2, by2); ctx.lineTo(bx1, by1);
+      ctx.closePath();
+    }
+  }
+
+  function drawHazards(ctx, rib, view, time) {
+    ensureHazards(view.carS + LOOKAHEAD);
+    var i, h, p = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+
+    for (i = 0; i < hazards.length; i++) {
+      h = hazards[i];
+      if (h.s < view.carS - 300 || h.s > view.carS + LOOKAHEAD) continue;
+      var k0 = h.lat - h.halfW, k1 = h.lat + h.halfW;
+      var s0 = h.s - h.len * 0.5, s1 = h.s + h.len * 0.5;
+
+      if (h.spike) {
+        ctx.beginPath(); roadPatch(ctx, rib, s0, s1, k0, k1);
+        ctx.fillStyle = h.hit ? 'rgba(90,80,110,0.55)' : '#3b3450';
+        ctx.fill();
+        // Teeth: a row of bright wedges down the middle of the strip.
+        ctx.beginPath();
+        var teeth = 7;
+        for (var q = 0; q < teeth; q++) {
+          var t0 = k0 + (k1 - k0) * (q + 0.18) / teeth;
+          var t1 = k0 + (k1 - k0) * (q + 0.82) / teeth;
+          roadPatch(ctx, rib, h.s - h.len * 0.20, h.s + h.len * 0.20, t0, t1);
+        }
+        ctx.fillStyle = h.hit ? 'rgba(200,200,210,0.5)' : '#dfe6f2';
+        ctx.fill();
+      } else {
+        ctx.beginPath(); roadPatch(ctx, rib, s0, s1, k0, k1);
+        ctx.fillStyle = '#07040e';
+        ctx.fill();
+        ctx.beginPath(); roadPatch(ctx, rib, s0 + 6, s1 - 6, k0 + 0.02, k1 - 0.02);
+        ctx.fillStyle = '#1d1430';
+        ctx.fill();
+      }
+
+      // The warning, up the road, so nobody ever meets one of these blind.
+      // It stands ON the tarmac at the hazard's own position across the road,
+      // so it tells you WHICH SIDE as well as that something is coming.
+      var ws = h.s - HAZ_WARN;
+      if (ws < view.carS - 100 || ws > view.carS + LOOKAHEAD) continue;
+      var idx = indexAt(ws);
+      var hh = ch[idx], nx = Math.cos(hh), ny = -Math.sin(hh);
+      var lateral = h.lat * widthAtIndex(idx);
+      project3(cx[idx] + nx * lateral, cy[idx] + ny * lateral, 54, view, p);
+      if (!p.vis || p.sc < 0.1) continue;
+      var w = 30 * p.sc, hgt = 26 * p.sc;
+      var blink = 0.65 + 0.35 * Math.sin(time * 7 + h.id);
+      ctx.globalAlpha = Math.min(1, blink);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y - hgt);
+      ctx.lineTo(p.x + w, p.y + hgt * 0.7);
+      ctx.lineTo(p.x - w, p.y + hgt * 0.7);
+      ctx.closePath();
+      ctx.fillStyle = h.spike ? '#ff7a45' : '#ffb24d';
+      ctx.fill();
+      ctx.lineWidth = Math.max(1, 3 * p.sc);
+      ctx.strokeStyle = 'rgba(20,10,6,0.8)';
+      ctx.stroke();
+      // The mark inside says WHICH hazard, so the two are never told apart by
+      // colour alone.
+      ctx.fillStyle = 'rgba(20,10,6,0.9)';
+      if (h.spike) {
+        ctx.fillRect(p.x - w * 0.42, p.y + hgt * 0.16, w * 0.84, Math.max(1, hgt * 0.14));
+      } else {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y + hgt * 0.18, Math.max(1.2, w * 0.26), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // The finish-line style band across the road at each checkpoint.
+  function drawCheckpoints(ctx, rib, view, nextS) {
+    if (!(nextS > 0)) return;
+    var s0 = nextS - 26, s1 = nextS + 26;
+    if (s1 < view.carS - 200 || s0 > view.carS + LOOKAHEAD) return;
+    ctx.beginPath(); roadPatch(ctx, rib, s0, s1, -1, 1);
+    ctx.fillStyle = 'rgba(125,255,176,0.30)';
+    ctx.fill();
+    for (var q = 0; q < 8; q += 2) {
+      ctx.beginPath();
+      roadPatch(ctx, rib, s0, s1, -1 + q * 0.25, -1 + (q + 1) * 0.25);
+      ctx.fillStyle = 'rgba(190,255,214,0.85)';
+      ctx.fill();
+    }
+  }
+
+  // Centreline, sampled every SAMPLE units. Uniform spacing means arc length
+  // converts to an array index by division — no searching.
+  var cx, cy, ch, ck, chw, cmx, hwFilled, mxFilled, baseS;
+  var segs, genX, genY, genH, genS, genIndex, genT, inIntro, lapNo;
+
+  function segLength(seg) {
+    if (seg.kind === 'str') return seg.len;
+    var ang = seg.deg * Math.PI / 180;
+    var arc = ang * seg.r;
+    var T = Math.min(150, seg.r * 0.5, arc * 0.5);
+    return arc + T;
+  }
+
+  // Curvature ramps in and out so no corner arrives as a step change — the
+  // same easing a real road uses, and the reason a corner can be caught.
+  function segCurvature(seg, t) {
+    if (seg.kind === 'str') return 0;
+    var ang = seg.deg * Math.PI / 180;
+    var arc = ang * seg.r;
+    var T = Math.min(150, seg.r * 0.5, arc * 0.5);
+    var hold = arc - T;
+    var total = arc + T;
+    var f;
+    if (t < T) f = 0.5 - 0.5 * Math.cos(Math.PI * (t / T));
+    else if (t < T + hold) f = 1;
+    else f = 0.5 - 0.5 * Math.cos(Math.PI * ((total - t) / T));
+    if (f < 0) f = 0;
+    return seg.dir * f / seg.r;
+  }
+
+  function currentSeg() {
+    return inIntro ? { kind: 'str', len: INTRO_LEN } : LAP()[genIndex];
+  }
+
+  // `carry` is however far the last sample overshot the end of the previous
+  // segment. Throwing it away used to cost up to 8 units of arc per segment,
+  // which over a lap of thirty segments walked the circuit a hundred units
+  // off its own start. Carrying it forward keeps the loop shut.
+  function advanceSeg(carry) {
+    carry = carry || 0;
+    if (inIntro) { inIntro = false; genIndex = 0; }
+    else {
+      genIndex++;
+      if (genIndex >= LAP().length) { genIndex = 0; lapNo++; }
+    }
+    genT = carry;
+    var seg = currentSeg();
+    segs.push({
+      s0: genS - carry, s1: genS - carry + segLength(seg),
+      turn: seg.kind === 'turn',
+      dir: seg.dir || 0,
+      r: seg.r || 0,
+      hairpin: !!seg.hairpin
+    });
+  }
+
+  function ensure(sMax) {
+    while (genS < sMax) {
+      var seg = currentSeg();
+      if (genT >= segLength(seg)) { advanceSeg(genT - segLength(seg)); seg = currentSeg(); }
+
+      // Midpoint step: turn half, move, turn the rest. Keeps tight corners
+      // the right radius instead of slowly bulging outward.
+      var k = segCurvature(seg, genT + SAMPLE * 0.5);
+      genH += k * SAMPLE * 0.5;
+      genX += Math.sin(genH) * SAMPLE;
+      genY += Math.cos(genH) * SAMPLE;
+      genH += k * SAMPLE * 0.5;
+
+      genS += SAMPLE;
+      genT += SAMPLE;
+      cx.push(genX); cy.push(genY); ch.push(genH); ck.push(k);
+    }
+  }
+
+  // Width is built in two passes. First a rolling MAXIMUM, which is what
+  // stops the road nipping in where two opposite corners meet: curvature
+  // passes through zero there for an instant, and an average gets dragged
+  // down by exactly the dip it is supposed to fill. Then a blur over the
+  // maximum, which takes the corners off it so the width glides.
+  var BLUR_WIN = 16;
+
+  var KER = null, KSUM = 0;
+  function kernel() {
+    if (KER) return KER;
+    KER = [];
+    for (var t = -BLUR_WIN; t <= BLUR_WIN; t++) {
+      var w = 0.5 + 0.5 * Math.cos(Math.PI * t / (BLUR_WIN + 1));
+      KER.push(w); KSUM += w;
+    }
+    return KER;
+  }
+
+  function rawWidth(i) {
+    return BASE_HW + CORNER_EXTRA * Math.min(1, Math.abs(ck[i]) / TIGHTEST_K);
+  }
+
+  // Each pass lags the one before it, because each needs to see both sides of
+  // the point it is filling in. Geometry always runs far enough ahead of both.
+  function ensureWidths() {
+    var lastMax = ck.length - 1 - WIDEN_WIN;
+    var i, t, j;
+    while (mxFilled <= lastMax) {
+      i = mxFilled;
+      var m = 0;
+      for (j = Math.max(0, i - WIDEN_WIN); j <= Math.min(ck.length - 1, i + WIDEN_WIN); j++) {
+        var r = rawWidth(j);
+        if (r > m) m = r;
+      }
+      cmx[i] = m;
+      mxFilled++;
+    }
+
+    var K = kernel();
+    var lastBlur = mxFilled - 1 - BLUR_WIN;
+    while (hwFilled <= lastBlur) {
+      i = hwFilled;
+      var acc = 0, wsum = 0;
+      for (t = -BLUR_WIN; t <= BLUR_WIN; t++) {
+        j = i + t;
+        if (j < 0 || j >= mxFilled) continue;
+        var w2 = K[t + BLUR_WIN];
+        acc += cmx[j] * w2; wsum += w2;
+      }
+      chw[i] = wsum > 0 ? acc / wsum : BASE_HW;
+      hwFilled++;
+    }
+  }
+
+  function widthAtIndex(i) {
+    ensureWidths();
+    var w = chw[i];
+    return w === undefined ? BASE_HW : w;
+  }
+
+  function reset() {
+    cx = [0]; cy = [0]; ch = [0]; ck = [0]; chw = []; cmx = [];
+    hwFilled = 0; mxFilled = 0;
+    baseS = 0;
+    segs = [{ s0: 0, s1: INTRO_LEN, turn: false, dir: 0, r: 0, hairpin: false }];
+    genX = 0; genY = 0; genH = 0; genS = 0;
+    genIndex = -1; genT = 0; inIntro = true; lapNo = 0;
+    resetPicks();
+    resetHazards();
+    ensure(9000);
+  }
+
+  function trim(sMin) {
+    var drop = Math.floor((sMin - baseS) / SAMPLE);
+    if (drop > 2000) {
+      cx.splice(0, drop); cy.splice(0, drop); ch.splice(0, drop); ck.splice(0, drop);
+      chw.splice(0, drop); cmx.splice(0, drop);
+      hwFilled = Math.max(0, hwFilled - drop);
+      mxFilled = Math.max(0, mxFilled - drop);
+      baseS += drop * SAMPLE;
+    }
+    while (segs.length > 2 && segs[0].s1 < sMin) segs.shift();
+  }
+
+  // ------------------------------------------------------------------ queries
+
+  function indexAt(s) {
+    var i = Math.round((s - baseS) / SAMPLE);
+    if (i < 0) i = 0;
+    if (i > cx.length - 1) i = cx.length - 1;
+    return i;
+  }
+
+  function lengthGenerated() { return baseS + (cx.length - 1) * SAMPLE; }
+
+  function halfWidthAt(s) { ensure(s + SAMPLE * (4 + WIDEN_WIN + BLUR_WIN)); return widthAtIndex(indexAt(s)); }
+
+  // Where the centreline is, and which way it points, at an arc length.
+  var _c = { x: 0, y: 0, h: 0, k: 0 };
+  function centreAt(s, out) {
+    out = out || _c;
+    ensure(s + SAMPLE * 4);
+    var i = indexAt(s);
+    out.x = cx[i]; out.y = cy[i]; out.h = ch[i]; out.k = ck[i];
+    return out;
+  }
+
+  function segAt(s) {
+    var lo = 0, hi = segs.length - 1;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1;
+      if (s < segs[mid].s0) hi = mid - 1;
+      else if (s >= segs[mid].s1) lo = mid + 1;
+      else return segs[mid];
+    }
+    return null;
+  }
+
+  function dirAt(s) { var g = segAt(s); return (g && g.turn) ? g.dir : 0; }
+  function isHairpin(s) { var g = segAt(s); return !!(g && g.hairpin); }
+  function radiusAt(s) { var g = segAt(s); return (g && g.turn) ? g.r : 0; }
+
+  // Where is the car relative to the road? Walks out from a hint index, so
+  // it costs a handful of comparisons however long the track gets.
+  var _loc = { s: 0, dev: 0, h: 0, k: 0, i: 0, hw: 0, px: 0, py: 0, nx: 0, ny: 0 };
+  function locate(wx, wy, hintS, out) {
+    out = out || _loc;
+    ensure(hintS + 600);
+    var i0 = indexAt(hintS);
+    var best = i0, bestD = Infinity, i, dx, dy, d;
+    var lo = Math.max(0, i0 - 40), hi = Math.min(cx.length - 1, i0 + 40);
+    for (i = lo; i <= hi; i++) {
+      dx = wx - cx[i]; dy = wy - cy[i];
+      d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    // If the answer sits on the edge of the window the hint was stale, so
+    // widen the search once rather than returning something wrong.
+    if (best === lo || best === hi) {
+      lo = Math.max(0, i0 - 600); hi = Math.min(cx.length - 1, i0 + 600);
+      for (i = lo; i <= hi; i++) {
+        dx = wx - cx[i]; dy = wy - cy[i];
+        d = dx * dx + dy * dy;
+        if (d < bestD) { bestD = d; best = i; }
+      }
+    }
+    var h = ch[best];
+    var ex = wx - cx[best], ey = wy - cy[best];
+    var sn = Math.sin(h), cs = Math.cos(h);
+    out.i = best;
+    out.h = h;
+    out.k = ck[best];
+    out.hw = widthAtIndex(best);
+    out.px = cx[best]; out.py = cy[best];
+    out.nx = cs; out.ny = -sn;            // unit normal, pointing right
+    out.dev = ex * cs - ey * sn;          // + is right of the centreline
+    out.s = baseS + best * SAMPLE + (ex * sn + ey * cs);
+    return out;
+  }
+
+  // --------------------------------------------------------------- projection
+
+  var CAM_LIFT = K / FOCAL;      // how high the camera rides above the tarmac
+
+  /* ------------------------------- TERRAIN -------------------------------
+     Hills and banking, and they are only a picture. The car, the walls, the
+     rivals and every rule of the game still live on a flat plane; this
+     lifts what the camera SEES of that plane, so the road ahead climbs,
+     dips and leans into corners without changing a single thing you have
+     to drive.
+
+     It works on distance ahead, not on each object: once a frame a small
+     table is built of how high the ground is at each depth in front of the
+     camera, and every point drawn through project3 is lifted by it. So the
+     road, the walls, the dashes, the chevrons, skid marks, rivals and the
+     car all ride the same hill and can never disagree about where the
+     ground is.
+
+     Two rules keep it fair:
+     - The road can never hide itself. While the table is built, each depth
+       is kept strictly higher up the screen than the one before it, so a
+       crest can never fold the road behind it out of sight. The distance
+       you can see ahead is exactly what it was on the flat.
+     - It settles back onto the horizon at the far end of the view, so the
+       road still disappears into the fog where it always did, on every
+       screen shape. */
+  var TERR_N = 200;
+  var TERR_FAR = LOOKAHEAD + CAM_BACK + 600;
+  var TERR_STEP = (TERR_FAR - NEAR) / (TERR_N - 1);
+  var TERR_UP = 150, TERR_DOWN = 120;   // most the road ahead rises / falls
+  var TERR_EPS = 0.0003;     // at least ~0.15px further up the screen per step
+  var PITCH_FOLLOW = 0.75;   // how much the camera tips with the slope it's on
+  var BANK_R = 60;           // lean per unit curvature: 1/600 → 0.1
+  var BANK_MAX = 0.12;
+  var BANK_NEAR = 700, BANK_FAR = 1300;
+  var BANK_SPAN = 300;       // the lean spans the road; the ground beyond is level
+  var terrOn = false;
+  var terrLift = 0;          // cancels the lean under the car, so it never bobs
+  var terrZ = new Float64Array(TERR_N), terrXc = new Float64Array(TERR_N);
+  var terrBank = new Float64Array(TERR_N), terrS = new Float64Array(TERR_N);
+
+  // Height of the ground at arc length s: two swells a lap, lap-periodic so
+  // every lap climbs the same hills. Sized per track, then per city.
+  function hillsAt(s) {
+    var A = (TRACKS[curTrack].hills || 0) * (TH.hills === undefined ? 1 : TH.hills);
+    if (!A) return 0;
+    var L = lapLength(), t = (s - INTRO_LEN) / L;
+    var h = 0.7 * Math.sin(2 * Math.PI * (3 * t + 0.13)) + 0.3 * Math.sin(2 * Math.PI * (5 * t + 0.61));
+    // Flat on the grid, easing in over the run-up.
+    var ramp = s <= 0 ? 0 : s >= INTRO_LEN ? 1 : s / INTRO_LEN;
+    return A * h * ramp * ramp * (3 - 2 * ramp);
+  }
+
+  var _tc = {};
+  function clampSpan(d) { return d > BANK_SPAN ? BANK_SPAN : d < -BANK_SPAN ? -BANK_SPAN : d; }
+  function prepareTerrain(view, carS, carX, carY) {
+    if (!view) { terrOn = false; return; }
+    terrOn = true;
+    terrLift = 0;
+    var e0 = hillsAt(carS);
+    var slope = (hillsAt(carS + 60) - hillsAt(carS - 60)) / 120;
+    var fadeFrom = LOOKAHEAD * 0.55, fadeTo = LOOKAHEAD + CAM_BACK;
+
+    /* Which bit of road is at each depth? Walk the centreline out from
+       behind the camera and note where it first crosses each depth: in a
+       bend the road reaches a given depth later than a straight line would,
+       and the lean has to pivot on where the road really is. If the road
+       turns back before reaching a depth (a hairpin), the last bit found
+       stands in for it. */
+    var i = 0, prevRz = -1e9, prevLat = 0, prevS = carS;
+    var walkEnd = carS + LOOKAHEAD * 2;
+    for (var ws = carS - CAM_BACK; ws <= walkEnd && i < TERR_N; ws += 16) {
+      var c = centreAt(Math.max(0, ws), _tc);
+      var dx = c.x - view.camX, dy = c.y - view.camY;
+      var crz = dx * view.camSin + dy * view.camCos;
+      var clat = dx * view.camCos - dy * view.camSin;
+      while (i < TERR_N && crz >= NEAR + i * TERR_STEP && crz > prevRz) {
+        var want = NEAR + i * TERR_STEP;
+        var fr = prevRz > -1e8 ? (want - prevRz) / (crz - prevRz) : 1;
+        if (fr < 0) fr = 0;
+        terrS[i] = prevS + (ws - prevS) * fr;
+        terrXc[i] = prevLat + (clat - prevLat) * fr;
+        i++;
+      }
+      if (crz > prevRz) { prevRz = crz; prevLat = clat; prevS = ws; }
+    }
+    for (; i < TERR_N; i++) {
+      terrS[i] = i ? terrS[i - 1] + TERR_STEP : carS;
+      terrXc[i] = i ? terrXc[i - 1] : 0;
+    }
+
+    // Banks first: they don't depend on anything else.
+    for (i = 0; i < TERR_N; i++) {
+      // The lean is a close-up effect: full near the car, gone by the
+      // middle distance, where a bend can put two stretches of road at the
+      // same depth and a lean would have no single answer.
+      var rzb = NEAR + i * TERR_STEP;
+      var fb = rzb <= BANK_NEAR ? 1 : rzb >= BANK_FAR ? 0 : 1 - (rzb - BANK_NEAR) / (BANK_FAR - BANK_NEAR);
+      fb = fb * fb * (3 - 2 * fb);
+      var cb = centreAt(Math.max(0, terrS[i]), _tc);
+      var b = cb.k * BANK_R;
+      // The lean is across the road, and it only reads as left-right on
+      // screen while the road is heading away from the camera. Where the
+      // road swings across the view, it fades out rather than tilting the
+      // wrong way.
+      var away = Math.sin(cb.h) * view.camSin + Math.cos(cb.h) * view.camCos;
+      away = away > 0 ? away * away : 0;
+      terrBank[i] = (b > BANK_MAX ? BANK_MAX : b < -BANK_MAX ? -BANK_MAX : b) * fb * away;
+    }
+    // The car sits on the banked road too. Rather than let it ride up and
+    // down the screen as it slides across a bend, the whole picture moves
+    // round it by the same amount, as if the camera rode the bank with it.
+    // Worked out from where the car really is in the camera's view, so the
+    // camera leaning into a drift can't throw it off.
+    var ci = 0, cf = 0;
+    if (carX !== undefined) {
+      var cdx = carX - view.camX, cdy = carY - view.camY;
+      var crz0 = cdx * view.camSin + cdy * view.camCos;
+      var clat0 = cdx * view.camCos - cdy * view.camSin;
+      ci = Math.max(0, Math.min(TERR_N - 2, ((crz0 - NEAR) / TERR_STEP) | 0));
+      cf = Math.max(0, Math.min(1, (crz0 - NEAR) / TERR_STEP - ci));
+      var cxc = terrXc[ci] + (terrXc[ci + 1] - terrXc[ci]) * cf;
+      var cbk = terrBank[ci] + (terrBank[ci + 1] - terrBank[ci]) * cf;
+      terrLift = cbk * clampSpan(clat0 - cxc);
+    }
+
+    buildHeights(carS, e0, slope, fadeFrom, fadeTo);
+    // And the same for the height under the car itself (it isn't exactly
+    // on the centreline, so it isn't exactly zero): cancel it, then build
+    // once more so the no-fold rule holds for the final picture.
+    if (carX !== undefined) {
+      terrLift -= terrZ[ci] + (terrZ[ci + 1] - terrZ[ci]) * cf;
+      buildHeights(carS, e0, slope, fadeFrom, fadeTo);
+    }
+  }
+
+  function buildHeights(carS, e0, slope, fadeFrom, fadeTo) {
+    var L = CAM_LIFT - terrLift, lastZ = 0, lastRz = NEAR;
+    for (var i = 0; i < TERR_N; i++) {
+      var rz = NEAR + i * TERR_STEP, sAt = terrS[i], ahead = sAt - carS;
+      var f = rz <= fadeFrom ? 1 : rz >= fadeTo ? 0 : 1 - (rz - fadeFrom) / (fadeTo - fadeFrom);
+      f = f * f * (3 - 2 * f);
+      var z = (hillsAt(sAt) - e0 - slope * ahead * PITCH_FOLLOW) * f;
+      // Never a wall of road climbing into the sky, never a cliff.
+      if (z > TERR_UP) z = TERR_UP; else if (z < -TERR_DOWN) z = -TERR_DOWN;
+      if (i > 0) {
+        // Screen height is (L - z) / rz. Each step further away must sit a
+        // little higher on screen than the last, whether the ground there
+        // is below the camera or (over a crest) above it.
+        var floor = L - rz * ((L - lastZ) / lastRz - TERR_EPS);
+        if (z < floor) z = floor;
+      }
+      terrZ[i] = z; lastZ = z; lastRz = rz;
+    }
+  }
+
+  var _p = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+  function project(wx, wy, view, out) { return project3(wx, wy, 0, view, out); }
+
+  // Same projection, but a point may now be ABOVE the ground. Everything the
+  // camera sees is this far below it: (CAM_LIFT - height).
+  function project3(wx, wy, wz, view, out) {
+    out = out || _p;
+    var dx = wx - view.camX, dy = wy - view.camY;
+    var rz = dx * view.camSin + dy * view.camCos;
+    out.rz = rz;
+    if (rz < NEAR) { out.vis = false; return out; }
+    var sc = FOCAL / rz;
+    var lat = dx * view.camCos - dy * view.camSin;
+    if (terrOn) {
+      var u = (rz - NEAR) / TERR_STEP, i = u | 0;
+      if (i >= TERR_N - 1) { i = TERR_N - 2; u = i + 1; }
+      var fr = u - i;
+      var z = terrZ[i] + (terrZ[i + 1] - terrZ[i]) * fr;
+      var xc = terrXc[i] + (terrXc[i + 1] - terrXc[i]) * fr;
+      var bk = terrBank[i] + (terrBank[i + 1] - terrBank[i]) * fr;
+      // Banked: the outside of the bend (left of a right-hander) rides up.
+      wz += z - bk * clampSpan(lat - xc) + terrLift;
+    }
+    out.sc = sc;
+    out.x = view.W * 0.5 + lat * sc;
+    out.y = HORIZON_Y + (CAM_LIFT - wz) * sc;
+    out.vis = true;
+    return out;
+  }
+
+  // ------------------------------------------------------------------ drawing
+
+  var skyGrad = null, groundGrad = null, fogGrad = null;
+
+  /* ------------------------------- THEMES -------------------------------
+     Every colour the scene is painted in, gathered in one place so a city
+     can repaint the whole world without touching a single draw call. The
+     default is the game's original synthwave look, value for value — so
+     Quick Play looks exactly as it always has.
+
+     Two things are deliberately NOT themeable: the orange corner chevrons
+     and the pickups. Those are information, not decoration, and a player
+     who has learned "orange arrows mean a bend" in one city must be able to
+     rely on it in every other. */
+  var DEFAULT_THEME = {
+    sky:    ['#140a26', '#2d1046', '#5c1a55', '#8d2a4e'],
+    stars:  1,
+    sunDisc: ['#ffd76a', '#ff8a3d', '#ff2f8e'],
+    sunHalo: ['rgba(255,138,60,0.42)', 'rgba(224,70,140,0.18)'],
+    sunR:   210,
+    sunBands: true,
+    ground: ['#1a0c2c', '#0d0719', '#06040e'],
+    grid:   'rgba(168,124,248,0.20)',
+    road:   '#100d20',
+    edge:   [34, 230, 255],
+    dash:   'rgba(255,74,206,0.88)',
+    wallFace: '#241541', wallUpper: '#35205e', wallSkirt: '#0e0820',
+    wallStripe: 'rgba(255,74,206,0.32)',
+    fog:    ['rgba(104,34,92,1)', 'rgba(74,24,78,0.86)', 'rgba(34,14,48,0)'],
+    horizon: null,
+    hills: 1              // scales the track's hills; a flat city sets it low
+  };
+  var TH = DEFAULT_THEME, THS = null, themeKey = null;
+  var horizonShapes = null;
+
+  // Strings built once per theme, not once a frame.
+  function themeStrings() {
+    if (THS) return THS;
+    var e = TH.edge;
+    var rgb = e[0] + ',' + e[1] + ',' + e[2];
+    THS = {
+      edgeSpill: 'rgba(' + rgb + ',0.07)', edgeGlow: 'rgba(' + rgb + ',0.13)',
+      edgeCore: 'rgb(' + rgb + ')', railSpill: 'rgba(' + rgb + ',0.10)'
+    };
+    return THS;
+  }
+
+  // A theme is any subset of DEFAULT_THEME's keys; whatever it leaves out
+  // falls back to the default. null restores the original look.
+  function setTheme(t) {
+    var key = t ? (t.id || JSON.stringify(t)) : null;
+    if (key === themeKey) return;
+    themeKey = key;
+    var out = {};
+    for (var k in DEFAULT_THEME) out[k] = DEFAULT_THEME[k];
+    if (t) for (var k2 in t) out[k2] = t[k2];
+    TH = out;
+    THS = null;
+    skyGrad = groundGrad = fogGrad = null;
+    horizonShapes = null;
+  }
+  function theme() { return TH; }
+
+  /* A skyline, a ridge of mountains, or nothing — built once per theme from
+     a fixed seed, anchored to compass bearings the same way the stars are,
+     so it swings past as you turn and a hairpin visibly turns the city
+     round behind you. */
+  function makeHorizon() {
+    if (horizonShapes) return horizonShapes;
+    var hz = TH.horizon, list = [];
+    horizonShapes = list;
+    if (!hz) return list;
+    var seed = hz.seed || 4242;
+    function rnd() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+    var n = hz.count || 60, i;
+    for (i = 0; i < n; i++) {
+      var w = hz.kind === 'mountains' ? 0.25 + rnd() * 0.45 : 0.018 + rnd() * 0.05;
+      var h = (hz.minH || 30) + Math.pow(rnd(), hz.kind === 'mountains' ? 1 : 1.8) *
+              ((hz.maxH || 140) - (hz.minH || 30));
+      var shape = { bearing: rnd() * Math.PI * 2, w: w, h: h, layer: rnd() < 0.5 ? 0 : 1,
+                    lit: [] };
+      if (hz.kind !== 'mountains' && hz.window) {
+        for (var q = 0; q < 12; q++) shape.lit.push([rnd(), rnd()]);
+      }
+      list.push(shape);
+    }
+    // Far layer first, so the near layer overlaps it.
+    list.sort(function (a, b) { return a.layer - b.layer; });
+    return list;
+  }
+
+  function bearingX(rel, W) { return W * 0.5 + Math.tan(rel) * FOCAL; }
+
+  function drawHorizon(ctx, view) {
+    var hz = TH.horizon;
+    if (!hz) return;
+    var shapes = makeHorizon(), W = view.W, i;
+    for (var layer = 0; layer < 2; layer++) {
+      ctx.beginPath();
+      var windows = [];
+      for (i = 0; i < shapes.length; i++) {
+        var s = shapes[i];
+        if (s.layer !== layer) continue;
+        var rel = s.bearing - view.camAngle;
+        while (rel > Math.PI) rel -= Math.PI * 2;
+        while (rel < -Math.PI) rel += Math.PI * 2;
+        if (Math.abs(rel) > 1.3) continue;
+        var x0 = bearingX(rel - s.w * 0.5, W), x1 = bearingX(rel + s.w * 0.5, W);
+        if (x1 < -40 || x0 > W + 40) continue;
+        var h = s.h * (layer === 0 ? 0.72 : 1);
+        if (hz.kind === 'mountains') {
+          ctx.moveTo(x0, HORIZON_Y);
+          ctx.lineTo((x0 + x1) * 0.5, HORIZON_Y - h);
+          ctx.lineTo(x1, HORIZON_Y);
+          ctx.closePath();
+        } else {
+          ctx.rect(x0, HORIZON_Y - h, x1 - x0, h);
+          if (layer === 1 && hz.window) {
+            for (var k = 0; k < s.lit.length; k++) {
+              windows.push(x0 + 2 + s.lit[k][0] * Math.max(0, x1 - x0 - 6),
+                           HORIZON_Y - h + 4 + s.lit[k][1] * Math.max(0, h - 10));
+            }
+          }
+        }
+      }
+      ctx.fillStyle = layer === 0 ? (hz.far || hz.color) : hz.color;
+      ctx.fill();
+      if (windows.length) {
+        ctx.fillStyle = hz.window;
+        for (i = 0; i < windows.length; i += 2) ctx.fillRect(windows[i], windows[i + 1], 3, 2);
+      }
+    }
+  }
+
+  var stars = null;
+  function makeStars() {
+    if (stars) return stars;
+    stars = [];
+    var seed = 20260914;
+    function rnd() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+    for (var i = 0; i < 150; i++) {
+      stars.push({
+        bearing: rnd() * Math.PI * 2,
+        y: 18 + rnd() * rnd() * (HORIZON_Y - 46),   // clustered up high
+        r: 0.7 + rnd() * 1.5,
+        a: 0.25 + rnd() * 0.6
+      });
+    }
+    return stars;
+  }
+
+  function drawStars(ctx, view) {
+    var st = makeStars(), W = view.W;
+    ctx.fillStyle = '#ffffff';
+    for (var i = 0; i < st.length; i++) {
+      var s2 = st[i];
+      var rel = s2.bearing - view.camAngle;
+      while (rel > Math.PI) rel -= Math.PI * 2;
+      while (rel < -Math.PI) rel += Math.PI * 2;
+      if (Math.abs(rel) > 1.15) continue;
+      var x = W * 0.5 + Math.tan(rel) * FOCAL;
+      if (x < -20 || x > W + 20) continue;
+      // fade out near the horizon so they do not sit on the skyline
+      var f = Math.min(1, (HORIZON_Y - s2.y) / 90);
+      ctx.globalAlpha = s2.a * f * TH.stars;
+      ctx.fillRect(x - s2.r, s2.y - s2.r, s2.r * 2, s2.r * 2);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawBackground(ctx, view) {
+    var W = view.W, H = view.H;
+    if (!skyGrad) {
+      skyGrad = ctx.createLinearGradient(0, -60, 0, HORIZON_Y);
+      skyGrad.addColorStop(0.00, TH.sky[0]);
+      skyGrad.addColorStop(0.45, TH.sky[1]);
+      skyGrad.addColorStop(0.80, TH.sky[2]);
+      skyGrad.addColorStop(1.00, TH.sky[3]);
+    }
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(-60, -60, W + 120, HORIZON_Y + 60);
+
+    if (TH.stars > 0) drawStars(ctx, view);
+    drawSun(ctx, view);
+    drawHorizon(ctx, view);
+
+    if (!groundGrad) {
+      groundGrad = ctx.createLinearGradient(0, HORIZON_Y, 0, H + 60);
+      groundGrad.addColorStop(0.00, TH.ground[0]);
+      groundGrad.addColorStop(0.35, TH.ground[1]);
+      groundGrad.addColorStop(1.00, TH.ground[2]);
+    }
+    ctx.fillStyle = groundGrad;
+    ctx.fillRect(-60, HORIZON_Y, W + 120, H + 120 - HORIZON_Y);
+
+    drawGrid(ctx, view);
+  }
+
+  // The sun swings across the sky as you turn, which is most of what tells
+  // you a 180 has actually turned you around.
+  function drawSun(ctx, view) {
+    var W = view.W;
+    var sunWorld = -0.55;                       // fixed bearing in the world
+    var rel = sunWorld - view.camAngle;
+    while (rel > Math.PI) rel -= Math.PI * 2;
+    while (rel < -Math.PI) rel += Math.PI * 2;
+    if (Math.abs(rel) > 1.5) return;            // behind you
+    var cxp = W * 0.5 + Math.tan(rel) * FOCAL;
+    var r = TH.sunR;
+
+    var halo = ctx.createRadialGradient(cxp, HORIZON_Y, r * 0.3, cxp, HORIZON_Y, r * 2.4);
+    halo.addColorStop(0.00, TH.sunHalo[0]);
+    halo.addColorStop(0.40, TH.sunHalo[1]);
+    halo.addColorStop(1.00, 'rgba(0,0,0,0)');
+    ctx.fillStyle = halo;
+    ctx.fillRect(-60, -60, W + 120, HORIZON_Y + 60);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(-60, -60, W + 120, HORIZON_Y + 60);
+    ctx.clip();
+    var disc = ctx.createLinearGradient(0, HORIZON_Y - r, 0, HORIZON_Y + 10);
+    disc.addColorStop(0.00, TH.sunDisc[0]);
+    disc.addColorStop(0.45, TH.sunDisc[1]);
+    disc.addColorStop(1.00, TH.sunDisc[2]);
+    ctx.beginPath();
+    ctx.arc(cxp, HORIZON_Y, r, 0, Math.PI * 2);
+    ctx.fillStyle = disc;
+    ctx.fill();
+    if (TH.sunBands) {
+      ctx.fillStyle = 'rgba(20,10,38,0.85)';
+      for (var i = 0; i < 7; i++) {
+        ctx.fillRect(cxp - r, HORIZON_Y - i * i * 3.4 - 8, r * 2, 3 + i * 1.5);
+      }
+    }
+    ctx.restore();
+  }
+
+  // A straight line on the ground stays straight on screen under this
+  // projection, so each grid line costs two projections instead of twenty.
+  // Lines crossing behind the camera get clipped to the near plane.
+  var _sa = { x: 0, y: 0 }, _sb = { x: 0, y: 0 };
+  function projectSegment(ax, ay, bx, by, view) {
+    var adx = ax - view.camX, ady = ay - view.camY;
+    var bdx = bx - view.camX, bdy = by - view.camY;
+    var arz = adx * view.camSin + ady * view.camCos;
+    var brz = bdx * view.camSin + bdy * view.camCos;
+    if (arz < NEAR && brz < NEAR) return false;
+    if (arz < NEAR) {
+      var t = (NEAR - arz) / (brz - arz);
+      adx += (bdx - adx) * t; ady += (bdy - ady) * t; arz = NEAR;
+    } else if (brz < NEAR) {
+      var u = (NEAR - brz) / (arz - brz);
+      bdx += (adx - bdx) * u; bdy += (ady - bdy) * u; brz = NEAR;
+    }
+    var sa = FOCAL / arz, sb = FOCAL / brz;
+    _sa.x = view.W * 0.5 + (adx * view.camCos - ady * view.camSin) * sa;
+    _sa.y = HORIZON_Y + K / arz;
+    _sb.x = view.W * 0.5 + (bdx * view.camCos - bdy * view.camSin) * sb;
+    _sb.y = HORIZON_Y + K / brz;
+    return true;
+  }
+
+  // World-anchored, so it slides and swings underneath you through a corner —
+  // which is most of what tells you the car has actually turned.
+  function drawGrid(ctx, view) {
+    var W = view.W, G = 200, R = 3400;
+    var gx0 = Math.floor((view.camX - R) / G) * G;
+    var gy0 = Math.floor((view.camY - R) / G) * G;
+    var g;
+
+    ctx.strokeStyle = TH.grid;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (g = gx0; g <= view.camX + R; g += G) {
+      if (!projectSegment(g, view.camY - R, g, view.camY + R, view)) continue;
+      if ((_sa.x < -80 && _sb.x < -80) || (_sa.x > W + 80 && _sb.x > W + 80)) continue;
+      ctx.moveTo(_sa.x, _sa.y); ctx.lineTo(_sb.x, _sb.y);
+    }
+    for (g = gy0; g <= view.camY + R; g += G) {
+      if (!projectSegment(view.camX - R, g, view.camX + R, g, view)) continue;
+      if ((_sa.x < -80 && _sb.x < -80) || (_sa.x > W + 80 && _sb.x > W + 80)) continue;
+      ctx.moveTo(_sa.x, _sa.y); ctx.lineTo(_sb.x, _sb.y);
+    }
+    ctx.stroke();
+  }
+
+  // Walk the centreline and project both edges. Steps get longer with
+  // distance, because far-off road is worth fewer pixels.
+  // The ribbon is rebuilt every frame, so its points are pooled and reused.
+  // Allocating a hundred fresh objects per frame is what turns a smooth 60
+  // into periodic garbage-collection stutter.
+  var ribPool = [];
+  ribPool.count = 0;
+  var NEARC = NEAR + 0.5;
+
+  // Slide a lateral offset in toward the road's centre, just far enough that
+  // the point sits in front of the near plane. Already in front: unchanged.
+  function clampOff(off, rzC, rzN) {
+    if (rzC + rzN * off >= NEARC) return off;
+    if (Math.abs(rzN) < 1e-6) return off;
+    var o = (NEARC - rzC) / rzN;
+    if (off > 0) return o < off ? Math.max(0, o) : off;
+    return o > off ? Math.min(0, o) : off;
+  }
+
+  function buildRibbon(view) {
+    var out = ribPool, n = 0;
+    var sStart = view.carS - CAM_BACK - 110;
+    var sEnd = view.carS + LOOKAHEAD;
+    ensure(sEnd + 200 + (WIDEN_WIN + BLUR_WIN) * SAMPLE);
+
+    var pL = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+    var pR = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+    var pC = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+    var pA = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+
+    var s = sStart;
+    while (s <= sEnd) {
+      var i = indexAt(s);
+      var h = ch[i], sn = Math.sin(h), cs = Math.cos(h);
+      var nx = cs, ny = -sn;                       // unit normal, pointing right
+      var hw = widthAtIndex(i);
+
+      // How far in front of the camera this slice of road is, and how that
+      // changes as you move across it. Right beside the camera the road is
+      // wider than the near plane is deep, so while you are sideways-on ONE
+      // edge can fall behind it with the other still well in front.
+      var rzC = (cx[i] - view.camX) * view.camSin + (cy[i] - view.camY) * view.camCos;
+      var rzN = nx * view.camSin + ny * view.camCos;
+
+      var e = out[n];
+      if (!e) {
+        e = out[n] = { s: 0, ok: false, lx: 0, ly: 0, rx: 0, ry: 0, sc: 0, rz: 0, hw: 0,
+                       oL: 0, oR: 0,
+                       okW: false, wlx: 0, wly: 0, wlsc: 0, wrx: 0, wry: 0, wrsc: 0 };
+      }
+      e.s = s; e.hw = hw; e.rz = rzC;
+
+      if (rzC < NEARC) {
+        e.ok = false; e.okW = false; e.sc = 0;
+      } else {
+        // Throwing the whole slice away when one edge went behind the near
+        // plane tore a wedge out of the road and the barrier right next to
+        // you, every time you got properly sideways. Slide the offending edge
+        // in to the near plane instead, and remember where it ended up so the
+        // markings still land in the right place.
+        var oL = clampOff(-hw, rzC, rzN), oR = clampOff(hw, rzC, rzN);
+        e.oL = oL; e.oR = oR;
+        project(cx[i] + nx * oL, cy[i] + ny * oL, view, pL);
+        project(cx[i] + nx * oR, cy[i] + ny * oR, view, pR);
+        project(cx[i], cy[i], view, pC);
+        e.ok = pL.vis && pR.vis;
+        e.lx = pL.x; e.ly = pL.y; e.rx = pR.x; e.ry = pR.y;
+        e.sc = pC.sc; e.rz = pC.rz;
+
+        // The foot of each barrier. Its top is the same world point lifted by
+        // WALL_H, and lifting a point does not move it sideways on screen, so
+        // the top is just (x, y - WALL_H * sc) — no second projection needed.
+        var wo = hw + WALL_OFF;
+        var wL = clampOff(-wo, rzC, rzN), wR = clampOff(wo, rzC, rzN);
+        project(cx[i] + nx * wL, cy[i] + ny * wL, view, pA);
+        var okL = pA.vis; e.wlx = pA.x; e.wly = pA.y; e.wlsc = pA.sc;
+        project(cx[i] + nx * wR, cy[i] + ny * wR, view, pA);
+        e.okW = okL && pA.vis; e.wrx = pA.x; e.wry = pA.y; e.wrsc = pA.sc;
+      }
+      n++;
+      var ahead = s - view.carS;
+      s += ahead < 400 ? 10 : (ahead < 1100 ? 26 : 52);
+    }
+    out.count = n;
+    return out;
+  }
+
+  // Each piece of road is its own closed shape in one path, so a corner that
+  // folds back over itself just overlaps instead of filling in its own middle.
+  // A band down the road, described in WORLD units so it keeps its real width
+  // wherever the road is wide or narrow. Each edge of the band is given as
+  // (k, c): k is -1 at the left edge, 0 at the centre, +1 at the right edge,
+  // and c is a fixed offset in world units on top of that. So the white line
+  // is (-1, -3) to (-1, +3): three units either side of the left edge, always.
+  function quads(ctx, rib, kA, cA, kB, cB, maxSc, clampSc) {
+    for (var i = 0; i < rib.count - 1; i++) {
+      var a = rib[i], b = rib[i + 1];
+      if (!a.ok || !b.ok) continue;
+      // Right under the camera the road is magnified enormously, so anything
+      // drawn as an overlay there swamps the screen. Callers that only want
+      // the readable part pass a scale ceiling.
+      if (maxSc && a.sc > maxSc) continue;
+      // A gentler version of the same guard, for markings that must not just
+      // stop: past clampSc the band's world width is wound down in step with
+      // the magnification, so it holds a steady width on screen instead of
+      // growing into a wedge. No hard edge, because the scaling starts at 1.
+      var ka = 1, kb = 1;
+      if (clampSc) {
+        if (a.sc > clampSc) ka = clampSc / a.sc;
+        if (b.sc > clampSc) kb = clampSc / b.sc;
+      }
+      // Fractions along the stored edge points, which are not always the road
+      // edges themselves — see the near-plane slide in buildRibbon.
+      var aw = a.oR - a.oL, bw = b.oR - b.oL;
+      var fa1 = (kA * a.hw + cA * ka - a.oL) / aw, fa2 = (kB * a.hw + cB * ka - a.oL) / aw;
+      var fb1 = (kA * b.hw + cA * kb - b.oL) / bw, fb2 = (kB * b.hw + cB * kb - b.oL) / bw;
+      var ax1 = a.lx + (a.rx - a.lx) * fa1, ay1 = a.ly + (a.ry - a.ly) * fa1;
+      var ax2 = a.lx + (a.rx - a.lx) * fa2, ay2 = a.ly + (a.ry - a.ly) * fa2;
+      var bx1 = b.lx + (b.rx - b.lx) * fb1, by1 = b.ly + (b.ry - b.ly) * fb1;
+      var bx2 = b.lx + (b.rx - b.lx) * fb2, by2 = b.ly + (b.ry - b.ly) * fb2;
+      ctx.moveTo(ax1, ay1); ctx.lineTo(ax2, ay2);
+      ctx.lineTo(bx2, by2); ctx.lineTo(bx1, by1);
+      ctx.closePath();
+    }
+  }
+
+  /* --------------------------------- WALLS ---------------------------------
+     A solid barrier down both edges, so a crash is something you can SEE
+     yourself hit rather than an invisible stop. Each panel is a vertical
+     quad standing on the ribbon's wall foot; because raising a point does
+     not move it sideways on screen, the top edge is the foot's x with its y
+     lifted by WALL_H * scale.
+
+     Walls are painted BEFORE the road surface. On a hairpin, where the far
+     side of the circuit folds back over the near side, that makes the near
+     tarmac cover the distant barrier instead of the barrier hanging in
+     mid-air over the road in front of you. */
+
+  // A horizontal band of the barrier, given as fractions of its height:
+  // 0 is the tarmac, 1 is the top rail. sFrom/sTo limit it to a stretch of
+  // road, which is how an impact lights up only the panels you hit.
+  function wallStrip(ctx, rib, side, f0, f1, sFrom, sTo) {
+    for (var i = 0; i < rib.count - 1; i++) {
+      var a = rib[i], b = rib[i + 1];
+      if (!a.okW || !b.okW) continue;
+      if (sFrom !== undefined && (b.s < sFrom || a.s > sTo)) continue;
+      var ax, ay, asc, bx, by, bsc;
+      if (side < 0) { ax = a.wlx; ay = a.wly; asc = a.wlsc; bx = b.wlx; by = b.wly; bsc = b.wlsc; }
+      else          { ax = a.wrx; ay = a.wry; asc = a.wrsc; bx = b.wrx; by = b.wry; bsc = b.wrsc; }
+      var ah = WALL_H * asc, bh = WALL_H * bsc;
+      ctx.moveTo(ax, ay - ah * f0);
+      ctx.lineTo(ax, ay - ah * f1);
+      ctx.lineTo(bx, by - bh * f1);
+      ctx.lineTo(bx, by - bh * f0);
+      ctx.closePath();
+    }
+  }
+
+  // Alternate panels, so the barrier streams past at speed instead of
+  // reading as one long smear.
+  function wallStripes(ctx, rib, side, f0, f1) {
+    var BLOCK = 240;
+    for (var i = 0; i < rib.count - 1; i++) {
+      var a = rib[i], b = rib[i + 1];
+      if (!a.okW || !b.okW) continue;
+      var ms = (a.s + b.s) * 0.5;
+      if (Math.floor(ms / BLOCK) % 2) continue;
+      var ax, ay, asc, bx, by, bsc;
+      if (side < 0) { ax = a.wlx; ay = a.wly; asc = a.wlsc; bx = b.wlx; by = b.wly; bsc = b.wlsc; }
+      else          { ax = a.wrx; ay = a.wry; asc = a.wrsc; bx = b.wrx; by = b.wry; bsc = b.wrsc; }
+      var ah = WALL_H * asc, bh = WALL_H * bsc;
+      ctx.moveTo(ax, ay - ah * f0);
+      ctx.lineTo(ax, ay - ah * f1);
+      ctx.lineTo(bx, by - bh * f1);
+      ctx.lineTo(bx, by - bh * f0);
+      ctx.closePath();
+    }
+  }
+
+  function drawWalls(ctx, rib) {
+    var side, S = themeStrings();
+    for (side = -1; side <= 1; side += 2) {
+      // Solid face. It has to sit clearly lighter than the ground behind it,
+      // or a wall in the dark is just more dark — and then a crash still has
+      // nothing visible to hit.
+      ctx.beginPath(); wallStrip(ctx, rib, side, 0, 1);
+      ctx.fillStyle = TH.wallFace; ctx.fill();
+      ctx.beginPath(); wallStrip(ctx, rib, side, 0.42, 1);
+      ctx.fillStyle = TH.wallUpper; ctx.fill();
+      // A dark skirt along the bottom so the barrier looks planted on the
+      // tarmac rather than floating over it.
+      ctx.beginPath(); wallStrip(ctx, rib, side, 0, 0.16);
+      ctx.fillStyle = TH.wallSkirt; ctx.fill();
+
+      ctx.beginPath(); wallStripes(ctx, rib, side, 0.20, 0.82);
+      ctx.fillStyle = TH.wallStripe; ctx.fill();
+
+      // Neon top rail, with a soft spill above and below it.
+      ctx.beginPath(); wallStrip(ctx, rib, side, 0.62, 1.28);
+      ctx.fillStyle = S.railSpill; ctx.fill();
+      ctx.beginPath(); wallStrip(ctx, rib, side, 0.86, 1.02);
+      ctx.fillStyle = S.edgeCore; ctx.fill();
+      ctx.beginPath(); wallStrip(ctx, rib, side, 0.93, 0.99);
+      ctx.fillStyle = 'rgba(240,252,255,0.9)'; ctx.fill();
+    }
+
+    // Where the car just hit, the barrier is left glowing for a moment, so
+    // you can look back and see exactly where it went wrong.
+    var hits = (DR.FX && DR.FX.wallHits) ? DR.FX.wallHits() : null;
+    if (!hits || !hits.length) return;
+    for (var i = 0; i < hits.length; i++) {
+      var h = hits[i];
+      var k = 1 - h.t / h.dur;
+      if (k <= 0) continue;
+      var span = 150 + 260 * (1 - k);
+      ctx.globalAlpha = k * 0.85;
+      ctx.beginPath();
+      wallStrip(ctx, rib, h.side, 0, 1.05, h.s - span, h.s + span);
+      ctx.fillStyle = '#ff7a45'; ctx.fill();
+      ctx.globalAlpha = k;
+      ctx.beginPath();
+      wallStrip(ctx, rib, h.side, 0.80, 1.06, h.s - span * 0.6, h.s + span * 0.6);
+      ctx.fillStyle = '#ffe7c4'; ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // Scale ceiling for road markings. Beyond it a marking holds a fixed width
+  // on screen (EDGE_MAX_SC x its world width in pixels) rather than growing
+  // with the magnification. The bottom of the screen on a straight sits at
+  // about 4, so at 3.2 normal driving barely notices; what it stops is the
+  // half-screen wedge of cyan you got by ending up sideways against an edge.
+  var EDGE_MAX_SC = 3.2;
+
+  /* --------------------------- THE RACING LINE ---------------------------
+     A good line is the one with the least cornering in it: run wide on the
+     way in, clip the inside at the apex, run wide again on the way out. You
+     do not have to know that rule to produce it — it falls out of repeatedly
+     pulling every point toward the midpoint of its two neighbours, which is
+     what straightening a path means, while refusing to let any point leave
+     the tarmac.
+
+     Done in WORLD space, not in "distance from the centreline". The road
+     curves, so straightening an offset is not the same thing as straightening
+     a path, and doing it the cheap way gives a line that hugs the inside all
+     the way round — which is slow and, on this car, undriveable. */
+  var LINE_STEP   = 24;        // world units between line samples
+  var LINE_MARGIN = 46;        // how far the line stays off the barrier
+  var LINE_PASSES = 400;
+  var LINE_RELAX  = 0.35;
+  var LINE_FLAT_K = 1 / 3000;  // flatter than this and the line is "straight"
+  var LINE_LEAD    = 280;      // start holding this far before the bend bites
+  var LINE_RELEASE = 240;      // ...and let go this far before it ends
+
+  var _path = {}, _line = {};
+
+  // One lap walked on its own, independent of the streaming road, with the
+  // width worked out by the same rolling-maximum-then-blur rule the road
+  // itself uses — but wrapped around the loop, because a lap has no first
+  // corner and no last one.
+  function lapPath(t) {
+    if (_path[t]) return _path[t];
+    var lapDef = closedLap(t), i, j;
+    var xs = [], ys = [], hs = [], ks = [];
+    var x = 0, y = 0, h = 0;
+
+    // The step is chosen so a whole number of them spans the lap exactly, and
+    // the leftover at each segment boundary is carried into the next one.
+    // Without both, the walk ends up a couple of hundred units longer than the
+    // lap it is describing, the loop does not meet itself, and the line gets a
+    // kink at the start line that no amount of smoothing will take out.
+    var total = 0;
+    for (i = 0; i < lapDef.length; i++) total += segLength(lapDef[i]);
+    var n = Math.max(8, Math.round(total / LINE_STEP));
+    var step = total / n;
+
+    var u = 0;
+    for (i = 0; i < lapDef.length; i++) {
+      var seg = lapDef[i], len = segLength(seg);
+      while (u < len) {
+        var k = segCurvature(seg, u + step * 0.5);
+        h += k * step * 0.5;
+        x += Math.sin(h) * step;
+        y += Math.cos(h) * step;
+        h += k * step * 0.5;
+        xs.push(x); ys.push(y); hs.push(h); ks.push(k);
+        u += step;
+      }
+      u -= len;
+    }
+    while (xs.length > n) { xs.pop(); ys.pop(); hs.pop(); ks.pop(); }
+    n = xs.length;
+    var WIN  = Math.max(1, Math.round(WIDEN_WIN * SAMPLE / step));
+    var BWIN = Math.max(1, Math.round(BLUR_WIN  * SAMPLE / step));
+    var mx = [], hw = [];
+    for (i = 0; i < n; i++) {
+      var m = 0;
+      for (j = -WIN; j <= WIN; j++) {
+        var kk = Math.abs(ks[(i + j + n + n) % n]);
+        var r = BASE_HW + CORNER_EXTRA * Math.min(1, kk / TIGHTEST_K);
+        if (r > m) m = r;
+      }
+      mx.push(m);
+    }
+    for (i = 0; i < n; i++) {
+      var acc = 0, ws = 0;
+      for (j = -BWIN; j <= BWIN; j++) {
+        var w = 0.5 + 0.5 * Math.cos(Math.PI * j / (BWIN + 1));
+        acc += mx[(i + j + n + n) % n] * w; ws += w;
+      }
+      hw.push(acc / ws);
+    }
+    _path[t] = { x: xs, y: ys, h: hs, k: ks, hw: hw, n: n, step: step, len: total };
+    return _path[t];
+  }
+
+  // Every corner on a lap, in arc length from the start line.
+  var _corners = {};
+  function lapCorners(t) {
+    if (_corners[t]) return _corners[t];
+    var lapDef = closedLap(t), out = [], s = 0;
+    for (var i = 0; i < lapDef.length; i++) {
+      var len = segLength(lapDef[i]);
+      if (lapDef[i].kind === 'turn') {
+        out.push({ s0: s, s1: s + len, dir: lapDef[i].dir,
+                   r: lapDef[i].r, hairpin: !!lapDef[i].hairpin });
+      }
+      s += len;
+    }
+    _corners[t] = out;
+    return out;
+  }
+
+  /* The line is built from anchors rather than solved for, because a solver
+     that genuinely minimises cornering over a closed loop needs far more
+     passes than a lap this long can afford, and because a line you can
+     explain in a sentence is worth more here than an optimal one: run wide
+     on the way in, clip the inside at the apex, run wide again on the way
+     out.
+
+     The one wrinkle is corners that arrive back to back. There is no room to
+     run wide between them and no driver would try — you cut straight from
+     one apex to the next — so a wide anchor is only placed where there is
+     real straight to place it on. */
+  var LINE_APEX  = 0.80;   // fraction of the usable width taken at the apex
+  var LINE_WIDE  = 0.70;   // ... and on the way in and out
+  var LINE_ROOM  = 420;    // straight needed before running wide is worth it
+  var LINE_REACH = 520;    // how far before a corner the wide anchor sits
+  // A line is only advice if the car can actually drive it. The car's tightest
+  // possible circle is 504 units, so the line is held to something looser than
+  // that — a racing line through a corner should be WIDER than the corner, not
+  // tighter, and anything approaching the limit leaves nothing to correct with.
+  var LINE_MIN_R = 620;
+  var LINE_FIX_PASSES = 900;
+
+  function racingLine(t) {
+    if (_line[t]) return _line[t];
+    var P = lapPath(t), n = P.n, i, j;
+    var corners = lapCorners(t);
+    var step = P.step, total = P.len;
+    var lim = new Array(n);
+    for (i = 0; i < n; i++) lim[i] = Math.max(12, P.hw[i] - LINE_MARGIN);
+
+    function limAt(s) { return lim[((Math.round(s / step) % n) + n) % n]; }
+
+    var anchors = [];
+    function anchor(s, v) {
+      anchors.push({ s: ((s % total) + total) % total, v: v });
+    }
+
+    for (i = 0; i < corners.length; i++) {
+      var c = corners[i];
+      var prev = corners[(i - 1 + corners.length) % corners.length];
+      var next = corners[(i + 1) % corners.length];
+      var before = c.s0 - prev.s1; if (before < 0) before += total;
+      var after = next.s0 - c.s1;  if (after < 0) after += total;
+
+      // Apex: the inside of the bend, at its midpoint.
+      var mid = (c.s0 + c.s1) * 0.5;
+      anchor(mid, c.dir * limAt(mid) * LINE_APEX);
+
+      // Wide on entry and exit, but only where there is road to do it on.
+      if (before > LINE_ROOM) {
+        var e = c.s0 - Math.min(LINE_REACH, before * 0.5);
+        anchor(e, -c.dir * limAt(e) * LINE_WIDE);
+      }
+      if (after > LINE_ROOM) {
+        var x = c.s1 + Math.min(LINE_REACH, after * 0.5);
+        anchor(x, -c.dir * limAt(x) * LINE_WIDE);
+      }
+    }
+
+    anchors.sort(function (a, b) { return a.s - b.s; });
+
+    var off = new Array(n);
+    if (!anchors.length) {
+      for (i = 0; i < n; i++) off[i] = 0;
+    } else {
+      // Ease between consecutive anchors the short way round the loop, so the
+      // line arrives at each apex already settled rather than steering into it.
+      for (i = 0; i < n; i++) {
+        var s = i * step;
+        var lo = anchors[anchors.length - 1], hi = anchors[0];
+        for (j = 0; j < anchors.length; j++) {
+          if (anchors[j].s <= s) lo = anchors[j];
+          if (anchors[j].s > s) { hi = anchors[j]; break; }
+        }
+        var span = hi.s - lo.s; if (span <= 0) span += total;
+        var at = s - lo.s; if (at < 0) at += total;
+        var f = span > 0 ? at / span : 0;
+        var e2 = 0.5 - 0.5 * Math.cos(Math.PI * Math.max(0, Math.min(1, f)));
+        off[i] = lo.v + (hi.v - lo.v) * e2;
+      }
+    }
+
+    // A couple of wrapped blur passes take the last corners off it, then
+    // everything is pulled back inside the barriers whatever the anchors said.
+    var tmp = new Array(n);
+    for (var pass = 0; pass < 3; pass++) {
+      for (i = 0; i < n; i++) {
+        tmp[i] = (off[(i - 2 + n) % n] + 2 * off[(i - 1 + n) % n] + 3 * off[i] +
+                  2 * off[(i + 1) % n] + off[(i + 2) % n]) / 9;
+      }
+      for (i = 0; i < n; i++) off[i] = tmp[i];
+    }
+    for (i = 0; i < n; i++) {
+      if (off[i] > lim[i]) off[i] = lim[i];
+      if (off[i] < -lim[i]) off[i] = -lim[i];
+    }
+
+    /* Now make it driveable. Anchors say where a good line WANTS to go; they
+       know nothing about how hard the car can turn, and swinging the full
+       width of the road in the length of a corner entry asks for a radius no
+       car here can hold. So: measure the line's own radius, and wherever it is
+       tighter than LINE_MIN_R, ease that point toward the middle of its
+       neighbours — which is precisely the move that flattens a curve. Repeated,
+       it settles into the tightest line the car can actually drive, and the
+       flattening is spent only where it is needed rather than smeared over the
+       whole lap. */
+    var kmax = 1 / LINE_MIN_R;
+    var corr = new Array(n), cb = new Array(n);
+    var worst = 0;
+    for (var fix = 0; fix < LINE_FIX_PASSES; fix++) {
+      worst = 0;
+      for (i = 0; i < n; i++) corr[i] = 0;
+
+      for (i = 0; i < n; i++) {
+        var a2 = (i - 1 + n) % n, b2 = (i + 1) % n;
+        var ax = P.x[a2] + Math.cos(P.h[a2]) * off[a2];
+        var ay = P.y[a2] - Math.sin(P.h[a2]) * off[a2];
+        var bx = P.x[b2] + Math.cos(P.h[b2]) * off[b2];
+        var by = P.y[b2] - Math.sin(P.h[b2]) * off[b2];
+        var mxp = P.x[i] + Math.cos(P.h[i]) * off[i];
+        var myp = P.y[i] - Math.sin(P.h[i]) * off[i];
+        var v1x = mxp - ax, v1y = myp - ay, v2x = bx - mxp, v2y = by - myp;
+        var l1 = Math.sqrt(v1x * v1x + v1y * v1y) || 1;
+        var l2 = Math.sqrt(v2x * v2x + v2y * v2y) || 1;
+        var cr = (v1x * v2y - v1y * v2x) / (l1 * l2);
+        var ang = Math.abs(Math.asin(Math.max(-1, Math.min(1, cr))));
+        var kk2 = ang / ((l1 + l2) * 0.5);
+        if (kk2 > worst) worst = kk2;
+        if (kk2 <= kmax) continue;
+        var excess = (kk2 - kmax) / kmax;
+
+        // Two different things make a line too tight, and they need different
+        // cures. A KINK — the offset changing faster than it should — eases
+        // out by pulling the point toward the middle of its neighbours.
+        var mid = (off[a2] + off[b2]) * 0.5;
+        corr[i] += (mid - off[i]) * Math.min(0.4, excess * 0.4);
+
+        // Sitting at a CONSTANT offset on the inside of a tight bend is tight
+        // too, and the pull above does nothing there: the offset is already
+        // flat, so the middle of the neighbours is where the point already is.
+        // What is tight is the road. The cure is to give up some apex and move
+        // away from the centre of the turn — the side the line bends toward.
+        corr[i] -= (cr > 0 ? 1 : -1) * Math.min(0.9, excess * 1.2);
+      }
+      if (worst <= kmax) break;
+
+      // Smooth the CORRECTION, not the line. Nudging single samples is itself
+      // a kink — the cure reintroducing the disease — while blurring the whole
+      // line every pass would wash the apexes away over hundreds of passes.
+      for (var b3 = 0; b3 < 3; b3++) {
+        for (i = 0; i < n; i++) {
+          cb[i] = (corr[(i - 1 + n) % n] + 2 * corr[i] + corr[(i + 1) % n]) * 0.25;
+        }
+        for (i = 0; i < n; i++) corr[i] = cb[i];
+      }
+      for (i = 0; i < n; i++) {
+        off[i] += corr[i];
+        if (off[i] > lim[i]) off[i] = lim[i];
+        if (off[i] < -lim[i]) off[i] = -lim[i];
+      }
+    }
+
+    /* What to DO is read off the corners themselves, not off the shape of the
+       line — a curvature read from sampled points is noisy, and the advice has
+       to be exact. Two offsets matter, and both come straight out of the drift
+       model: start holding before the bend, because the slide takes time to
+       build; let go before it ends, because the car carries on coming round
+       after the body has squared up. */
+    var zone = new Array(n);
+    for (i = 0; i < n; i++) zone[i] = 0;
+    for (i = 0; i < corners.length; i++) {
+      var cc = corners[i];
+      var from = cc.s0 - LINE_LEAD;
+      var to = cc.s1 - LINE_RELEASE;
+      if (to <= from) to = from + step;
+      for (var u = from; u < to; u += step) {
+        var idx = ((Math.round(u / step) % n) + n) % n;
+        zone[idx] = cc.dir;
+      }
+    }
+
+    _line[t] = { off: off, zone: zone, n: n, step: step,
+                 len: total, hw: P.hw, lim: lim, corners: corners };
+    return _line[t];
+  }
+
+  // Where the line is, and what it is telling you to do, at a world arc
+  // length. The run-up wraps onto the end of the lap, which is the approach
+  // to the start line — the right piece of line for it.
+  var _lineOut = { off: 0, zone: 0, hw: BASE_HW };
+  function lineAt(s, t) {
+    var L = racingLine(t === undefined ? curTrack : t);
+    var u = (s - INTRO_LEN) / L.step;
+    u = u - Math.floor(u / L.n) * L.n;
+    var i = Math.floor(u), f = u - i;
+    var j = (i + 1) % L.n;
+    _lineOut.off = L.off[i] + (L.off[j] - L.off[i]) * f;
+    _lineOut.zone = L.zone[i];
+    _lineOut.hw = L.hw[i];
+    return _lineOut;
+  }
+
+  /* The hold window you are in, or the next one ahead: which side, and the
+     world arc lengths where holding should start and stop. The tutorial
+     reads this to show "get ready", a hold meter, and "let go" at exactly
+     the points the racing line's own advice switches. Null if there is no
+     corner within maxAhead. */
+  var _holdOut = { dir: 0, start: 0, end: 0 };
+  function holdWindow(s, maxAhead) {
+    var L = racingLine(curTrack);
+    var u = (s - INTRO_LEN) / L.step;
+    var base = Math.floor(u);
+    var sAt = function (k) { return s + (base + k - u) * L.step; };
+    var z = function (k) { return L.zone[((base + k) % L.n + L.n) % L.n]; };
+    var k = 0, limit = Math.ceil((maxAhead || 3000) / L.step);
+    if (z(0) === 0) {
+      while (k < limit && z(k) === 0) k++;
+      if (k >= limit) return null;
+    } else {
+      while (k > -L.n && z(k - 1) === z(0)) k--;
+    }
+    var dir = z(k), e = k;
+    while (e - k < L.n && z(e) === dir) e++;
+    _holdOut.dir = dir;
+    _holdOut.start = sAt(k);
+    _holdOut.end = sAt(e);
+    return _holdOut;
+  }
+
+  // The line painted on the road, as a strip that follows it.
+  function drawRacingLine(ctx, rib, view, time) {
+    var HALF = 13;
+    var i, a, b;
+    for (var layer = 0; layer < 2; layer++) {
+      var wide = layer === 0 ? HALF * 3.4 : HALF;
+      ctx.beginPath();
+      for (i = 0; i < rib.count - 1; i++) {
+        a = rib[i]; b = rib[i + 1];
+        if (!a.ok || !b.ok) continue;
+        var ka = a.sc > 3.2 ? 3.2 / a.sc : 1;
+        var kb = b.sc > 3.2 ? 3.2 / b.sc : 1;
+        var oa = lineAt(a.s).off, ob = lineAt(b.s).off;
+        var aw = a.oR - a.oL, bw = b.oR - b.oL;
+        var fa1 = (oa - wide * ka - a.oL) / aw, fa2 = (oa + wide * ka - a.oL) / aw;
+        var fb1 = (ob - wide * kb - b.oL) / bw, fb2 = (ob + wide * kb - b.oL) / bw;
+        var ax1 = a.lx + (a.rx - a.lx) * fa1, ay1 = a.ly + (a.ry - a.ly) * fa1;
+        var ax2 = a.lx + (a.rx - a.lx) * fa2, ay2 = a.ly + (a.ry - a.ly) * fa2;
+        var bx1 = b.lx + (b.rx - b.lx) * fb1, by1 = b.ly + (b.ry - b.ly) * fb1;
+        var bx2 = b.lx + (b.rx - b.lx) * fb2, by2 = b.ly + (b.ry - b.ly) * fb2;
+        ctx.moveTo(ax1, ay1); ctx.lineTo(ax2, ay2);
+        ctx.lineTo(bx2, by2); ctx.lineTo(bx1, by1);
+        ctx.closePath();
+      }
+      ctx.fillStyle = layer === 0 ? 'rgba(125,255,176,0.13)' : 'rgba(150,255,196,0.80)';
+      ctx.fill();
+    }
+
+    // Arrows crawling along the line, pointing the way you should be holding.
+    // The line alone says WHERE; these say WHICH WAY, without relying on
+    // colour to carry it.
+    var period = 300;
+    var crawl = (time * 190) % period;
+    var p = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+    for (var s = Math.ceil((rib[0].s - crawl) / period) * period + crawl;
+         s < rib[0].s + LOOKAHEAD; s += period) {
+      var info = lineAt(s);
+      if (!info.zone) continue;
+      var dir = info.zone;
+      var idx = indexAt(s);
+      var hh = ch[idx], nx = Math.cos(hh), ny = -Math.sin(hh);
+      project3(cx[idx] + nx * info.off, cy[idx] + ny * info.off, 16, view, p);
+      if (!p.vis || p.sc < 0.12 || p.sc > 4.2) continue;
+      var w = 26 * p.sc, h2 = 20 * p.sc;
+      ctx.beginPath();
+      ctx.moveTo(p.x - w * dir, p.y - h2);
+      ctx.lineTo(p.x + w * dir, p.y);
+      ctx.lineTo(p.x - w * dir, p.y + h2);
+      ctx.lineWidth = Math.max(1.5, 7 * p.sc);
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(8,24,16,0.55)';
+      ctx.stroke();
+      ctx.lineWidth = Math.max(1, 3.6 * p.sc);
+      ctx.strokeStyle = '#eaffef';
+      ctx.stroke();
+    }
+  }
+
+  function draw(ctx, view) {
+    var rib = buildRibbon(view);
+
+    drawWalls(ctx, rib);
+
+    ctx.beginPath();
+    quads(ctx, rib, -1, 0, 1, 0);
+    ctx.fillStyle = TH.road;
+    ctx.fill();
+
+    drawLaneDashes(ctx, rib);
+
+    // Neon spill, then the bright core, then a thin white line for contrast.
+    // Everything here is a fixed width in WORLD units, so a metre of neon a
+    // few metres from the lens is hundreds of pixels across. Capped, or
+    // getting sideways next to an edge paints half the screen cyan.
+    var S = themeStrings();
+    for (var side = -1; side <= 1; side += 2) {
+      ctx.beginPath(); quads(ctx, rib, side, -50, side, 50, 0, EDGE_MAX_SC);
+      ctx.fillStyle = S.edgeSpill; ctx.fill();
+      ctx.beginPath(); quads(ctx, rib, side, -24, side, 24, 0, EDGE_MAX_SC);
+      ctx.fillStyle = S.edgeGlow; ctx.fill();
+      ctx.beginPath(); quads(ctx, rib, side, -10, side, 10, 0, EDGE_MAX_SC);
+      ctx.fillStyle = S.edgeCore; ctx.fill();
+      ctx.beginPath(); quads(ctx, rib, side, -3, side, 3, 0, EDGE_MAX_SC);
+      ctx.fillStyle = 'rgba(240,252,255,0.92)'; ctx.fill();
+    }
+
+    return rib;
+  }
+
+  function drawLaneDashes(ctx, rib) {
+    var period = 132, DASH = 66;
+    ctx.beginPath();
+    for (var i = 0; i < rib.count - 1; i++) {
+      var a = rib[i], b = rib[i + 1];
+      if (!a.ok || !b.ok || a.sc < 0.07) continue;
+      var ms = (a.s + b.s) * 0.5;
+      if (ms - Math.floor(ms / period) * period > DASH) continue;
+      var ka = a.sc > EDGE_MAX_SC ? EDGE_MAX_SC / a.sc : 1;
+      var kb = b.sc > EDGE_MAX_SC ? EDGE_MAX_SC / b.sc : 1;
+      for (var k = 0; k < 2; k++) {
+        var kk = k === 0 ? -1 / 3 : 1 / 3;
+        var aw = a.oR - a.oL, bw = b.oR - b.oL;
+        var fa1 = (kk * a.hw - 7 * ka - a.oL) / aw, fa2 = (kk * a.hw + 7 * ka - a.oL) / aw;
+        var fb1 = (kk * b.hw - 7 * kb - b.oL) / bw, fb2 = (kk * b.hw + 7 * kb - b.oL) / bw;
+        var ax1 = a.lx + (a.rx - a.lx) * fa1, ay1 = a.ly + (a.ry - a.ly) * fa1;
+        var ax2 = a.lx + (a.rx - a.lx) * fa2, ay2 = a.ly + (a.ry - a.ly) * fa2;
+        var bx1 = b.lx + (b.rx - b.lx) * fb1, by1 = b.ly + (b.ry - b.ly) * fb1;
+        var bx2 = b.lx + (b.rx - b.lx) * fb2, by2 = b.ly + (b.ry - b.ly) * fb2;
+        ctx.moveTo(ax1, ay1); ctx.lineTo(ax2, ay2);
+        ctx.lineTo(bx2, by2); ctx.lineTo(bx1, by1);
+        ctx.closePath();
+      }
+    }
+    ctx.fillStyle = TH.dash;
+    ctx.fill();
+  }
+
+  function drawChevron(ctx, x, y, sc, dir, alpha, doubled) {
+    var fade = (sc - 0.17) / 0.13;
+    if (fade <= 0) return;
+    if (fade > 1) fade = 1;
+    var w = 16 * sc / SC_CAR, h = 14 * sc / SC_CAR;
+    if (w < 1.4) return;
+    ctx.globalAlpha = alpha * fade;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    for (var n = 0; n < (doubled ? 2 : 1); n++) {
+      var off = n * 13 * sc / SC_CAR * -dir;
+      ctx.beginPath();
+      ctx.moveTo(x - w * dir + off, y - h);
+      ctx.lineTo(x + w * dir + off, y);
+      ctx.lineTo(x - w * dir + off, y + h);
+      ctx.lineWidth = Math.max(1, 12 * sc / SC_CAR);
+      ctx.strokeStyle = doubled ? 'rgba(255,90,60,0.22)' : 'rgba(255,150,40,0.20)';
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x - w * dir + off, y - h);
+      ctx.lineTo(x + w * dir + off, y);
+      ctx.lineTo(x - w * dir + off, y + h);
+      ctx.lineWidth = Math.max(1, 5 * sc / SC_CAR);
+      ctx.strokeStyle = doubled ? '#ff7a45' : '#ffb24d';
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawChevrons(ctx, view) {
+    var p = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+    var sEnd = view.carS + LOOKAHEAD;
+    for (var i = 0; i < segs.length; i++) {
+      var g = segs[i];
+      if (!g.turn) continue;
+      var len = g.s1 - g.s0;
+      var lead = g.hairpin ? HAIRPIN_LEAD : CHEVRON_LEAD;
+      var spacing = g.hairpin ? 86 : 104;
+      var from = g.s0 - lead;
+      // Where corners run straight into each other there is no approach to
+      // sign, and a full run of arrows would cross the previous corner's and
+      // read as a row of X's. Sign the entry only.
+      var prev = segs[i - 1];
+      if (prev && prev.turn && from < prev.s1) from = g.s0 - 130;
+      var to = g.s0 + len * (g.hairpin ? 0.65 : 0.4);
+      if (to < view.carS - 400 || from > sEnd) continue;
+
+      for (var s = Math.ceil(from / spacing) * spacing; s <= to; s += spacing) {
+        if (s < view.carS - 400 || s > sEnd) continue;
+        var a = s <= g.s0 ? 1 : Math.max(0, 1 - (s - g.s0) / (len * 0.4));
+        var idx = indexAt(s);
+        var hh = ch[idx], nx = Math.cos(hh), ny = -Math.sin(hh);
+        // Bolted to the face of the barrier, the way real circuit signage is.
+        // Flat on the ground they would simply be hidden behind the wall.
+        var off = widthAtIndex(idx) + WALL_OFF - 1;
+        var sz = WALL_H * 0.62;
+        project3(cx[idx] - nx * off, cy[idx] - ny * off, sz, view, p);
+        if (p.vis) drawChevron(ctx, p.x, p.y, p.sc, g.dir, a, g.hairpin);
+        project3(cx[idx] + nx * off, cy[idx] + ny * off, sz, view, p);
+        if (p.vis) drawChevron(ctx, p.x, p.y, p.sc, g.dir, a, g.hairpin);
+      }
+    }
+  }
+
+  function drawFog(ctx, view) {
+    if (!fogGrad) {
+      var top = HORIZON_Y - 20;
+      fogGrad = ctx.createLinearGradient(0, top, 0, top + 300);
+      fogGrad.addColorStop(0.00, TH.fog[0]);
+      fogGrad.addColorStop(0.34, TH.fog[1]);
+      fogGrad.addColorStop(1.00, TH.fog[2]);
+    }
+    ctx.fillStyle = fogGrad;
+    ctx.fillRect(-60, HORIZON_Y - 20, view.W + 120, 300);
+  }
+
+  DR.Road = {
+    HALF_W: HALF_W, BASE_HW: BASE_HW, halfWidthAt: halfWidthAt, SAMPLE: SAMPLE,
+    HORIZON_Y: HORIZON_Y, CAR_Y: CAR_Y, CAM_BACK: CAM_BACK,
+    FOCAL: FOCAL, LOOKAHEAD: LOOKAHEAD, SC_CAR: SC_CAR, NEAR: NEAR,
+    reset: reset, ensure: ensure, trim: trim,
+    centreAt: centreAt, locate: locate, indexAt: indexAt,
+    dirAt: dirAt, isHairpin: isHairpin, radiusAt: radiusAt,
+    lengthGenerated: lengthGenerated,
+    lapLength: lapLength, INTRO_LEN: INTRO_LEN, lapOutline: lapOutline,
+    tracks: trackList, setTrack: setTrack, currentTrack: currentTrack,
+    picks: pickList, ensurePicks: ensurePicks, trimPicks: trimPicks, drawPicks: drawPicks,
+    hazards: hazardList, ensureHazards: ensureHazards, trimHazards: trimHazards,
+    resetHazards: resetHazards, drawHazards: drawHazards, hazardPlan: hazardPlan,
+    drawCheckpoints: drawCheckpoints, checkpointAt: checkpointAt, cpCount: cpCount,
+    project: project, project3: project3, CAM_LIFT: CAM_LIFT,
+    buildRibbon: buildRibbon, quads: quads, drawWalls: drawWalls,
+    racingLine: racingLine, lineAt: lineAt, holdWindow: holdWindow, drawRacingLine: drawRacingLine,
+    lapPath: lapPath, lapCorners: lapCorners,
+    WALL_H: WALL_H, WALL_OFF: WALL_OFF,
+    drawBackground: drawBackground, draw: draw,
+    setTheme: setTheme, theme: theme, DEFAULT_THEME: DEFAULT_THEME,
+    prepareTerrain: prepareTerrain, hillsAt: hillsAt,
+    // For tests and tuning: the current frame's height table.
+    terrainTable: function () { return { on: terrOn, z: terrZ, xc: terrXc, bank: terrBank, s: terrS, lift: terrLift, step: TERR_STEP }; },
+    drawChevrons: drawChevrons, drawFog: drawFog
+  };
+})(window.DR = window.DR || {});
