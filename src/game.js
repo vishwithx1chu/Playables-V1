@@ -262,6 +262,17 @@
   var hintAlpha = 1;
   var hitCool = 0;
   var dmgSmokeT = 0;       // after a hard knock, your car smokes for a moment
+  /* Which painted skyline to show: the city's own, or for a city whose
+     painting isn't made yet, the closest one that is. Quick Play races use
+     the skyline of the city that owns the track. */
+  var SKY_STANDIN = { steel: 'portside', highpass: 'coastal', underpass: 'downtown', skyline: 'downtown', circuit: 'downtown' };
+  function skyArtFor(ci) {
+    if (ci < 0 && phase === 'racing' || ci < 0 && phase === 'done') ci = DR.Story.trackCity(DR.Road.currentTrack());
+    var id = ci >= 0 ? DR.Story.cities()[ci].id : 'downtown';
+    if (DR.Art.has('sky.' + id)) return 'sky.' + id;
+    var alt = SKY_STANDIN[id];
+    return alt && DR.Art.has('sky.' + alt) ? 'sky.' + alt : (DR.Art.has('sky.downtown') ? 'sky.downtown' : null);
+  }
   function playerColor() {
     var def = DR.Cars.get(DR.Save.selectedCar());
     return DR.Save.carColor(DR.Save.selectedCar()) || (def && def.color) || '#c8121f';
@@ -3635,6 +3646,7 @@
     else if (phase === 'scene' && sceneQueue[0] && sceneQueue[0].city !== undefined) themeCity = sceneQueue[0].city;
     else if (storyEvent && (phase === 'racing' || phase === 'done')) themeCity = storyEvent.city;
     DR.Road.setTheme(themeCity >= 0 ? DR.Story.themeFor(themeCity) : null);
+    DR.Road.setSkyArt(skyArtFor(themeCity));
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#05040a';
