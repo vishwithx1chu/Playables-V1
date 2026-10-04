@@ -36,6 +36,38 @@ touchscreen.
 
 ---
 
+## Current state: Milestone 3.3 — crashes, a comic-book story, a new lobby
+
+- **Crashes you can see.** When cars collide hard, pieces of bodywork fly
+  off in the car's own paint, sparks shoot every way, a shock ring spreads
+  across the tarmac, and smoke billows; a damaged car trails dark smoke
+  for a few seconds. A rival you spin out goes **all the way round**,
+  laying skid marks and tyre smoke, instead of just wobbling.
+- **The story is a comic.** Each scene is a page: a big illustrated panel
+  with the scene's title in a yellow caption, then the conversation
+  underneath — narration in yellow boxes, speech in white bubbles pointing
+  at the speaker's face. Each new line pops in down the page.
+- **A new lobby**, in the style of Asphalt: a garage showroom, your car
+  turning on a lit platform, and big orange and white tiles with icons
+  (trophy, chequered flag, wrench, steering wheel) that rise in when you
+  arrive.
+- **Flying into a city.** Pick a city on the map and the camera dives
+  down onto it, the city's name filling the screen, before the city opens.
+- **Ready for painted art.** `src/art.js` loads pictures made in Canva
+  from `assets/` (the lobby, the map, a skyline per city, comic panels,
+  character faces) and draws them in place of the code-drawn versions.
+  Any picture that isn't there yet simply isn't used, so the game always
+  works. To add art: put the files in `assets/` named like `lobby.jpg`,
+  `map.jpg`, `sky.portside.jpg`, `scene.prologue.jpg`, `face.FENDER.jpg`,
+  then run `node tools/art-manifest.js`.
+
+**How to test:** play a Quick Race and bump into rivals while boosting or
+drifting: watch for flying pieces, sparks and a rival spinning right round.
+Open Story to see the comic pages, pick a city to watch the camera fly in,
+and look at the new lobby on the title screen.
+
+---
+
 ## Current state: Milestone 3.2 — your racing name, and a guided first run
 
 **A racing name.** The first time anyone opens the game, it asks one
