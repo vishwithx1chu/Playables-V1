@@ -148,7 +148,8 @@
     var rx = W * (1 - UI.outBack(UI.step(t, 0.12, 0.5)));
     // Your card.
     UI.panel(ctx, 30 + lx, yTop, 330, h, { skew: 40, fill: 'rgba(14,20,40,0.95)', stroke: UI.C.cyan, lineWidth: 3, accent: UI.C.cyan });
-    UI.text(ctx, 'YOU', 190 + lx, yTop + 70, { size: 44, align: 'center', color: '#ffffff', stroke: 'rgba(4,2,10,0.9)' });
+    UI.text(ctx, 'YOU', 190 + lx, yTop + 36, { size: 18, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.cyan });
+    UI.text(ctx, you.name || 'YOU', 190 + lx, yTop + 80, { size: 44, align: 'center', color: '#ffffff', stroke: 'rgba(4,2,10,0.9)', maxW: 280 });
     DR.Game.drawProfileCarAt(ctx, 190 + lx, yTop + 200, 1.05, you.color);
     UI.text(ctx, you.car, 190 + lx, yTop + 300, { size: 24, align: 'center', color: UI.C.white, maxW: 270 });
     UI.text(ctx, 'RATING ' + you.rating, 190 + lx, yTop + 336, { size: 18, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.green });

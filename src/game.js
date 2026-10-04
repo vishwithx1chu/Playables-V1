@@ -689,7 +689,7 @@
     lapFlash = 0;
     standings = null; finishPos = 0;
     if (raceRivals) {
-      standings = DR.Rivals.standings({ name: 'YOU', color: '#ffd76a', time: raceClock,
+      standings = DR.Rivals.standings({ name: playerName(), color: '#ffd76a', time: raceClock,
                                         clock: raceClock, finishS: finishLineS() });
       for (var i = 0; i < standings.length; i++) if (standings[i].isPlayer) finishPos = i + 1;
     }
@@ -790,6 +790,115 @@
     DR.Tutorial.rescued();
   }
 
+  /* ------------------------------ RACING NAME ------------------------------
+     The one thing the game asks a new player: what to call them. A racing
+     name, not a sign-in — no account, no email, nothing but the name, kept
+     on this device only and never sent anywhere. It comes pre-filled with a
+     random one, so a single tap gets you racing; type over it if you like.
+     The typing goes into a real text box laid over the canvas, because
+     that's the only way to get the phone's keyboard up. */
+  var NAME_BOX = { x: 60, y: 430, w: 600, h: 132 };
+  var NAME_DICE_BTN = { x: 200, y: 600, w: 320, h: 64 };
+  var NAME_GO_BTN = { x: 140, y: 1070, w: 440, h: 86 };
+  var nameDraft = '', nameThen = 'title', nameInput = null;
+  var NAME_A = ['NEON', 'GHOST', 'TURBO', 'NIGHT', 'CHROME', 'VOLT', 'RAZOR', 'NOVA', 'ROGUE', 'BLAZE',
+                'STORM', 'HYPER', 'LUNAR', 'VENOM', 'FROST', 'SONIC', 'DUSK', 'RIOT'];
+  var NAME_B = ['VIPER', 'FOX', 'RIDER', 'COMET', 'BLADE', 'HAWK', 'WOLF', 'JET', 'ACE', 'BOLT',
+                'LYNX', 'FANG', 'PULSE', 'SPARK', 'RAVEN', 'KID', 'ROCKET', 'SHARK'];
+  function randomName() {
+    for (var k = 0; k < 20; k++) {
+      var n = NAME_A[Math.floor(Math.random() * NAME_A.length)] + ' ' + NAME_B[Math.floor(Math.random() * NAME_B.length)];
+      if (Math.random() < 0.35 && n.length <= 9) n += ' ' + (10 + Math.floor(Math.random() * 90));
+      if (n.length <= DR.Save.NAME_MAX && n !== nameDraft) return n;
+    }
+    return 'NEON RIDER';
+  }
+  function playerName() { return DR.Save.playerName() || 'YOU'; }
+  function openName(then) {
+    nameThen = then || 'title';
+    nameDraft = DR.Save.playerName() || randomName();
+    if (nameInput) nameInput.value = nameDraft;
+    phase = 'name';
+    DR.Input.releaseAll(); DR.Input.clearTap();
+  }
+  function confirmName() {
+    if (!DR.Save.setPlayerName(nameDraft)) { nameDraft = randomName(); DR.Save.setPlayerName(nameDraft); }
+    if (nameInput) nameInput.blur();
+    if (nameThen === 'tutorial') startTutorial();
+    else phase = 'title';
+  }
+  function rollName() {
+    nameDraft = randomName();
+    if (nameInput) nameInput.value = nameDraft;
+  }
+  function makeNameInput() {
+    var el = document.createElement('input');
+    el.type = 'text';
+    el.maxLength = DR.Save.NAME_MAX;
+    el.autocomplete = 'off';
+    el.spellcheck = false;
+    el.setAttribute('autocapitalize', 'characters');
+    el.setAttribute('autocorrect', 'off');
+    el.setAttribute('enterkeyhint', 'go');
+    el.setAttribute('aria-label', 'Racing name');
+    el.className = 'name-input';
+    el.addEventListener('input', function () {
+      var clean = DR.Save.cleanName(el.value);
+      if (clean !== el.value) el.value = clean;
+      nameDraft = clean;
+    });
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); confirmName(); }
+    });
+    document.body.appendChild(el);
+    return el;
+  }
+  // Every frame: the box sits exactly over the name panel, at the scale
+  // the playfield is drawn at, and only while the name screen is up.
+  function syncNameInput() {
+    if (!nameInput) return;
+    var on = phase === 'name';
+    if (!on) { if (nameInput.style.display !== 'none') { nameInput.blur(); nameInput.style.display = 'none'; } return; }
+    var b = NAME_BOX, ip = DR.UI.outCubic(DR.UI.step(phaseT, 0.15, 0.4));
+    nameInput.style.display = 'block';
+    nameInput.style.left = (offX + (b.x + 30) * scale) + 'px';
+    nameInput.style.top = (offY + (b.y + 28) * scale) + 'px';
+    nameInput.style.width = ((b.w - 60) * scale) + 'px';
+    nameInput.style.height = ((b.h - 56) * scale) + 'px';
+    nameInput.style.fontSize = Math.round(54 * scale) + 'px';
+    nameInput.style.opacity = String(ip);
+  }
+  function drawName(ctx2, v) {
+    var UI = DR.UI, t = phaseT, W = v.W;
+    var renaming = !!DR.Save.playerName();
+    UI.header(ctx2, W, renaming ? 'CHANGE NAME' : 'WHO ARE YOU?', 'YOUR RACING NAME ON THE CIRCUIT', t);
+    // A driver's licence card, in the game's style: the name goes on it.
+    var p = UI.outBack(UI.step(t, 0.1, 0.45));
+    ctx2.save();
+    ctx2.globalAlpha *= UI.clamp01(p);
+    UI.panel(ctx2, 40, 300, 640, 420, { skew: 30, fill: 'rgba(10,8,24,0.92)', stroke: 'rgba(150,196,225,0.4)', lineWidth: 2, accent: UI.C.magenta });
+    UI.text(ctx2, 'CIRCUIT RACING LICENCE', W / 2, 350, { size: 18, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.dim });
+    UI.text(ctx2, 'NAME', NAME_BOX.x + 30, NAME_BOX.y - 12, { size: 14, font: UI.SANS, weight: '900', lean: 0, color: UI.C.cyan });
+    var focus = nameInput && document.activeElement === nameInput;
+    UI.panel(ctx2, NAME_BOX.x, NAME_BOX.y, NAME_BOX.w, NAME_BOX.h, { skew: 18, fill: 'rgba(30,24,60,0.9)',
+      stroke: focus ? UI.C.cyan : 'rgba(150,196,225,0.5)', lineWidth: focus ? 3 : 1.5,
+      glow: focus ? 'rgba(34,230,255,0.4)' : null });
+    if (!nameInput) UI.text(ctx2, nameDraft, W / 2, NAME_BOX.y + 86, { size: 54, align: 'center', color: '#ffffff' });
+    ctx2.restore();
+    drawButton(ctx2, NAME_DICE_BTN, '↻  RANDOM NAME');
+    var hp = UI.step(t, 0.35, 0.4);
+    UI.text(ctx2, 'TAP THE NAME TO TYPE YOUR OWN', W / 2, 700, { size: 18, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: '#ffffff', alpha: hp });
+    UI.text(ctx2, 'UP TO 12 LETTERS AND NUMBERS', W / 2, 790, { size: 18, font: UI.SANS, weight: '800', lean: 0, align: 'center', color: UI.C.dim, alpha: hp });
+    UI.text(ctx2, 'A NICKNAME — NOT YOUR REAL NAME', W / 2, 822, { size: 18, font: UI.SANS, weight: '800', lean: 0, align: 'center', color: UI.C.gold, alpha: hp });
+    UI.text(ctx2, 'IT STAYS ON THIS DEVICE. NOTHING ELSE IS ASKED OR SENT.', W / 2, 854, { size: 15, font: UI.SANS, weight: '800', lean: 0, align: 'center', color: UI.C.dim, alpha: hp, maxW: 640 });
+    var gp = UI.outCubic(UI.step(t, 0.45, 0.4));
+    ctx2.save(); ctx2.globalAlpha *= gp; ctx2.translate(0, (1 - gp) * 80);
+    drawButton(ctx2, NAME_GO_BTN, renaming ? 'SAVE ▸' : 'LET’S RACE ▸', { primary: true, size: 34 });
+    ctx2.restore();
+    if (renaming) drawButton(ctx2, BACK_BTN, '◂ BACK');
+    ctx2.textAlign = 'left';
+  }
+
   function startTutorial() {
     wrongWayT = 0;
     startRace(0, 'tutorial');
@@ -797,6 +906,7 @@
   }
   function finishTutorial() {
     phase = 'done'; lapFlash = 0;
+    DR.Save.setTutorialSeen();
     var first = !DR.Save.isUnlocked(TUTORIAL_ID);
     doneAward = first ? TUTORIAL_PAY : 0;
     if (first) { DR.Save.unlock(TUTORIAL_ID); DR.Save.addCurrency(doneAward); }
@@ -805,9 +915,10 @@
     if (first) settleRewards('tutorial', 1, true); else results = null;
     doneSel = 1;
   }
+  // Out of the tutorial, into the career: the prologue plays if it hasn't.
   function leaveTutorial() {
-    phase = 'story'; storySel = DR.Story.currentCity();
     DR.Input.releaseAll(); DR.Input.clearTap();
+    openStory();
   }
 
   function startStoryEvent(ci, ei) {
@@ -1264,13 +1375,15 @@
   var TITLE_CAR_RECT = { x: 150, y: 232, w: 420, h: 398 };
 
   // The chips along the top of every main screen: level, stars, money.
+  // Your name and level, top left of the title; tap it to change the name.
+  var NAME_CHIP = { x: 20, y: 18, w: 240, h: 40 };
   function drawTopBar(ctx2, v, enter) {
     var UI = DR.UI, p = UI.outCubic(enter === undefined ? 1 : enter);
     ctx2.save();
     ctx2.globalAlpha *= p;
     ctx2.translate(0, (1 - p) * -60);
     var lv = DR.Career.info();
-    UI.chip(ctx2, 20, 18, 240, 'lvl', lv.level, { frac: lv.frac });
+    UI.chip(ctx2, NAME_CHIP.x, NAME_CHIP.y, NAME_CHIP.w, 'lvl', lv.level, { frac: lv.frac, label: playerName() + '  \u270E' });
     UI.chip(ctx2, 272, 18, 130, 'star', DR.Career.totalStars().got);
     UI.chip(ctx2, 520, 18, 180, 'cr', DR.Save.currency().toLocaleString());
     ctx2.restore();
@@ -2553,6 +2666,7 @@
     var lx = (t.x - offX) / scale, ly = (t.y - offY) / scale;
     var i, b;
     if (phase === 'title') {
+      if (inBox(lx, ly, NAME_CHIP)) { openName('title'); return; }
       if (inBox(lx, ly, RESET_BTN)) {
         if (resetArmed > 0) { startOver(); resetArmed = 0; resetDone = 2.5; }
         else resetArmed = 4;
@@ -2566,6 +2680,10 @@
           return;
         }
       }
+    } else if (phase === 'name') {
+      if (inBox(lx, ly, NAME_DICE_BTN)) { rollName(); return; }
+      if (inBox(lx, ly, NAME_GO_BTN)) { confirmName(); return; }
+      if (DR.Save.playerName() && inBox(lx, ly, BACK_BTN)) { phase = 'title'; return; }
     } else if (phase === 'modes') {
       if (inBox(lx, ly, BACK_BTN)) { phase = 'title'; return; }
       for (i = 0; i < MODES.length; i++) {
@@ -2802,7 +2920,7 @@
     var tr = DR.Road.tracks()[DR.Road.currentTrack()];
     var def = DR.Cars.get(DR.Save.selectedCar()) || DR.Cars.get('nightrunner');
     var o = { mode: mode, title: tr.name, sub: '', lines: [], boss: null,
-              you: { car: def.name.toUpperCase(), rating: DR.Cars.rating(def.id),
+              you: { name: playerName(), car: def.name.toUpperCase(), rating: DR.Cars.rating(def.id),
                      color: DR.Save.carColor(def.id) || def.color } };
     if (storyEvent) {
       var c = DR.Story.cities()[storyEvent.city];
@@ -3153,7 +3271,9 @@
     var st = DR.Input.takeMenuStep();
     var confirm = DR.Input.takeBoost();
 
-    if (phase === 'title') {
+    if (phase === 'name') {
+      if (confirm) confirmName();
+    } else if (phase === 'title') {
       if (st) {
         titleSel = ((titleSel + st) % TITLE_ITEMS.length + TITLE_ITEMS.length) % TITLE_ITEMS.length;
       }
@@ -3209,6 +3329,7 @@
     // what's on screen — leaving the WebGL layer showing (or hidden) behind
     // is a whole class of bug this avoids for free.
     if (DR.Car3D) DR.Car3D.show(phase === 'garage' || phase === 'title');
+    syncNameInput();
     // A new screen: restart its entrance animations and sweep it in.
     if (phase !== drawnPhase) {
       var fromRace = drawnPhase === 'racing';
@@ -3239,11 +3360,12 @@
     ctx.translate(sh.x, sh.y);
 
     if (phase === 'title' || phase === 'modes' || phase === 'select' || phase === 'city' ||
-        phase === 'story' || phase === 'garage' || phase === 'tutorial' || phase === 'scene') {
+        phase === 'story' || phase === 'garage' || phase === 'tutorial' || phase === 'scene' || phase === 'name') {
       DR.Road.prepareTerrain(null);          // menus sit on the flat
       DR.Road.drawBackground(ctx, menuView());
       if (phase !== 'scene') DR.UI.backdrop(ctx, v.W, v.H, clock);
       if (phase === 'title') drawTitle(ctx, v);
+      else if (phase === 'name') drawName(ctx, v);
       else if (phase === 'modes') { drawModes(ctx, v); drawButton(ctx, BACK_BTN, '\u25C2 TITLE'); }
       else if (phase === 'select') { drawSelect(ctx, v); drawButton(ctx, BACK_BTN, '\u25C2 MODES'); }
       else if (phase === 'garage') drawGarage(ctx, v);
@@ -3370,6 +3492,12 @@
     window.addEventListener('orientationchange', resize);
     if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
 
+    nameInput = makeNameInput();
+    /* First open: a name, then straight into the tutorial. After that, the
+       tutorial keeps opening the game until it's been finished once. */
+    if (!DR.Save.playerName()) openName(DR.Save.tutorialSeen() ? 'title' : 'tutorial');
+    else if (!DR.Save.tutorialSeen()) startTutorial();
+
     last = performance.now();
     requestAnimationFrame(frame);
   }
@@ -3436,6 +3564,10 @@
       if (kind === 'doneRetry') return DONE_RETRY_BTN;
       if (kind === 'doneContinue') return DONE_CONT_BTN;
       if (kind === 'reset') return RESET_BTN;
+      if (kind === 'nameChip') return NAME_CHIP;
+      if (kind === 'nameDice') return NAME_DICE_BTN;
+      if (kind === 'nameGo') return NAME_GO_BTN;
+      if (kind === 'nameBox') return NAME_BOX;
       if (kind === 'mapEnter') return MAP_ENTER_BTN;
       if (kind === 'mapStory') return MAP_STORY_BTN;
       if (kind === 'cityStart') return CITY_START_BTN;
@@ -3459,6 +3591,8 @@
     scene: function () { return sceneQueue[0] ? { title: sceneQueue[0].title, line: sceneLine, lines: sceneQueue[0].lines.length, left: sceneQueue.length } : null; },
     startStoryEvent: startStoryEvent,
     storySel: function () { return storySel; },
+    openName: openName,
+    nameDraft: function () { return nameDraft; },
     citySel: function () { return citySel; },
     storyEvent: function () { return storyEvent; },
     storyResult: function () { return storyResult; },

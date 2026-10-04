@@ -126,6 +126,9 @@ mastering.
 - The SDK script must load before any game code once integrated (not yet).
 - No in-game exit/quit button, no external links, no share prompts, no
   login-like screens, no collecting any personal information.
+- The one thing a player types is a racing nickname (agreed with us): kept
+  on the device only, never sent anywhere, and the screen tells players to
+  use a nickname, not their real name. Ask for nothing else.
 - No external network calls of any kind — no analytics, no CDNs.
 - Must support touch AND mouse AND keyboard.
 - Must be interactive within 5 seconds; keep the total download small.

@@ -36,6 +36,35 @@ touchscreen.
 
 ---
 
+## Current state: Milestone 3.2 — your racing name, and a guided first run
+
+**A racing name.** The first time anyone opens the game, it asks one
+thing: what to call them on the Circuit. The name comes pre-filled with a
+random one (like NEON VIPER), so one tap gets you going, or you can tap it
+and type your own: up to 12 letters, numbers and spaces. The page reminds
+players to pick a nickname, not their real name. The name then shows up on
+the boss VS card, the results standings, the title screen, and in the
+story itself ("Kai's little brother? NEON VIPER, is it?"). Tap the name on
+the title screen to change it.
+
+It is the only thing the game asks for: no account, no email, nothing
+else. It's kept on the device with the rest of the save and never sent
+anywhere, which keeps it inside the YouTube Playables rules against
+login-like screens and collecting personal information.
+
+**The tutorial runs itself.** A new player goes from the name straight into
+the tutorial, with no menus first. Until they finish it once, opening the
+game takes them back into it. When they finish, CONTINUE leads into Story
+mode, starting with the prologue. START OVER keeps the name and doesn't
+force the tutorial again.
+
+**How to test:** open the game in a private window (so it's a fresh
+player). You'll get the name screen. Type a name, press LET'S RACE, and
+you're in the tutorial. Finish it, go to Story, and your name is in the
+prologue and on Fender's VS card.
+
+---
+
 ## Current state: Milestone 3.1 — the look and the show
 
 The whole game has been redesigned around one visual language, the way
