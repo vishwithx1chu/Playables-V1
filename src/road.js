@@ -1371,6 +1371,35 @@
     ctx.globalAlpha = 1;
   }
 
+  /* A painted skyline (Canva art, see art.js) in place of the drawn sun
+     and horizon, when there is one for this city. It's a panorama: it
+     slides across as the car turns, tiled with mirrored copies so it never
+     shows a seam, and sits on the horizon line. */
+  var skyArt = null;
+  function setSkyArt(name) { skyArt = name || null; }
+  function drawSkyArt(ctx, view) {
+    var img = skyArt && DR.Art ? DR.Art.get(skyArt) : null;
+    if (!img) return false;
+    var W = view.W;
+    var h = HORIZON_Y + 74, w = img.naturalWidth * h / img.naturalHeight;
+    var off = -(view.camAngle || 0) * FOCAL * 0.6;
+    off = ((off % (2 * w)) + 2 * w) % (2 * w);
+    var x0 = W / 2 - w / 2 + off - 2 * w, top = HORIZON_Y + 6 - h;
+    for (var k = 0; k < 5; k++) {
+      var x = x0 + k * w;
+      if (x > W + 60 || x + w < -60) continue;
+      if (k % 2) { ctx.save(); ctx.translate(x + w, top); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0, w, h); ctx.restore(); }
+      else ctx.drawImage(img, x, top, w, h);
+    }
+    // Melt the bottom edge into the ground, and dim it a touch so the road
+    // and the cars stay the brightest things on screen.
+    var g = ctx.createLinearGradient(0, HORIZON_Y - 40, 0, HORIZON_Y + 8);
+    g.addColorStop(0, 'rgba(6,4,14,0)'); g.addColorStop(1, 'rgba(6,4,14,0.9)');
+    ctx.fillStyle = g; ctx.fillRect(-60, HORIZON_Y - 40, W + 120, 48);
+    ctx.fillStyle = 'rgba(6,4,16,0.18)'; ctx.fillRect(-60, -60, W + 120, HORIZON_Y + 60);
+    return true;
+  }
+
   function drawBackground(ctx, view) {
     var W = view.W, H = view.H;
     if (!skyGrad) {
@@ -1384,8 +1413,10 @@
     ctx.fillRect(-60, -60, W + 120, HORIZON_Y + 60);
 
     if (TH.stars > 0) drawStars(ctx, view);
-    drawSun(ctx, view);
-    drawHorizon(ctx, view);
+    if (!drawSkyArt(ctx, view)) {
+      drawSun(ctx, view);
+      drawHorizon(ctx, view);
+    }
 
     if (!groundGrad) {
       groundGrad = ctx.createLinearGradient(0, HORIZON_Y, 0, H + 60);
@@ -2262,7 +2293,7 @@
     lapPath: lapPath, lapCorners: lapCorners,
     WALL_H: WALL_H, WALL_OFF: WALL_OFF,
     drawBackground: drawBackground, draw: draw,
-    setTheme: setTheme, theme: theme, DEFAULT_THEME: DEFAULT_THEME,
+    setTheme: setTheme, setSkyArt: setSkyArt, theme: theme, DEFAULT_THEME: DEFAULT_THEME,
     prepareTerrain: prepareTerrain, hillsAt: hillsAt,
     // For tests and tuning: the current frame's height table.
     terrainTable: function () { return { on: terrOn, z: terrZ, xc: terrXc, bank: terrBank, s: terrS, lift: terrLift, step: TERR_STEP }; },
