@@ -88,8 +88,14 @@
       var active = { passive: false };
       grabFocus(target);
 
+      // Typing in a text box (the racing-name field) is typing, not driving:
+      // space, A, D and W must reach the box, not the car.
+      var typing = function (e) {
+        var el = e.target;
+        return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
+      };
       window.addEventListener('keydown', function (e) {
-        if (e.repeat) return;
+        if (e.repeat || typing(e)) return;
         if (isBoostKey(e)) { boostQueued = true; boostKeys++; pressedOnce = true; lastDevice = 'key'; e.preventDefault(); }
         else if (isLeftKey(e)) { keyLeft = true; menuSteps -= 1; pressedOnce = true; lastDevice = 'key'; e.preventDefault(); }
         else if (isRightKey(e)) { keyRight = true; menuSteps += 1; pressedOnce = true; lastDevice = 'key'; e.preventDefault(); }

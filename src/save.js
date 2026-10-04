@@ -30,7 +30,9 @@
       bestResults: {},        // race id -> { value, lowerIsBetter }
       tutorialDone: false,
       xp: 0,                  // driver experience, all time
-      stars: {}               // story event id -> best stars earned, 0-3
+      stars: {},              // story event id -> best stars earned, 0-3
+      name: '',               // the player's racing name; '' until they pick one
+      tutorialSeen: false     // finished the tutorial once on this device
     };
   }
 
@@ -67,6 +69,8 @@
     // an older save keeps its progress rather than being thrown away.
     if (typeof data.xp !== 'number') data.xp = 0;
     if (!data.stars || typeof data.stars !== 'object') data.stars = {};
+    if (typeof data.name !== 'string') data.name = '';
+    if (typeof data.tutorialSeen !== 'boolean') data.tutorialSeen = data.unlocked.indexOf('tutorial:done') >= 0;
   }
 
   function persist() {
@@ -155,13 +159,38 @@
   // with ensureStarter() again (or a reload, which does the same thing),
   // exactly like a real boot does. Left that way on purpose rather than
   // re-granting the starter here, so this stays a true reset.
+  /* The racing name. Only ever kept on this device, never sent anywhere,
+     and only the characters a name on a results board needs: letters,
+     numbers, spaces, - and _, up to 12. */
+  var NAME_MAX = 12;
+  function cleanName(n) {
+    return String(n || '').toUpperCase().replace(/[^A-Z0-9 _-]/g, '').replace(/\s+/g, ' ')
+                          .replace(/^\s+/, '').slice(0, NAME_MAX);
+  }
+  function playerName() { return data.name; }
+  function setPlayerName(n) {
+    n = cleanName(n).replace(/\s+$/, '');
+    if (!n) return false;
+    data.name = n;
+    persist();
+    return true;
+  }
+  function tutorialSeen() { return data.tutorialSeen; }
+  function setTutorialSeen() { data.tutorialSeen = true; persist(); }
+
+  // START OVER is a new career, not a new person: the name stays, and so
+  // does having seen the tutorial (it isn't forced on them a second time).
   function resetAll() {
+    var keepName = data.name, keepSeen = data.tutorialSeen;
     data = freshData();
+    data.name = keepName; data.tutorialSeen = keepSeen;
     persist();
   }
 
   DR.Save = {
     load: load,
+    playerName: playerName, setPlayerName: setPlayerName, cleanName: cleanName, NAME_MAX: NAME_MAX,
+    tutorialSeen: tutorialSeen, setTutorialSeen: setTutorialSeen,
     ensureStarter: ensureStarter,
     currency: currency, addCurrency: addCurrency, spendCurrency: spendCurrency,
     ownedCars: ownedCars, ownsCar: ownsCar, buyCar: buyCar,

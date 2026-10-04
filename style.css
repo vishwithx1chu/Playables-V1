@@ -35,3 +35,30 @@ body {
   height: 100%;
   touch-action: none;
 }
+
+/* The racing-name box: a real text field (the only way to bring up a
+   phone's keyboard), laid over the name card on the canvas and styled to
+   look drawn rather than like a web form. game.js positions and scales it
+   every frame, and hides it everywhere else. */
+.name-input {
+  display: none;
+  position: fixed;
+  z-index: 5;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #ffffff;
+  caret-color: #22e6ff;
+  text-align: center;
+  text-transform: uppercase;
+  font-family: "Arial Black", "Segoe UI Black", system-ui, sans-serif;
+  font-style: italic;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  -webkit-user-select: text;
+  user-select: text;
+  touch-action: manipulation;
+}

@@ -247,6 +247,7 @@
       { who: '', text: 'The night he raced Apex for the championship, his steering locked on the final corner. Kai never came home.' },
       { who: '', text: 'The league called it an accident and closed the file. Then I found his car in a scrapyard. The steering had been cut. Clean. On purpose.' },
       { who: '', text: 'I rebuilt it. The Nightrunner was Kai’s. Now it’s mine.' },
+      { who: '', text: 'Nobody on the Circuit knows my real name. They’re going to learn this one: {NAME}.' },
       { who: '', text: 'Ten cities stand between me and Apex. I’m going to race every one of them, find out who did this, and make the whole league hear the truth.' }
     ]
   };
@@ -260,10 +261,10 @@
       map: [0.16, 0.90],
       arrive: [
         { who: '', text: 'Portside. Kai started here, racing the docks for pocket money.' },
-        { who: 'FENDER', text: 'Kai’s little brother? Let’s see if it runs in the family.' }
+        { who: 'FENDER', text: 'Kai’s little brother? {NAME}, is it? Let’s see if it runs in the family.' }
       ],
       after: [
-        { who: 'FENDER', text: 'You drive like him. Listen — the week before the final, Kai’s car came through my docks for a refit.' },
+        { who: 'FENDER', text: 'You drive like him, {NAME}. Listen — the week before the final, Kai’s car came through my docks for a refit.' },
         { who: 'FENDER', text: 'A mechanic called Wrench did the work. Paid in cash. He was gone the next morning.' },
         { who: 'FENDER', text: 'Take the Harbormaster. Find Wrench.' }
       ]
@@ -385,9 +386,15 @@
 
   function narrative(ci) { return NARRATIVE[CITIES[ci].id]; }
   // What the boss says on your way in: their line from the arrival scene.
+  /* Lines can say the player's racing name: {NAME} is filled in when the
+     line is handed out, so a renamed player hears their new name. */
+  function sayName(text) { return text.replace(/\{NAME\}/g, (DR.Save && DR.Save.playerName()) || 'ROOKIE'); }
+  function fillLines(lines) {
+    return lines.map(function (l) { return { who: l.who, text: sayName(l.text) }; });
+  }
   function bossQuote(ci) {
     var a = narrative(ci).arrive, who = CITIES[ci].boss;
-    for (var i = 0; i < a.length; i++) if (a[i].who === who) return a[i].text;
+    for (var i = 0; i < a.length; i++) if (a[i].who === who) return sayName(a[i].text);
     return 'Let\u2019s see what you\u2019ve got.';
   }
   function placeName(ci, ei) {
@@ -397,13 +404,13 @@
   function mapPos(ci) { return narrative(ci).map; }
   function arrivalScene(ci) {
     var c = CITIES[ci];
-    return { title: c.name, sub: 'CITY ' + (ci + 1) + ' OF ' + CITIES.length, city: ci, lines: narrative(ci).arrive };
+    return { key: c.id + '.in', title: c.name, sub: 'CITY ' + (ci + 1) + ' OF ' + CITIES.length, city: ci, lines: fillLines(narrative(ci).arrive) };
   }
   function aftermathScene(ci) {
     var c = CITIES[ci];
     var last = ci === CITIES.length - 1;
-    return { title: last ? 'THE TRUTH' : c.boss + ' IS BEATEN', sub: c.name, city: ci,
-             lines: narrative(ci).after, ending: last };
+    return { key: c.id + '.out', title: last ? 'THE TRUTH' : c.boss + ' IS BEATEN', sub: c.name, city: ci,
+             lines: fillLines(narrative(ci).after), ending: last };
   }
 
   // ---- The difficulty curve, in one place ------------------------------
@@ -612,7 +619,8 @@
     bossBeaten: bossBeaten, cleared: cleared, eventLocked: eventLocked,
     currentCity: currentCity, setup: setup, resolve: resolve, themeFor: themeFor,
     eventId: eventId, bossIndex: bossIndex, ratingNeed: ratingNeed,
-    prologue: function () { return PROLOGUE; }, arrivalScene: arrivalScene,
+    prologue: function () { return { key: 'prologue', title: PROLOGUE.title, sub: PROLOGUE.sub, lines: fillLines(PROLOGUE.lines) }; },
+    sayName: sayName, arrivalScene: arrivalScene,
     aftermathScene: aftermathScene, placeName: placeName, mapPos: mapPos, bossQuote: bossQuote,
     bossSkill: function (ci) { return bossSkill(ci); },
     trackUnlocked: trackUnlocked, trackLockText: trackLockText, trackCity: trackCity,

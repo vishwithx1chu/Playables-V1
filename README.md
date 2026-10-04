@@ -36,6 +36,67 @@ touchscreen.
 
 ---
 
+## Current state: Milestone 3.3 — crashes, a comic-book story, a new lobby
+
+- **Crashes you can see.** When cars collide hard, pieces of bodywork fly
+  off in the car's own paint, sparks shoot every way, a shock ring spreads
+  across the tarmac, and smoke billows; a damaged car trails dark smoke
+  for a few seconds. A rival you spin out goes **all the way round**,
+  laying skid marks and tyre smoke, instead of just wobbling.
+- **The story is a comic.** Each scene is a page: a big illustrated panel
+  with the scene's title in a yellow caption, then the conversation
+  underneath — narration in yellow boxes, speech in white bubbles pointing
+  at the speaker's face. Each new line pops in down the page.
+- **A new lobby**, in the style of Asphalt: a garage showroom, your car
+  turning on a lit platform, and big orange and white tiles with icons
+  (trophy, chequered flag, wrench, steering wheel) that rise in when you
+  arrive.
+- **Flying into a city.** Pick a city on the map and the camera dives
+  down onto it, the city's name filling the screen, before the city opens.
+- **Ready for painted art.** `src/art.js` loads pictures made in Canva
+  from `assets/` (the lobby, the map, a skyline per city, comic panels,
+  character faces) and draws them in place of the code-drawn versions.
+  Any picture that isn't there yet simply isn't used, so the game always
+  works. To add art: put the files in `assets/` named like `lobby.jpg`,
+  `map.jpg`, `sky.portside.jpg`, `scene.prologue.jpg`, `face.FENDER.jpg`,
+  then run `node tools/art-manifest.js`.
+
+**How to test:** play a Quick Race and bump into rivals while boosting or
+drifting: watch for flying pieces, sparks and a rival spinning right round.
+Open Story to see the comic pages, pick a city to watch the camera fly in,
+and look at the new lobby on the title screen.
+
+---
+
+## Current state: Milestone 3.2 — your racing name, and a guided first run
+
+**A racing name.** The first time anyone opens the game, it asks one
+thing: what to call them on the Circuit. The name comes pre-filled with a
+random one (like NEON VIPER), so one tap gets you going, or you can tap it
+and type your own: up to 12 letters, numbers and spaces. The page reminds
+players to pick a nickname, not their real name. The name then shows up on
+the boss VS card, the results standings, the title screen, and in the
+story itself ("Kai's little brother? NEON VIPER, is it?"). Tap the name on
+the title screen to change it.
+
+It is the only thing the game asks for: no account, no email, nothing
+else. It's kept on the device with the rest of the save and never sent
+anywhere, which keeps it inside the YouTube Playables rules against
+login-like screens and collecting personal information.
+
+**The tutorial runs itself.** A new player goes from the name straight into
+the tutorial, with no menus first. Until they finish it once, opening the
+game takes them back into it. When they finish, CONTINUE leads into Story
+mode, starting with the prologue. START OVER keeps the name and doesn't
+force the tutorial again.
+
+**How to test:** open the game in a private window (so it's a fresh
+player). You'll get the name screen. Type a name, press LET'S RACE, and
+you're in the tutorial. Finish it, go to Story, and your name is in the
+prologue and on Fender's VS card.
+
+---
+
 ## Current state: Milestone 3.1 — the look and the show
 
 The whole game has been redesigned around one visual language, the way

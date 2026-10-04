@@ -22,7 +22,10 @@
   var SPARK_G = 900;       // gravity on a spark, world units per second squared
 
   var tmp = { x: 0, y: 0 };
-  var puff = null;
+  var puff = null, darkPuff = null;
+  var shards = [];         // bits of bodywork thrown off a crash, tumbling
+  var rings = [];          // a shockwave ring on the tarmac where cars met
+  var MAX_SHARDS = 120;
 
   var motionScale = 1;
   try {
@@ -46,6 +49,64 @@
     puff = c; return c;
   }
 
+  // Smoke from a damaged car is dark, not the pale tyre smoke.
+  function getDarkPuff() {
+    if (darkPuff) return darkPuff;
+    var c = document.createElement('canvas');
+    c.width = c.height = 64;
+    var g = c.getContext('2d');
+    var rg = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    rg.addColorStop(0.00, 'rgba(60,56,72,0.95)');
+    rg.addColorStop(0.50, 'rgba(40,36,52,0.45)');
+    rg.addColorStop(1.00, 'rgba(20,18,30,0)');
+    g.fillStyle = rg; g.fillRect(0, 0, 64, 64);
+    darkPuff = c; return c;
+  }
+
+  /* ------------------------------ crashes ------------------------------
+     What a crash LOOKS like, so it never has to be told in words alone:
+     sparks thrown every way, pieces of bodywork tumbling off in the car's
+     own paint, a ring of shock on the tarmac, a cloud of smoke, and the
+     camera knocked. Nothing here flashes the screen. */
+  function smokeAt(x, y, n, size, peak, dark) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2, sp = 15 + Math.random() * 60;
+      smoke.push({ x: x + (Math.random() - 0.5) * 20, y: y + (Math.random() - 0.5) * 20,
+                   vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+                   r: (size || 10) * (0.7 + Math.random() * 0.6), grow: 30 + Math.random() * 40,
+                   life: 0, max: 0.7 + Math.random() * 0.7, peak: peak || 0.3, dark: !!dark });
+    }
+    if (smoke.length > MAX_SMOKE) smoke.splice(0, smoke.length - MAX_SMOKE);
+  }
+  function skidAt(x, y, r) {
+    skids.push({ x: x, y: y, r: r || 5, lvl: 2 });
+    if (skids.length > MAX_SKIDS) skids.splice(0, skids.length - MAX_SKIDS);
+  }
+  function debris(x, y, color, n, power) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2, sp = (80 + Math.random() * 260) * power;
+      shards.push({ x: x + (Math.random() - 0.5) * 16, y: y + (Math.random() - 0.5) * 16, z: 10 + Math.random() * 18,
+                    vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz: (120 + Math.random() * 280) * power,
+                    rot: Math.random() * 6.28, vr: (Math.random() - 0.5) * 24,
+                    size: 4 + Math.random() * 7, color: Math.random() < 0.25 ? '#c8d4e6' : color,
+                    life: 0, max: 0.9 + Math.random() * 0.8 });
+    }
+    if (shards.length > MAX_SHARDS) shards.splice(0, shards.length - MAX_SHARDS);
+  }
+  function crash(x, y, color, power) {
+    power = Math.max(0.3, Math.min(1.6, power || 1));
+    var n = Math.round(10 + 14 * power);
+    for (var k = 0; k < 6; k++) {
+      var a = k / 6 * Math.PI * 2 + Math.random() * 0.5;
+      wallSparks(x, y, Math.cos(a), Math.sin(a), Math.ceil(n / 6), 0.6 + 0.6 * power);
+    }
+    debris(x, y, color || '#eaf2ff', Math.round(5 + 8 * power), 0.7 + 0.5 * power);
+    smokeAt(x, y, Math.round(4 + 6 * power), 14, 0.35, false);
+    rings.push({ x: x, y: y, t: 0, dur: 0.45, power: power });
+    if (rings.length > 6) rings.shift();
+    shakeBy(4 + 10 * power, 0.32);
+  }
+
   function boostKick() { kick = 0; }
 
   function pickupBurst() {
@@ -59,7 +120,7 @@
   function reset() {
     kick = 1e9; burst.length = 0;
     skids.length = 0; smoke.length = 0; labels.length = 0;
-    sparks.length = 0; wallHitList.length = 0;
+    sparks.length = 0; wallHitList.length = 0; shards.length = 0; rings.length = 0;
     shake.mag = 0; shake.t = shake.dur; flash = null;
   }
 
@@ -196,6 +257,19 @@
       if (sp.life >= sp.max || dx * dx + dy * dy > CULL * CULL) sparks.splice(i, 1);
     }
 
+    for (i = shards.length - 1; i >= 0; i--) {
+      var sd = shards[i];
+      sd.life += dt;
+      sd.x += sd.vx * dt; sd.y += sd.vy * dt; sd.z += sd.vz * dt;
+      sd.vz -= SPARK_G * dt; sd.rot += sd.vr * dt;
+      if (sd.z < 1) { sd.z = 1; sd.vz = Math.abs(sd.vz) * 0.3; sd.vx *= 0.6; sd.vy *= 0.6; sd.vr *= 0.6; }
+      if (sd.life >= sd.max) shards.splice(i, 1);
+    }
+    for (i = rings.length - 1; i >= 0; i--) {
+      rings[i].t += dt;
+      if (rings[i].t >= rings[i].dur) rings.splice(i, 1);
+    }
+
     for (i = labels.length - 1; i >= 0; i--) {
       labels[i].t += dt;
       if (labels[i].t >= labels[i].dur) labels.splice(i, 1);
@@ -257,7 +331,7 @@
 
   function drawSmoke(ctx, view) {
     if (!smoke.length) return;
-    var img = getPuff(), unit = DR.Road.SC_CAR;
+    var img = getPuff(), dimg = getDarkPuff(), unit = DR.Road.SC_CAR;
     for (var i = 0; i < smoke.length; i++) {
       var p = smoke[i];
       DR.Road.project(p.x, p.y, view, _q);
@@ -268,7 +342,7 @@
       var r = p.r * _q.sc / unit;
       if (r < 0.5) continue;
       ctx.globalAlpha = a;
-      ctx.drawImage(img, _q.x - r, _q.y - r, r * 2, r * 2);
+      ctx.drawImage(p.dark ? dimg : img, _q.x - r, _q.y - r, r * 2, r * 2);
     }
     ctx.globalAlpha = 1;
   }
@@ -402,6 +476,39 @@
     ctx.globalAlpha = 1;
   }
 
+  // Bodywork pieces, tumbling: a small quad that turns as it flies, and a
+  // shock ring flat on the road where the cars met.
+  var _d1 = { x: 0, y: 0, sc: 0, rz: 0, vis: false };
+  function drawDebris(ctx, view) {
+    var i, unit = DR.Road.SC_CAR;
+    for (i = 0; i < rings.length; i++) {
+      var rg = rings[i], k = rg.t / rg.dur;
+      DR.Road.project(rg.x, rg.y, view, _d1);
+      if (!_d1.vis) continue;
+      var rr = (20 + 140 * rg.power * k) * _d1.sc / unit;
+      ctx.globalAlpha = 0.55 * (1 - k);
+      ctx.strokeStyle = '#ffd9a0';
+      ctx.lineWidth = Math.max(1, 6 * (1 - k) * _d1.sc / unit);
+      ctx.beginPath(); ctx.ellipse(_d1.x, _d1.y, rr, rr * 0.45, 0, 0, Math.PI * 2); ctx.stroke();
+    }
+    for (i = 0; i < shards.length; i++) {
+      var sd = shards[i], kk = 1 - sd.life / sd.max;
+      DR.Road.project3(sd.x, sd.y, sd.z, view, _d1);
+      if (!_d1.vis) continue;
+      var sz = sd.size * _d1.sc / unit;
+      if (sz < 0.6) continue;
+      ctx.globalAlpha = Math.min(1, kk * 2);
+      ctx.save();
+      ctx.translate(_d1.x, _d1.y);
+      ctx.rotate(sd.rot);
+      ctx.scale(1, 0.5 + 0.5 * Math.abs(Math.sin(sd.rot * 1.7)));
+      ctx.fillStyle = sd.color;
+      ctx.beginPath(); ctx.moveTo(-sz, -sz * 0.6); ctx.lineTo(sz, -sz * 0.3); ctx.lineTo(sz * 0.4, sz * 0.7); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+
   // The words matter: colour alone must never be the only way to tell the two
   // mistakes apart.
   function drawLabels(ctx, view) {
@@ -436,6 +543,8 @@
     drawBoostFx: drawBoostFx, drawBurst: drawBurst, drawSparks: drawSparks,
     wallSparks: wallSparks, wallHit: wallHit, wallHits: wallHits,
     boostKick: boostKick, pickupBurst: pickupBurst,
-    labelAt: labelAt, shakeBy: shakeBy
+    labelAt: labelAt, shakeBy: shakeBy,
+    crash: crash, debris: debris, smokeAt: smokeAt, skidAt: skidAt, drawDebris: drawDebris,
+    counts: function () { return { shards: shards.length, rings: rings.length, smoke: smoke.length, sparks: sparks.length }; }
   };
 })(window.DR = window.DR || {});

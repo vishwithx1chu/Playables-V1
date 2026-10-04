@@ -283,7 +283,8 @@
       ctx.fillRect(x + 50, y + 25, w - 70, 7);
       ctx.fillStyle = C.cyan;
       ctx.fillRect(x + 50, y + 25, (w - 70) * f, 7);
-      text(ctx, 'DRIVER LEVEL', x + 50, y + 18, { size: 12, font: SANS, weight: '800', lean: 0, color: C.dim });
+      text(ctx, (extra && extra.label) || 'DRIVER LEVEL', x + 50, y + 18, { size: 12, font: SANS, weight: '900', lean: 0,
+                                                                     color: extra && extra.label ? C.white : C.dim, maxW: w - 70 });
     }
   }
 

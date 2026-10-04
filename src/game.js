@@ -261,6 +261,11 @@
   var last = 0, acc = 0;
   var hintAlpha = 1;
   var hitCool = 0;
+  var dmgSmokeT = 0;       // after a hard knock, your car smokes for a moment
+  function playerColor() {
+    var def = DR.Cars.get(DR.Save.selectedCar());
+    return DR.Save.carColor(DR.Save.selectedCar()) || (def && def.color) || '#c8121f';
+  }
   var devVel = 0, lastDev = 0;   // sideways speed across the road
   var draftMult = 1;          // slipstream: > 1 while tucked in behind a rival
   var raceDone = false, finishHold = 0, results = null, lastPos = 0;
@@ -409,6 +414,11 @@
     DR.FX.hit(kind, Math.max(0.35, severity), side, DR.Car);
     DR.FX.wallHit(loc.s, side);
     DR.FX.wallSparks(wxp, wyp, dx, dy, 16 + Math.round(severity * 16), 0.9 + severity * 0.6);
+    // A hard hit breaks bits off and leaves the car smoking.
+    if (severity > 0.45) {
+      DR.FX.debris(wxp, wyp, playerColor(), Math.round(3 + severity * 8), 0.5 + severity * 0.5);
+      dmgSmokeT = Math.max(dmgSmokeT, 0.8 + severity * 2);
+    }
     DR.Car.jolt(-side * (2.4 + severity * 3.4));
     rebound = 130 + severity * 220;
     rbNX = -loc.nx * side; rbNY = -loc.ny * side;
@@ -565,6 +575,10 @@
     }
 
     DR.FX.emit(DR.Car, speed, dt);
+    if (dmgSmokeT > 0) {
+      dmgSmokeT -= dt;
+      if (Math.random() < 0.45) DR.FX.smokeAt(DR.Car.x - Math.sin(DR.Car.h) * 20, DR.Car.y - Math.cos(DR.Car.h) * 20, 1, 9, 0.3, true);
+    }
     DR.FX.update(dt, DR.Car.x, DR.Car.y);
     DR.Road.ensure(DR.Car.roadS + DR.Road.LOOKAHEAD + 400);
     DR.Road.trim(DR.Car.roadS - DR.Road.CAM_BACK - 900);
@@ -678,6 +692,13 @@
       DR.FX.wallSparks(hit.x, hit.y, -nx * hit.side, -ny * hit.side, 8 + Math.round(sev * 14), 0.6 + sev * 0.6);
       DR.FX.shakeBy(3 + sev * 9 * Math.min(1.5, hit.power), 0.25);
       bumpFlash = 1;
+      // Metal on metal: a big enough hit is a crash you can see — debris in
+      // your paint, a shock ring, smoke. (A rival you spin out does its own
+      // crash, in its own paint, as it goes round.)
+      if (hit.shunt || hit.knock || sev > 0.55) {
+        DR.FX.crash(hit.x, hit.y, playerColor(), 0.5 + sev * 0.7 * Math.min(1.5, hit.power));
+        if (hit.knock) dmgSmokeT = Math.max(dmgSmokeT, 1.5);
+      }
       if (hit.knock) DR.FX.hazardHit('KNOCKED', '#ff8a5c', sev, DR.Car);
       else if (hit.spun) { DR.Show.notify('TAKEDOWN', 150, '#ffd76a', hit.spun + ' SPUN OUT'); DR.Show.count('takedowns'); }
       else if (hit.shunt) { DR.Show.notify('SHUNT', 80, '#ff8a3d'); DR.Show.count('shunts'); }
@@ -689,7 +710,7 @@
     lapFlash = 0;
     standings = null; finishPos = 0;
     if (raceRivals) {
-      standings = DR.Rivals.standings({ name: 'YOU', color: '#ffd76a', time: raceClock,
+      standings = DR.Rivals.standings({ name: playerName(), color: '#ffd76a', time: raceClock,
                                         clock: raceClock, finishS: finishLineS() });
       for (var i = 0; i < standings.length; i++) if (standings[i].isPlayer) finishPos = i + 1;
     }
@@ -790,6 +811,115 @@
     DR.Tutorial.rescued();
   }
 
+  /* ------------------------------ RACING NAME ------------------------------
+     The one thing the game asks a new player: what to call them. A racing
+     name, not a sign-in — no account, no email, nothing but the name, kept
+     on this device only and never sent anywhere. It comes pre-filled with a
+     random one, so a single tap gets you racing; type over it if you like.
+     The typing goes into a real text box laid over the canvas, because
+     that's the only way to get the phone's keyboard up. */
+  var NAME_BOX = { x: 60, y: 430, w: 600, h: 132 };
+  var NAME_DICE_BTN = { x: 200, y: 600, w: 320, h: 64 };
+  var NAME_GO_BTN = { x: 140, y: 1070, w: 440, h: 86 };
+  var nameDraft = '', nameThen = 'title', nameInput = null;
+  var NAME_A = ['NEON', 'GHOST', 'TURBO', 'NIGHT', 'CHROME', 'VOLT', 'RAZOR', 'NOVA', 'ROGUE', 'BLAZE',
+                'STORM', 'HYPER', 'LUNAR', 'VENOM', 'FROST', 'SONIC', 'DUSK', 'RIOT'];
+  var NAME_B = ['VIPER', 'FOX', 'RIDER', 'COMET', 'BLADE', 'HAWK', 'WOLF', 'JET', 'ACE', 'BOLT',
+                'LYNX', 'FANG', 'PULSE', 'SPARK', 'RAVEN', 'KID', 'ROCKET', 'SHARK'];
+  function randomName() {
+    for (var k = 0; k < 20; k++) {
+      var n = NAME_A[Math.floor(Math.random() * NAME_A.length)] + ' ' + NAME_B[Math.floor(Math.random() * NAME_B.length)];
+      if (Math.random() < 0.35 && n.length <= 9) n += ' ' + (10 + Math.floor(Math.random() * 90));
+      if (n.length <= DR.Save.NAME_MAX && n !== nameDraft) return n;
+    }
+    return 'NEON RIDER';
+  }
+  function playerName() { return DR.Save.playerName() || 'YOU'; }
+  function openName(then) {
+    nameThen = then || 'title';
+    nameDraft = DR.Save.playerName() || randomName();
+    if (nameInput) nameInput.value = nameDraft;
+    phase = 'name';
+    DR.Input.releaseAll(); DR.Input.clearTap();
+  }
+  function confirmName() {
+    if (!DR.Save.setPlayerName(nameDraft)) { nameDraft = randomName(); DR.Save.setPlayerName(nameDraft); }
+    if (nameInput) nameInput.blur();
+    if (nameThen === 'tutorial') startTutorial();
+    else phase = 'title';
+  }
+  function rollName() {
+    nameDraft = randomName();
+    if (nameInput) nameInput.value = nameDraft;
+  }
+  function makeNameInput() {
+    var el = document.createElement('input');
+    el.type = 'text';
+    el.maxLength = DR.Save.NAME_MAX;
+    el.autocomplete = 'off';
+    el.spellcheck = false;
+    el.setAttribute('autocapitalize', 'characters');
+    el.setAttribute('autocorrect', 'off');
+    el.setAttribute('enterkeyhint', 'go');
+    el.setAttribute('aria-label', 'Racing name');
+    el.className = 'name-input';
+    el.addEventListener('input', function () {
+      var clean = DR.Save.cleanName(el.value);
+      if (clean !== el.value) el.value = clean;
+      nameDraft = clean;
+    });
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); confirmName(); }
+    });
+    document.body.appendChild(el);
+    return el;
+  }
+  // Every frame: the box sits exactly over the name panel, at the scale
+  // the playfield is drawn at, and only while the name screen is up.
+  function syncNameInput() {
+    if (!nameInput) return;
+    var on = phase === 'name';
+    if (!on) { if (nameInput.style.display !== 'none') { nameInput.blur(); nameInput.style.display = 'none'; } return; }
+    var b = NAME_BOX, ip = DR.UI.outCubic(DR.UI.step(phaseT, 0.15, 0.4));
+    nameInput.style.display = 'block';
+    nameInput.style.left = (offX + (b.x + 30) * scale) + 'px';
+    nameInput.style.top = (offY + (b.y + 28) * scale) + 'px';
+    nameInput.style.width = ((b.w - 60) * scale) + 'px';
+    nameInput.style.height = ((b.h - 56) * scale) + 'px';
+    nameInput.style.fontSize = Math.round(54 * scale) + 'px';
+    nameInput.style.opacity = String(ip);
+  }
+  function drawName(ctx2, v) {
+    var UI = DR.UI, t = phaseT, W = v.W;
+    var renaming = !!DR.Save.playerName();
+    UI.header(ctx2, W, renaming ? 'CHANGE NAME' : 'WHO ARE YOU?', 'YOUR RACING NAME ON THE CIRCUIT', t);
+    // A driver's licence card, in the game's style: the name goes on it.
+    var p = UI.outBack(UI.step(t, 0.1, 0.45));
+    ctx2.save();
+    ctx2.globalAlpha *= UI.clamp01(p);
+    UI.panel(ctx2, 40, 300, 640, 420, { skew: 30, fill: 'rgba(10,8,24,0.92)', stroke: 'rgba(150,196,225,0.4)', lineWidth: 2, accent: UI.C.magenta });
+    UI.text(ctx2, 'CIRCUIT RACING LICENCE', W / 2, 350, { size: 18, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.dim });
+    UI.text(ctx2, 'NAME', NAME_BOX.x + 30, NAME_BOX.y - 12, { size: 14, font: UI.SANS, weight: '900', lean: 0, color: UI.C.cyan });
+    var focus = nameInput && document.activeElement === nameInput;
+    UI.panel(ctx2, NAME_BOX.x, NAME_BOX.y, NAME_BOX.w, NAME_BOX.h, { skew: 18, fill: 'rgba(30,24,60,0.9)',
+      stroke: focus ? UI.C.cyan : 'rgba(150,196,225,0.5)', lineWidth: focus ? 3 : 1.5,
+      glow: focus ? 'rgba(34,230,255,0.4)' : null });
+    if (!nameInput) UI.text(ctx2, nameDraft, W / 2, NAME_BOX.y + 86, { size: 54, align: 'center', color: '#ffffff' });
+    ctx2.restore();
+    drawButton(ctx2, NAME_DICE_BTN, '↻  RANDOM NAME');
+    var hp = UI.step(t, 0.35, 0.4);
+    UI.text(ctx2, 'TAP THE NAME TO TYPE YOUR OWN', W / 2, 700, { size: 18, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: '#ffffff', alpha: hp });
+    UI.text(ctx2, 'UP TO 12 LETTERS AND NUMBERS', W / 2, 790, { size: 18, font: UI.SANS, weight: '800', lean: 0, align: 'center', color: UI.C.dim, alpha: hp });
+    UI.text(ctx2, 'A NICKNAME — NOT YOUR REAL NAME', W / 2, 822, { size: 18, font: UI.SANS, weight: '800', lean: 0, align: 'center', color: UI.C.gold, alpha: hp });
+    UI.text(ctx2, 'IT STAYS ON THIS DEVICE. NOTHING ELSE IS ASKED OR SENT.', W / 2, 854, { size: 15, font: UI.SANS, weight: '800', lean: 0, align: 'center', color: UI.C.dim, alpha: hp, maxW: 640 });
+    var gp = UI.outCubic(UI.step(t, 0.45, 0.4));
+    ctx2.save(); ctx2.globalAlpha *= gp; ctx2.translate(0, (1 - gp) * 80);
+    drawButton(ctx2, NAME_GO_BTN, renaming ? 'SAVE ▸' : 'LET’S RACE ▸', { primary: true, size: 34 });
+    ctx2.restore();
+    if (renaming) drawButton(ctx2, BACK_BTN, '◂ BACK');
+    ctx2.textAlign = 'left';
+  }
+
   function startTutorial() {
     wrongWayT = 0;
     startRace(0, 'tutorial');
@@ -797,6 +927,7 @@
   }
   function finishTutorial() {
     phase = 'done'; lapFlash = 0;
+    DR.Save.setTutorialSeen();
     var first = !DR.Save.isUnlocked(TUTORIAL_ID);
     doneAward = first ? TUTORIAL_PAY : 0;
     if (first) { DR.Save.unlock(TUTORIAL_ID); DR.Save.addCurrency(doneAward); }
@@ -805,9 +936,10 @@
     if (first) settleRewards('tutorial', 1, true); else results = null;
     doneSel = 1;
   }
+  // Out of the tutorial, into the career: the prologue plays if it hasn't.
   function leaveTutorial() {
-    phase = 'story'; storySel = DR.Story.currentCity();
     DR.Input.releaseAll(); DR.Input.clearTap();
+    openStory();
   }
 
   function startStoryEvent(ci, ei) {
@@ -1264,83 +1396,219 @@
   var TITLE_CAR_RECT = { x: 150, y: 232, w: 420, h: 398 };
 
   // The chips along the top of every main screen: level, stars, money.
+  // Your name and level, top left of the title; tap it to change the name.
+  var NAME_CHIP = { x: 20, y: 18, w: 240, h: 40 };
   function drawTopBar(ctx2, v, enter) {
     var UI = DR.UI, p = UI.outCubic(enter === undefined ? 1 : enter);
     ctx2.save();
     ctx2.globalAlpha *= p;
     ctx2.translate(0, (1 - p) * -60);
     var lv = DR.Career.info();
-    UI.chip(ctx2, 20, 18, 240, 'lvl', lv.level, { frac: lv.frac });
+    UI.chip(ctx2, NAME_CHIP.x, NAME_CHIP.y, NAME_CHIP.w, 'lvl', lv.level, { frac: lv.frac, label: playerName() + '  \u270E' });
     UI.chip(ctx2, 272, 18, 130, 'star', DR.Career.totalStars().got);
     UI.chip(ctx2, 520, 18, 180, 'cr', DR.Save.currency().toLocaleString());
     ctx2.restore();
   }
 
+  /* ------------------------------ THE LOBBY ------------------------------
+     Your garage, Asphalt-style: the painted garage from Canva ("lobby") or a
+     drawn one, your car turning on a lit platform in the middle, and big
+     bold tiles to tap — orange for racing, white for the garage — each with
+     its own icon. Everything slides in when you arrive. */
+  function drawLobbyBackdrop(ctx2, v, t) {
+    var UI = DR.UI, W = v.W, i;
+    if (DR.Art.cover(ctx2, 'lobby', 0, 0, W, v.H, { zoom: 1.04 + 0.02 * Math.sin(clock * 0.2) })) {
+      var sh = ctx2.createLinearGradient(0, 640, 0, v.H);
+      sh.addColorStop(0, 'rgba(4,2,10,0)'); sh.addColorStop(1, 'rgba(4,2,10,0.85)');
+      ctx2.fillStyle = sh; ctx2.fillRect(0, 640, W, v.H - 640);
+      return;
+    }
+    // Drawn garage: a back wall of panels with neon strips, ceiling light
+    // bars running away from you, and a glossy floor that reflects it all.
+    var wall = ctx2.createLinearGradient(0, 0, 0, 600);
+    wall.addColorStop(0, '#07060f'); wall.addColorStop(1, '#151229');
+    ctx2.fillStyle = wall; ctx2.fillRect(0, 0, W, 600);
+    ctx2.strokeStyle = 'rgba(150,170,220,0.08)'; ctx2.lineWidth = 2;
+    for (i = 1; i < 8; i++) { ctx2.beginPath(); ctx2.moveTo(i * W / 8, 120); ctx2.lineTo(i * W / 8, 600); ctx2.stroke(); }
+    // Ceiling light bars, in perspective.
+    for (i = 0; i < 5; i++) {
+      var yy = 40 + i * 22, half = 300 - i * 46, gl = 0.75 - i * 0.12;
+      ctx2.fillStyle = 'rgba(220,240,255,' + gl.toFixed(2) + ')';
+      ctx2.fillRect(W / 2 - half, yy, half * 2, 5 - i * 0.6);
+    }
+    // Neon strips along the wall, gently breathing.
+    var br = 0.75 + 0.25 * Math.sin(clock * 1.5);
+    for (i = 0; i < 2; i++) {
+      var ny = 300 + i * 46, col = i ? UI.C.cyan : UI.C.magenta;
+      ctx2.save();
+      ctx2.shadowColor = col; ctx2.shadowBlur = 24;
+      ctx2.fillStyle = col; ctx2.globalAlpha = br;
+      ctx2.fillRect(0, ny, W, 4);
+      ctx2.restore();
+    }
+    // A big wall sign: the game's mark, in neon tube.
+    ctx2.save();
+    ctx2.globalAlpha = 0.18;
+    UI.text(ctx2, 'DR', W / 2, 260, { size: 150, align: 'center', color: UI.C.magenta });
+    ctx2.restore();
+    // The floor: glossy, with a perspective grid and the wall's glow in it.
+    var fl = ctx2.createLinearGradient(0, 600, 0, v.H);
+    fl.addColorStop(0, '#1c1733'); fl.addColorStop(0.4, '#0b0918'); fl.addColorStop(1, '#05040c');
+    ctx2.fillStyle = fl; ctx2.fillRect(0, 600, W, v.H - 600);
+    ctx2.strokeStyle = 'rgba(120,140,200,0.10)'; ctx2.lineWidth = 1.5;
+    for (i = -8; i <= 8; i++) { ctx2.beginPath(); ctx2.moveTo(W / 2 + i * 30, 600); ctx2.lineTo(W / 2 + i * 220, v.H); ctx2.stroke(); }
+    for (i = 0; i < 9; i++) { var gy = 600 + Math.pow(i / 8, 2) * (v.H - 600); ctx2.beginPath(); ctx2.moveTo(0, gy); ctx2.lineTo(W, gy); ctx2.stroke(); }
+    ctx2.globalAlpha = 0.25 * br;
+    ctx2.fillStyle = UI.C.magenta; ctx2.fillRect(0, 640, W, 3);
+    ctx2.fillStyle = UI.C.cyan; ctx2.fillRect(0, 690, W, 2);
+    ctx2.globalAlpha = 1;
+  }
+
+  // Icons for the tiles, drawn in code.
+  function drawTileIcon(ctx2, kind, x, y, s, col) {
+    var UI = DR.UI;
+    ctx2.save();
+    ctx2.translate(x, y); ctx2.scale(s, s);
+    ctx2.fillStyle = col; ctx2.strokeStyle = col; ctx2.lineCap = 'round'; ctx2.lineJoin = 'round';
+    if (kind === 'story') {
+      UI.trophy(ctx2, 0, 0, 1.25, col);
+    } else if (kind === 'quick') {
+      // A chequered flag on a pole.
+      ctx2.lineWidth = 6; ctx2.beginPath(); ctx2.moveTo(-34, 40); ctx2.lineTo(-34, -42); ctx2.stroke();
+      for (var r = 0; r < 4; r++) for (var c = 0; c < 5; c++) {
+        if ((r + c) % 2) continue;
+        var wave = Math.sin(clock * 4 + c * 0.9) * 4;
+        ctx2.fillRect(-31 + c * 13, -42 + r * 12 + wave, 13, 12);
+      }
+      ctx2.lineWidth = 2.5; ctx2.globalAlpha = 0.9;
+      ctx2.beginPath(); ctx2.rect(-31, -42, 65, 48); ctx2.stroke();
+    } else if (kind === 'garage') {
+      // A wrench.
+      ctx2.rotate(-0.8);
+      ctx2.lineWidth = 14; ctx2.beginPath(); ctx2.moveTo(0, -18); ctx2.lineTo(0, 40); ctx2.stroke();
+      ctx2.beginPath(); ctx2.arc(0, -30, 20, 0, Math.PI * 2); ctx2.fill();
+      ctx2.globalCompositeOperation = 'destination-out';
+      ctx2.fillRect(-7, -56, 14, 26);
+      ctx2.globalCompositeOperation = 'source-over';
+    } else if (kind === 'tutorial') {
+      // A steering wheel.
+      ctx2.lineWidth = 7;
+      ctx2.beginPath(); ctx2.arc(0, 0, 30, 0, Math.PI * 2); ctx2.stroke();
+      ctx2.beginPath(); ctx2.arc(0, 0, 8, 0, Math.PI * 2); ctx2.fill();
+      ctx2.lineWidth = 6;
+      ctx2.beginPath(); ctx2.moveTo(-28, 4); ctx2.lineTo(-8, 2); ctx2.moveTo(28, 4); ctx2.lineTo(8, 2); ctx2.moveTo(0, 8); ctx2.lineTo(0, 28); ctx2.stroke();
+    }
+    ctx2.restore();
+  }
+
+  var LOBBY_STYLE = {
+    story:    { a: '#ffbe3d', b: '#ff5f1f', title: '#ffffff', sub: 'rgba(40,14,0,0.85)', icon: '#ffffff' },
+    quick:    { a: '#ff9a2e', b: '#ff4a2a', title: '#ffffff', sub: 'rgba(40,10,0,0.85)', icon: '#ffffff' },
+    garage:   { a: '#ffffff', b: '#d6deea', title: '#1b2340', sub: 'rgba(27,35,64,0.75)', icon: '#ff6a1f' },
+    tutorial: { a: 'rgba(16,24,48,0.92)', b: 'rgba(8,12,28,0.92)', title: '#ffffff', sub: '#9fd8ff', icon: '#22e6ff' }
+  };
+  function drawLobbyTile(ctx2, b, id, title, sub, o) {
+    var UI = DR.UI, st = LOBBY_STYLE[id], p = UI.outBack(UI.clamp01(o.enter));
+    var oy = (1 - p) * 260, skew = 18;
+    ctx2.save();
+    ctx2.globalAlpha *= UI.clamp01(o.enter * 1.5);
+    ctx2.translate(0, oy);
+    var g = ctx2.createLinearGradient(b.x, b.y, b.x + b.w, b.y + b.h);
+    g.addColorStop(0, st.a); g.addColorStop(1, st.b);
+    UI.panel(ctx2, b.x, b.y, b.w, b.h, { skew: skew, fill: g, stroke: o.on ? '#ffffff' : 'rgba(0,0,0,0.35)', lineWidth: o.on ? 4 : 1.5,
+                                         glow: o.on ? 'rgba(255,255,255,0.55)' : null });
+    // Diagonal stripes on the right, Asphalt-style, and a sheen sweeping by.
+    ctx2.save();
+    UI.slant(ctx2, b.x, b.y, b.w, b.h, skew); ctx2.clip();
+    ctx2.fillStyle = id === 'garage' ? 'rgba(255,106,31,0.10)' : 'rgba(255,255,255,0.13)';
+    for (var k = 0; k < 7; k++) {
+      var sx = b.x + b.w - 40 - k * 34;
+      ctx2.beginPath(); ctx2.moveTo(sx, b.y + b.h); ctx2.lineTo(sx + 16, b.y + b.h); ctx2.lineTo(sx + 16 + b.h * 0.6, b.y); ctx2.lineTo(sx + b.h * 0.6, b.y); ctx2.closePath(); ctx2.fill();
+    }
+    var ph = ((clock + o.i * 0.7) % 4) / 1.1;
+    if (ph < 1) {
+      var shx = b.x - 120 + (b.w + 240) * ph;
+      var sg = ctx2.createLinearGradient(shx - 70, 0, shx + 70, 0);
+      sg.addColorStop(0, 'rgba(255,255,255,0)'); sg.addColorStop(0.5, 'rgba(255,255,255,0.28)'); sg.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx2.fillStyle = sg; ctx2.fillRect(shx - 70, b.y, 140, b.h);
+    }
+    ctx2.restore();
+    // The icon, bobbing gently, on the right.
+    var big = id === 'story', isz = big ? 1.15 : id === 'tutorial' ? 0.62 : 0.8;
+    drawTileIcon(ctx2, id, b.x + b.w - (big ? 100 : id === 'tutorial' ? 70 : 64), b.y + b.h / 2 + Math.sin(clock * 2 + o.i) * 3 + (id === 'quick' ? 4 : 0), isz, st.icon);
+    UI.text(ctx2, title, b.x + 34, b.y + (sub ? b.h / 2 + (big ? 6 : 2) : b.h / 2 + 14), { size: o.size, color: st.title,
+      stroke: id === 'garage' ? null : 'rgba(60,20,0,0.35)', maxW: b.w - (big ? 220 : 140) });
+    if (sub) UI.text(ctx2, sub, b.x + 38, b.y + b.h / 2 + (big ? 40 : 32), { size: big ? 18 : 14, font: UI.SANS, weight: '900', lean: 0, color: st.sub, maxW: b.w - (big ? 220 : 120) });
+    var tag = o.on ? 'TAP AGAIN ▸' : (o.badge || '');
+    if (tag) {
+      UI.panel(ctx2, b.x + b.w - 168, b.y - 16, 150, 30, { skew: 8, fill: o.on ? '#ffffff' : UI.C.gold });
+      UI.text(ctx2, tag, b.x + b.w - 93, b.y + 5, { size: 15, align: 'center', color: '#1b2340' });
+    }
+    ctx2.restore();
+  }
+
   function drawTitle(ctx2, v) {
     var UI = DR.UI, t = phaseT, i;
+    drawLobbyBackdrop(ctx2, v, t);
     drawTopBar(ctx2, v, UI.step(t, 0.1, 0.4));
 
-    // The logo slams in from the left; an underline sweeps after it.
+    // The logo slams in; an underline sweeps after it.
     var lp = UI.outBack(UI.step(t, 0, 0.55));
-    UI.text(ctx2, 'DRIFT RUN', v.W * 0.5 - (1 - lp) * 500, 176, {
-      size: 92, align: 'center', color: UI.hotGradient(ctx2, 120, 110, 600, 190),
+    UI.text(ctx2, 'DRIFT RUN', v.W * 0.5 - (1 - lp) * 500, 150, {
+      size: 76, align: 'center', color: UI.hotGradient(ctx2, 160, 100, 560, 160),
       stroke: 'rgba(4,2,10,0.95)', strokeW: 10, glow: 'rgba(255,47,142,0.55)', glowBlur: 24
     });
     var up = UI.outCubic(UI.step(t, 0.35, 0.5));
-    ctx2.fillStyle = UI.C.magenta; ctx2.fillRect(v.W * 0.5 - 250 * up, 196, 500 * up, 4);
-    ctx2.fillStyle = UI.C.cyan; ctx2.fillRect(v.W * 0.5 - 160 * up, 204, 320 * up, 3);
-    UI.text(ctx2, 'THE CIRCUIT', v.W * 0.5, 234, { size: 20, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.dim, alpha: up });
+    ctx2.fillStyle = UI.C.magenta; ctx2.fillRect(v.W * 0.5 - 220 * up, 166, 440 * up, 4);
+    ctx2.fillStyle = UI.C.cyan; ctx2.fillRect(v.W * 0.5 - 140 * up, 174, 280 * up, 3);
 
-    // The showroom: light rays, a floor glow, and your car turning on it.
-    var cx = v.W * 0.5, fy = 560;
+    // The turntable: a lit disc with light running round its rim, and your
+    // car turning on it.
+    var cx = v.W * 0.5, fy = 585;
+    var tp = UI.outCubic(UI.step(t, 0.2, 0.5));
     ctx2.save();
-    ctx2.globalAlpha = 0.16 * up;
-    for (i = 0; i < 9; i++) {
-      var a = -Math.PI / 2 + (i - 4) * 0.22 + Math.sin(clock * 0.3) * 0.05;
-      ctx2.beginPath();
-      ctx2.moveTo(cx, fy - 40);
-      ctx2.lineTo(cx + Math.cos(a - 0.05) * 520, fy - 40 + Math.sin(a - 0.05) * 520);
-      ctx2.lineTo(cx + Math.cos(a + 0.05) * 520, fy - 40 + Math.sin(a + 0.05) * 520);
-      ctx2.closePath();
-      ctx2.fillStyle = i % 2 ? UI.C.magenta : UI.C.cyan;
-      ctx2.fill();
-    }
-    ctx2.restore();
-    var fg = ctx2.createRadialGradient(cx, fy, 10, cx, fy, 280);
-    fg.addColorStop(0, 'rgba(34,230,255,0.45)'); fg.addColorStop(0.5, 'rgba(255,47,142,0.16)'); fg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx2.translate(cx, fy); ctx2.scale(tp, tp);
+    var fg = ctx2.createRadialGradient(0, 0, 10, 0, 0, 280);
+    fg.addColorStop(0, 'rgba(34,230,255,0.42)'); fg.addColorStop(0.55, 'rgba(255,47,142,0.16)'); fg.addColorStop(1, 'rgba(0,0,0,0)');
     ctx2.fillStyle = fg;
-    ctx2.save(); ctx2.translate(cx, fy); ctx2.scale(1, 0.22); ctx2.beginPath(); ctx2.arc(0, 0, 280, 0, Math.PI * 2); ctx2.restore();
-    ctx2.fill();
+    ctx2.beginPath(); ctx2.ellipse(0, 0, 300, 74, 0, 0, Math.PI * 2); ctx2.fill();
+    ctx2.fillStyle = 'rgba(10,10,24,0.85)';
+    ctx2.beginPath(); ctx2.ellipse(0, 0, 236, 54, 0, 0, Math.PI * 2); ctx2.fill();
+    ctx2.lineWidth = 3; ctx2.strokeStyle = 'rgba(34,230,255,0.55)';
+    ctx2.beginPath(); ctx2.ellipse(0, 0, 236, 54, 0, 0, Math.PI * 2); ctx2.stroke();
+    ctx2.lineWidth = 5; ctx2.strokeStyle = UI.C.magenta;
+    var ra = clock * 1.1;
+    ctx2.beginPath(); ctx2.ellipse(0, 0, 236, 54, 0, ra, ra + 0.9); ctx2.stroke();
+    ctx2.beginPath(); ctx2.ellipse(0, 0, 236, 54, 0, ra + Math.PI, ra + Math.PI + 0.9); ctx2.stroke();
+    ctx2.restore();
     var def = DR.Cars.get(DR.Save.selectedCar()) || DR.Cars.get('nightrunner');
     var col = DR.Save.carColor(def.id) || def.color;
     var drew = DR.Car3D && DR.Car3D.render({ archetype: def.archetype, color: col,
                                              yaw: clock * 0.35, rect: TITLE_CAR_RECT });
     if (!drew) drawProfileCar(ctx2, cx - 10, fy - 30, 1.5, col);
-    UI.text(ctx2, def.name.toUpperCase(), cx, 640, { size: 26, align: 'center', color: '#ffffff', stroke: 'rgba(4,2,10,0.9)', alpha: up });
-    UI.text(ctx2, 'RATING ' + DR.Cars.rating(def.id) + '   •   ' + def.archetype.toUpperCase(), cx, 664,
-            { size: 15, font: UI.SANS, weight: '800', lean: 0, align: 'center', color: UI.C.green, alpha: up });
+    // The car's name plate, under the platform.
+    var np = UI.outCubic(UI.step(t, 0.4, 0.4));
+    UI.panel(ctx2, cx - 170 - (1 - np) * 300, 622, 340, 44, { skew: 14, fill: 'rgba(8,6,20,0.82)', stroke: 'rgba(150,196,225,0.4)', accent: UI.C.magenta, alpha: np });
+    UI.text(ctx2, def.name.toUpperCase(), cx - 150, 652, { size: 22, color: '#ffffff', alpha: np, maxW: 200 });
+    UI.text(ctx2, 'RATING ' + DR.Cars.rating(def.id), cx + 154, 651, { size: 16, font: UI.SANS, weight: '900', lean: 0, align: 'right', color: UI.C.green, alpha: np });
 
-    // The tiles, arriving one after another.
+    // The tiles, rising one after another.
     var here = DR.Story.currentCity(), city = DR.Story.cities()[here];
     var subs = {
       story: DR.Save.isUnlocked('scene:prologue')
-        ? 'KAI’S LAST RACE  •  CITY ' + (here + 1) + ': ' + city.name
+        ? 'CITY ' + (here + 1) + ': ' + city.name + '  •  ' + DR.Career.totalStars().got + ' ★'
         : 'KAI’S LAST RACE  •  START YOUR CAREER',
-      quick: 'RACE • PRACTICE • RUSH • DUEL',
+      quick: 'RACE • RUSH • DUEL',
       garage: DR.Save.ownedCars().length + (DR.Save.ownedCars().length === 1 ? ' CAR' : ' CARS') + '  •  UPGRADE',
       tutorial: DR.Save.isUnlocked(TUTORIAL_ID) ? 'LEARN THE DRIFT AGAIN' : 'NEW? START HERE — +150 CR'
     };
+    var names = { story: 'STORY', quick: 'QUICK RACE', garage: 'GARAGE', tutorial: 'TUTORIAL' };
     for (i = 0; i < TITLE_ITEMS.length; i++) {
       var it = TITLE_ITEMS[i], b = titleBox(i);
       var fresh = it.id === 'tutorial' && !DR.Save.isUnlocked(TUTORIAL_ID);
-      drawCard(ctx2, b, {
-        title: it.name, sub: subs[it.id], on: i === titleSel, t: clock,
-        primary: it.id === 'story', enter: UI.stagger(t, i, 0.08, 0.5, 0.25),
-        size: it.id === 'story' ? 50 : it.id === 'tutorial' ? 30 : 34,
-        titleY: it.id === 'tutorial' ? 40 : undefined, subY: it.id === 'tutorial' ? 66 : undefined,
-        tagY: it.id === 'tutorial' ? 34 : it.id === 'story' ? 36 : b.h - 14,
-        titleW: it.id === 'story' || it.id === 'tutorial' ? b.w - 170 : b.w - 70,
-        badge: fresh ? 'NEW' : '', badgeColor: UI.C.gold
+      drawLobbyTile(ctx2, b, it.id, names[it.id] || it.name, subs[it.id], {
+        on: i === titleSel, enter: UI.stagger(t, i, 0.09, 0.55, 0.3), i: i,
+        size: it.id === 'story' ? 56 : it.id === 'tutorial' ? 30 : 34, badge: fresh ? 'NEW' : ''
       });
     }
     drawControlsLine(ctx2, v, 1090);
@@ -1725,10 +1993,30 @@
     return { x: k * k * a.x + 2 * k * u * c.x + u * u * b.x, y: k * k * a.y + 2 * k * u * c.y + u * u * b.y };
   }
   function drawStory(ctx2, v) {
+    var zk = mapZoom ? DR.UI.inOutCubic(DR.UI.clamp01(mapZoom.t / MAP_ZOOM_T)) : 0;
+    if (zk > 0) {
+      var zp = mapNodeXY(mapZoom.ci), zs = 1 + 3.2 * zk;
+      ctx2.save();
+      ctx2.translate(zp.x + (v.W / 2 - zp.x) * zk, zp.y + (v.H / 2 - zp.y) * zk);
+      ctx2.scale(zs, zs);
+      ctx2.translate(-zp.x, -zp.y);
+    }
+    drawStoryMap(ctx2, v);
+    if (zk > 0) {
+      ctx2.restore();
+      ctx2.fillStyle = 'rgba(4,2,10,' + (0.9 * zk * zk).toFixed(3) + ')';
+      ctx2.fillRect(0, 0, v.W, v.H);
+      DR.UI.text(ctx2, DR.Story.cities()[mapZoom.ci].name, v.W / 2, v.H / 2 + 20, { size: 64, align: 'center',
+        color: DR.UI.hotGradient(ctx2, 160, v.H / 2 - 40, 560, v.H / 2 + 20), stroke: 'rgba(4,2,10,0.9)', alpha: DR.UI.clamp01(zk * 2 - 0.6) });
+    }
+  }
+  function drawStoryMap(ctx2, v) {
     var UI = DR.UI, t = phaseT;
     var cities = DR.Story.cities(), i, A = MAP_AREA;
-    UI.header(ctx2, v.W, 'THE CIRCUIT', 'KAI’S LAST RACE', t);
-    drawStoryChips(ctx2, v, UI.step(t, 0.1, 0.4));
+    if (!mapZoom) {
+      UI.header(ctx2, v.W, 'THE CIRCUIT', 'KAI’S LAST RACE', t);
+      drawStoryChips(ctx2, v, UI.step(t, 0.1, 0.4));
+    }
 
     // The sheet, fading up.
     var sp = UI.outCubic(UI.step(t, 0.05, 0.4));
@@ -1736,6 +2024,11 @@
     ctx2.globalAlpha *= sp;
     UI.panel(ctx2, A.x, A.y, A.w, A.h, { skew: 0, fill: 'rgba(8,6,20,0.95)', stroke: 'rgba(150,196,225,0.3)', lineWidth: 1.5 });
     ctx2.beginPath(); ctx2.rect(A.x, A.y, A.w, A.h); ctx2.clip();
+    // The painted map (Canva), when it's here: the land, the sea and the
+    // mountains are in the painting; the roads and cities go on top.
+    var painted = DR.Art.cover(ctx2, 'map', A.x, A.y, A.w, A.h);
+    if (painted) { ctx2.fillStyle = 'rgba(4,2,10,0.25)'; ctx2.fillRect(A.x, A.y, A.w, A.h); }
+    if (!painted) {
     ctx2.strokeStyle = 'rgba(120,160,220,0.06)';
     ctx2.lineWidth = 1;
     for (i = 1; i < 12; i++) {
@@ -1773,6 +2066,7 @@
     for (i = 0; i < 7; i++) {
       var mx0 = A.x + A.w * (0.04 + i * 0.07), my0 = A.y + A.h * (0.26 + (i % 2) * 0.03);
       ctx2.beginPath(); ctx2.moveTo(mx0 - 34, my0 + 30); ctx2.lineTo(mx0, my0 - 34); ctx2.lineTo(mx0 + 34, my0 + 30); ctx2.closePath(); ctx2.fill();
+    }
     }
     ctx2.restore();
 
@@ -1865,6 +2159,7 @@
       ctx2.restore();
     }
 
+    if (mapZoom) return;
     // The chosen city, on a panel sliding up from the bottom.
     var c = cities[storySel], sst = DR.Story.cityState(storySel);
     var pp = UI.outCubic(UI.step(t, 0.35, 0.45)), oy = (1 - pp) * 220;
@@ -2123,84 +2418,181 @@
     if (line) out.push(line);
     return out;
   }
+  /* A story scene, as a comic page. A big painted panel up top (from
+     Canva: scene.<key>.<line> or scene.<key>; the code-drawn street scene
+     if there's no painting), then the conversation underneath: narration
+     in yellow caption boxes, speech in white bubbles pointing at the
+     speaker's face. The newest line pops in; the two before it stay, so it
+     reads down the page like a strip. Faces are face.<NAME> from Canva,
+     or a drawn silhouette in the speaker's colour with their initial. */
+  function sceneArt(sc, line) {
+    if (!sc.key) return null;
+    var a = 'scene.' + sc.key + '.' + (line + 1), b = 'scene.' + sc.key;
+    return DR.Art.has(a) ? a : (DR.Art.has(b) ? b : null);
+  }
+  function drawFace(ctx2, who, x, y, r, t) {
+    var UI = DR.UI, col = speakerColor(who), p = UI.outBack(UI.clamp01(t));
+    ctx2.save();
+    ctx2.translate(x, y); ctx2.scale(p, p);
+    ctx2.beginPath(); ctx2.arc(0, 0, r, 0, Math.PI * 2); ctx2.closePath();
+    ctx2.fillStyle = '#0c0a1c'; ctx2.fill();
+    ctx2.save(); ctx2.clip();
+    if (!DR.Art.cover(ctx2, 'face.' + who, -r, -r, r * 2, r * 2)) {
+      var g = ctx2.createRadialGradient(0, -r * 0.3, r * 0.1, 0, 0, r * 1.2);
+      g.addColorStop(0, col); g.addColorStop(1, '#0c0a1c');
+      ctx2.globalAlpha = 0.55; ctx2.fillStyle = g; ctx2.fillRect(-r, -r, r * 2, r * 2); ctx2.globalAlpha = 1;
+      ctx2.fillStyle = '#05040c';
+      ctx2.beginPath(); ctx2.arc(0, -r * 0.18, r * 0.38, 0, Math.PI * 2); ctx2.fill();
+      ctx2.beginPath(); ctx2.ellipse(0, r * 0.78, r * 0.72, r * 0.52, 0, Math.PI, 0); ctx2.fill();
+      ctx2.strokeStyle = col; ctx2.lineWidth = 2; ctx2.globalAlpha = 0.8;
+      ctx2.beginPath(); ctx2.arc(0, -r * 0.18, r * 0.38, Math.PI * 1.1, Math.PI * 1.9); ctx2.stroke();
+      ctx2.globalAlpha = 1;
+    }
+    ctx2.restore();
+    ctx2.lineWidth = 4; ctx2.strokeStyle = col;
+    ctx2.beginPath(); ctx2.arc(0, 0, r, 0, Math.PI * 2); ctx2.stroke();
+    UI.panel(ctx2, -r * 0.9, r * 0.62, r * 1.8, 26, { skew: 8, fill: col });
+    UI.text(ctx2, who, 0, r * 0.62 + 19, { size: 15, align: 'center', color: '#05040c', maxW: r * 1.7 });
+    ctx2.restore();
+  }
+  // A speech bubble: white, round-cornered, with a tail to the speaker.
+  function drawBubble(ctx2, x, y, w, h, tailX, tailY, p, dim) {
+    ctx2.save();
+    var cx = x + w / 2, cy = y + h / 2;
+    ctx2.translate(cx, cy); ctx2.scale(p, p); ctx2.translate(-cx, -cy);
+    ctx2.globalAlpha *= dim ? 0.55 : 1;
+    var right = tailX > cx, ex = right ? x + w : x, ty = Math.min(y + h - 18, Math.max(y + 18, cy + 6));
+    function rr() {
+      var r = 22;
+      ctx2.beginPath();
+      ctx2.moveTo(x + r, y); ctx2.lineTo(x + w - r, y); ctx2.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx2.lineTo(x + w, y + h - r); ctx2.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx2.lineTo(x + r, y + h); ctx2.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx2.lineTo(x, y + r); ctx2.quadraticCurveTo(x, y, x + r, y); ctx2.closePath();
+    }
+    function tail() {
+      ctx2.beginPath();
+      ctx2.moveTo(ex, ty - 14); ctx2.lineTo(tailX, tailY); ctx2.lineTo(ex, ty + 14); ctx2.closePath();
+    }
+    ctx2.lineWidth = 4; ctx2.strokeStyle = '#05040c'; ctx2.fillStyle = '#ffffff';
+    tail(); ctx2.fill(); ctx2.stroke();
+    rr(); ctx2.fill(); ctx2.stroke();
+    // Cover the bubble's outline where the tail joins it.
+    ctx2.beginPath();
+    ctx2.moveTo(ex + (right ? -3 : 3), ty - 11); ctx2.lineTo(ex + (right ? 8 : -8), ty); ctx2.lineTo(ex + (right ? -3 : 3), ty + 11);
+    ctx2.closePath(); ctx2.fill();
+    ctx2.restore();
+  }
   function drawScene(ctx2, v) {
-    var UI = DR.UI;
+    var UI = DR.UI, W = v.W, t = phaseT, i;
     var sc = sceneQueue[0];
     if (!sc) return;
-    // A darker sky, the road, and a car on it: Kai's red, or the speaker's.
-    var g = ctx2.createLinearGradient(0, 0, 0, v.H);
-    g.addColorStop(0, 'rgba(4,2,10,0.35)');
-    g.addColorStop(0.55, 'rgba(4,2,10,0.55)');
-    g.addColorStop(1, 'rgba(4,2,10,0.92)');
-    ctx2.fillStyle = g;
-    ctx2.fillRect(0, 0, v.W, v.H);
-    // Cinema bars, closing in as the scene opens.
-    var cb = UI.outCubic(UI.step(phaseT, 0, 0.5));
-    ctx2.fillStyle = '#000';
-    ctx2.fillRect(0, 0, v.W, 22 * cb);
-    ctx2.fillRect(0, v.H - 22 * cb, v.W, 22 * cb);
     var line = sc.lines[sceneLine];
-    var carCol = line.who ? speakerColor(line.who) : '#c8121f';
-    var drift = Math.min(1, sceneT / 0.8);
-    var enter = UI.outCubic(UI.step(phaseT, 0.1, 0.6));
-    // Light pooled under the cars, in the speaker's colour.
-    var pool = ctx2.createRadialGradient(360, 660, 10, 360, 660, 320);
-    pool.addColorStop(0, 'rgba(255,255,255,0.06)'); pool.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx2.fillStyle = pool; ctx2.fillRect(0, 440, v.W, 360);
-    drawProfileCar(ctx2, 250 + drift * 30 - (1 - enter) * 500, 640, 1.25, carCol);
-    if (sc.city === undefined && sceneLine >= 1) drawProfileCar(ctx2, 520, 640, 1.05, '#ffd76a');
+    // The page: the city's sky, darkened, behind everything.
+    var cityId = sc.city !== undefined ? DR.Story.cities()[sc.city].id : 'portside';
+    if (!DR.Art.cover(ctx2, 'sky.' + cityId, 0, 0, W, v.H, { alpha: 0.35 })) { /* drawn sky shows */ }
+    ctx2.fillStyle = 'rgba(4,2,10,0.6)';
+    ctx2.fillRect(0, 0, W, v.H);
+    // Halftone dots, for the comic-print feel.
+    ctx2.fillStyle = 'rgba(255,255,255,0.035)';
+    for (var hy = 0; hy < v.H; hy += 14) for (var hx = (hy / 14 % 2) * 7; hx < W; hx += 14) ctx2.fillRect(hx, hy, 2.4, 2.4);
 
-    // Title: sub first, then the title slams.
-    var tp = UI.outBack(UI.step(phaseT, 0.05, 0.45));
-    UI.text(ctx2, sc.sub || '', v.W * 0.5, 140, { size: 18, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: UI.C.dim, alpha: UI.step(phaseT, 0, 0.3) });
-    ctx2.save(); ctx2.translate(v.W * 0.5, 196); ctx2.scale(1.6 - 0.6 * tp, 1.6 - 0.6 * tp);
-    UI.text(ctx2, sc.title, 0, 0, { size: 48, align: 'center', color: UI.hotGradient(ctx2, -260, -40, 260, 10), stroke: 'rgba(4,2,10,0.95)', strokeW: 8,
-                                     maxW: 640, alpha: UI.clamp01(tp) });
-    ctx2.restore();
-    var lw = 200 * UI.outCubic(UI.step(phaseT, 0.3, 0.4));
-    ctx2.fillStyle = UI.C.magenta; ctx2.fillRect(v.W / 2 - lw, 214, lw * 2, 3);
-
-    // The panel, with the lines so far: older ones dimmed, the newest
-    // fading in (a fade, never a flash).
-    var pp = UI.outCubic(UI.step(phaseT, 0.15, 0.45));
-    var P = { x: 32, y: 730 + (1 - pp) * 120, w: 656, h: 420 };
+    // The big panel, sliding in with a slight tilt; the painting drifts.
+    var pp = UI.outCubic(UI.step(t, 0, 0.5));
+    var P = { x: 34, y: 116, w: 652, h: 500 };
     ctx2.save();
-    ctx2.globalAlpha *= pp;
-    UI.panel(ctx2, P.x, P.y, P.w, P.h, { skew: 20, fill: 'rgba(8,6,20,0.9)', stroke: 'rgba(150,196,225,0.35)', lineWidth: 1.5,
-                                         accent: line.who ? speakerColor(line.who) : UI.C.magenta });
-    var SANS = UI.SANS;
-    ctx2.textAlign = 'left';
-    ctx2.textBaseline = 'alphabetic';
-    var y = P.y + 48, first = Math.max(0, sceneLine - 2);
-    for (var i = first; i <= sceneLine; i++) {
-      var L = sc.lines[i], cur = i === sceneLine;
-      var la = cur ? Math.min(1, sceneT / 0.35) : 0.45, lx = P.x + 36 + (cur ? (1 - UI.outCubic(Math.min(1, sceneT / 0.35))) * 30 : 0);
-      ctx2.globalAlpha = pp * la;
-      if (L.who) {
-        UI.text(ctx2, L.who, lx, y, { size: 19, color: speakerColor(L.who) });
-        y += 30;
+    ctx2.translate(W / 2, P.y + P.h / 2);
+    ctx2.rotate(-0.015 + (1 - pp) * -0.06);
+    ctx2.translate(-W / 2 + (1 - pp) * -520, -(P.y + P.h / 2));
+    ctx2.fillStyle = '#05040c'; ctx2.fillRect(P.x - 8, P.y - 8, P.w + 16, P.h + 16);
+    ctx2.fillStyle = '#f4f1e8'; ctx2.fillRect(P.x - 4, P.y - 4, P.w + 8, P.h + 8);
+    var art = sceneArt(sc, sceneLine);
+    var kb = (clock * 0.02) % 1;
+    if (!(art && DR.Art.cover(ctx2, art, P.x, P.y, P.w, P.h, { zoom: 1.08 + 0.04 * Math.sin(clock * 0.15), fx: 0.5 + 0.12 * Math.sin(clock * 0.1), fy: 0.45 }))) {
+      // Drawn fallback: a street at night with the car (and the speaker's).
+      ctx2.save();
+      ctx2.beginPath(); ctx2.rect(P.x, P.y, P.w, P.h); ctx2.clip();
+      var g = ctx2.createLinearGradient(0, P.y, 0, P.y + P.h);
+      g.addColorStop(0, '#1a0b33'); g.addColorStop(0.55, '#5b1c5a'); g.addColorStop(0.62, '#ff7a4d'); g.addColorStop(0.63, '#120a1f'); g.addColorStop(1, '#05040c');
+      ctx2.fillStyle = g; ctx2.fillRect(P.x, P.y, P.w, P.h);
+      ctx2.fillStyle = '#ff9a5c'; ctx2.beginPath(); ctx2.arc(W / 2, P.y + P.h * 0.6, 90, Math.PI, 0); ctx2.fill();
+      for (i = 0; i < 14; i++) {
+        var bw = 30 + (i * 37) % 50, bh = 60 + (i * 53) % 140, bx = P.x + i * 50 - 10;
+        ctx2.fillStyle = '#0a0614'; ctx2.fillRect(bx, P.y + P.h * 0.62 - bh, bw, bh);
+        ctx2.fillStyle = i % 2 ? 'rgba(255,47,142,0.7)' : 'rgba(34,230,255,0.7)';
+        for (var wy = 0; wy < bh - 14; wy += 16) if ((i + wy) % 3) ctx2.fillRect(bx + 6, P.y + P.h * 0.62 - bh + 8 + wy, 4, 6);
       }
-      ctx2.font = (L.who ? '600 23px ' : 'italic 600 23px ') + SANS;
-      ctx2.fillStyle = L.who ? '#eaf6ff' : 'rgba(214,232,246,0.95)';
-      var rows = wrapLines(ctx2, L.who ? '“' + L.text + '”' : L.text, P.w - 72);
-      for (var r = 0; r < rows.length; r++) { ctx2.fillText(rows[r], lx, y); y += 31; }
-      y += 16;
+      var carCol = line.who ? speakerColor(line.who) : '#c8121f';
+      drawProfileCar(ctx2, W / 2 - 60 + Math.min(1, sceneT / 0.8) * 30, P.y + P.h * 0.86, 1.3, carCol);
+      ctx2.restore();
+    }
+    // Title caption, top-left of the panel, comic style.
+    var tw = Math.min(520, 60 + sc.title.length * 26);
+    UI.panel(ctx2, P.x - 14, P.y - 22, tw, 64, { skew: 0, fill: '#ffd23f', stroke: '#05040c', lineWidth: 4 });
+    UI.text(ctx2, sc.title, P.x + 8, P.y + 22, { size: 32, color: '#05040c', maxW: tw - 30 });
+    if (sc.sub) {
+      UI.panel(ctx2, P.x + P.w - 250, P.y + P.h - 26, 260, 40, { skew: 0, fill: '#05040c', stroke: '#ffd23f', lineWidth: 3 });
+      UI.text(ctx2, sc.sub, P.x + P.w - 120, P.y + P.h + 2, { size: 17, font: UI.SANS, weight: '900', lean: 0, align: 'center', color: '#ffd23f', maxW: 240 });
     }
     ctx2.restore();
+
+    // The conversation: the newest line and up to two before it.
+    var first = Math.max(0, sceneLine - 2), y = 660;
+    var rows = [];
+    for (i = first; i <= sceneLine; i++) rows.push(i);
+    for (var ri = 0; ri < rows.length; ri++) {
+      var li = rows[ri], L = sc.lines[li], cur = li === sceneLine;
+      var pop = cur ? UI.outBack(UI.clamp01(sceneT / 0.3)) : 1;
+      if (!L.who) {
+        // Narration: a yellow caption box.
+        ctx2.font = 'italic 800 22px ' + UI.SANS;
+        var nl = wrapLines(ctx2, L.text, 560);
+        var nh = 24 + nl.length * 30;
+        ctx2.save();
+        ctx2.translate(W / 2, y + nh / 2); ctx2.scale(pop, pop); ctx2.rotate(ri % 2 ? 0.01 : -0.01); ctx2.translate(-W / 2, -(y + nh / 2));
+        ctx2.globalAlpha *= cur ? 1 : 0.55;
+        ctx2.fillStyle = '#ffd23f'; ctx2.fillRect(70, y, 580, nh);
+        ctx2.lineWidth = 4; ctx2.strokeStyle = '#05040c'; ctx2.strokeRect(70, y, 580, nh);
+        ctx2.fillStyle = '#1a1206'; ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic';
+        for (var q = 0; q < nl.length; q++) ctx2.fillText(nl[q], 90, y + 36 + q * 30);
+        ctx2.restore();
+        y += nh + 18;
+      } else {
+        // Speech: a face on one side, the bubble beside it.
+        var right = L.who !== 'WRENCH' && L.who !== 'KAI' ? true : false;
+        ctx2.font = '800 22px ' + UI.SANS;
+        var sl = wrapLines(ctx2, '“' + L.text + '”', 430);
+        var sh = Math.max(96, 30 + sl.length * 30);
+        var fx = right ? W - 92 : 92, fy = y + 50;
+        var bx = right ? 60 : 180, bwid = 480;
+        drawBubble(ctx2, bx, y, bwid, sh, right ? fx - 62 : fx + 62, fy + 6, pop, !cur);
+        ctx2.save(); ctx2.globalAlpha *= cur ? 1 : 0.55;
+        ctx2.fillStyle = '#05040c'; ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic';
+        ctx2.font = '800 22px ' + UI.SANS;
+        var pcx = bx + bwid / 2, pcy = y + sh / 2;
+        ctx2.translate(pcx, pcy); ctx2.scale(pop, pop); ctx2.translate(-pcx, -pcy);
+        for (var q2 = 0; q2 < sl.length; q2++) ctx2.fillText(sl[q2], bx + 26, y + 40 + q2 * 30);
+        ctx2.restore();
+        ctx2.save(); ctx2.globalAlpha *= cur ? 1 : 0.6;
+        drawFace(ctx2, L.who, fx, fy, 56, cur ? sceneT / 0.3 : 1);
+        ctx2.restore();
+        y += sh + 22;
+      }
+    }
+
     var last = sceneLine === sc.lines.length - 1 && sceneQueue.length === 1;
     if (last && sc.ending) {
-      UI.text(ctx2, 'THE END', v.W * 0.5, 1210, { size: 44, align: 'center', color: UI.C.green, stroke: 'rgba(4,2,10,0.9)' });
+      UI.text(ctx2, 'THE END', W * 0.5, 1210, { size: 44, align: 'center', color: UI.C.green, stroke: 'rgba(4,2,10,0.9)' });
     } else {
       var pulse = 0.75 + 0.25 * Math.sin(clock * 3);
-      UI.text(ctx2, last ? 'TAP TO CONTINUE ▸' : 'TAP FOR MORE ▸', v.W * 0.5, 1206, { size: 24, align: 'center', color: UI.C.gold, alpha: pulse * pp });
+      UI.text(ctx2, last ? 'TAP TO CONTINUE ▸' : 'TAP FOR MORE ▸', W * 0.5, 1206, { size: 24, align: 'center', color: UI.C.gold, alpha: pulse });
     }
-    // Progress through the scene, as pips and a count.
     var n = sc.lines.length;
     for (i = 0; i < n; i++) {
       ctx2.fillStyle = i <= sceneLine ? UI.C.cyan : 'rgba(150,196,225,0.25)';
-      ctx2.fillRect(v.W * 0.5 - n * 11 + i * 22, 1226, 16, 4);
+      ctx2.fillRect(W * 0.5 - n * 11 + i * 22, 1226, 16, 4);
     }
-    UI.text(ctx2, (sceneLine + 1) + ' / ' + n, v.W * 0.5, 1252, { size: 14, font: UI.MONO, weight: '800', lean: 0, align: 'center', color: UI.C.dim });
+    UI.text(ctx2, (sceneLine + 1) + ' / ' + n, W * 0.5, 1252, { size: 14, font: UI.MONO, weight: '800', lean: 0, align: 'center', color: UI.C.dim });
     ctx2.textAlign = 'left';
     drawButton(ctx2, SCENE_SKIP_BTN, 'SKIP ▸▸');
   }
@@ -2553,6 +2945,7 @@
     var lx = (t.x - offX) / scale, ly = (t.y - offY) / scale;
     var i, b;
     if (phase === 'title') {
+      if (inBox(lx, ly, NAME_CHIP)) { openName('title'); return; }
       if (inBox(lx, ly, RESET_BTN)) {
         if (resetArmed > 0) { startOver(); resetArmed = 0; resetDone = 2.5; }
         else resetArmed = 4;
@@ -2566,6 +2959,10 @@
           return;
         }
       }
+    } else if (phase === 'name') {
+      if (inBox(lx, ly, NAME_DICE_BTN)) { rollName(); return; }
+      if (inBox(lx, ly, NAME_GO_BTN)) { confirmName(); return; }
+      if (DR.Save.playerName() && inBox(lx, ly, BACK_BTN)) { phase = 'title'; return; }
     } else if (phase === 'modes') {
       if (inBox(lx, ly, BACK_BTN)) { phase = 'title'; return; }
       for (i = 0; i < MODES.length; i++) {
@@ -2598,11 +2995,11 @@
       }
     } else if (phase === 'story') {
       if (inBox(lx, ly, BACK_BTN)) { phase = 'title'; return; }
-      if (inBox(lx, ly, MAP_ENTER_BTN)) { visitCity(storySel); return; }
+      if (inBox(lx, ly, MAP_ENTER_BTN)) { zoomIntoCity(storySel); return; }
       if (inBox(lx, ly, MAP_STORY_BTN)) { replayStory(); return; }
       for (i = 0; i < DR.Story.cities().length; i++) {
         if (inBox(lx, ly, storyRowBox(i))) {
-          if (storySel === i) visitCity(i);
+          if (storySel === i) zoomIntoCity(i);
           else storySel = i;
           return;
         }
@@ -2666,6 +3063,15 @@
     } else go();
   }
   // Into a city from the map: the first visit, its arrival scene plays.
+  /* Into a city from the map, with the camera flying down onto it first.
+     (Straight in when the presentation is switched off, as in tests.) */
+  var mapZoom = null, MAP_ZOOM_T = 0.65;
+  function zoomIntoCity(ci) {
+    if (!DR.Story.cityUnlocked(ci) || mapZoom) return;
+    if (!DR.Show.enabled()) { visitCity(ci); return; }
+    storySel = ci;
+    mapZoom = { ci: ci, t: 0 };
+  }
   function visitCity(ci) {
     if (!DR.Story.cityUnlocked(ci)) return;
     var key = 'scene:in:' + DR.Story.cities()[ci].id;
@@ -2770,7 +3176,7 @@
     // happened to leave the physics constants set to.
     DR.Cars.applyToCar(DR.Save.selectedCar());
     DR.Car.reset(); DR.FX.reset();
-    camReady = false; hitCool = 0; wallHitCount = 0; draftMult = 1; devVel = 0; lastDev = 0;
+    camReady = false; hitCool = 0; dmgSmokeT = 0; wallHitCount = 0; draftMult = 1; devVel = 0; lastDev = 0;
     lap = 1; lapFlash = 0; boostT = 1e9;
     lapTimer = 0; timing = false; lapTimes.length = 0;
     hitPenalty = 1; meter = 0.55; driftTime = 0; pickPop = 0; boostDenied = 0;
@@ -2802,7 +3208,7 @@
     var tr = DR.Road.tracks()[DR.Road.currentTrack()];
     var def = DR.Cars.get(DR.Save.selectedCar()) || DR.Cars.get('nightrunner');
     var o = { mode: mode, title: tr.name, sub: '', lines: [], boss: null,
-              you: { car: def.name.toUpperCase(), rating: DR.Cars.rating(def.id),
+              you: { name: playerName(), car: def.name.toUpperCase(), rating: DR.Cars.rating(def.id),
                      color: DR.Save.carColor(def.id) || def.color } };
     if (storyEvent) {
       var c = DR.Story.cities()[storyEvent.city];
@@ -3148,12 +3554,16 @@
 
   // Off-race input: steer to change track, boost to confirm, tap anywhere.
   function updateMenu() {
+    // Mid-flight into a city: input waits until we land.
+    if (mapZoom) { DR.Input.takeMenuStep(); DR.Input.takeBoost(); DR.Input.takeTap(); return; }
     // Counted presses, not held keys — a tap of an arrow that begins and ends
     // between two frames still has to move the selection.
     var st = DR.Input.takeMenuStep();
     var confirm = DR.Input.takeBoost();
 
-    if (phase === 'title') {
+    if (phase === 'name') {
+      if (confirm) confirmName();
+    } else if (phase === 'title') {
       if (st) {
         titleSel = ((titleSel + st) % TITLE_ITEMS.length + TITLE_ITEMS.length) % TITLE_ITEMS.length;
       }
@@ -3177,7 +3587,7 @@
         var nc = DR.Story.cities().length;
         storySel = ((storySel + st) % nc + nc) % nc;
       }
-      if (confirm) visitCity(storySel);
+      if (confirm) zoomIntoCity(storySel);
     } else if (phase === 'scene') {
       if (confirm) sceneAdvance();
     } else if (phase === 'city') {
@@ -3209,6 +3619,7 @@
     // what's on screen — leaving the WebGL layer showing (or hidden) behind
     // is a whole class of bug this avoids for free.
     if (DR.Car3D) DR.Car3D.show(phase === 'garage' || phase === 'title');
+    syncNameInput();
     // A new screen: restart its entrance animations and sweep it in.
     if (phase !== drawnPhase) {
       var fromRace = drawnPhase === 'racing';
@@ -3239,11 +3650,12 @@
     ctx.translate(sh.x, sh.y);
 
     if (phase === 'title' || phase === 'modes' || phase === 'select' || phase === 'city' ||
-        phase === 'story' || phase === 'garage' || phase === 'tutorial' || phase === 'scene') {
+        phase === 'story' || phase === 'garage' || phase === 'tutorial' || phase === 'scene' || phase === 'name') {
       DR.Road.prepareTerrain(null);          // menus sit on the flat
       DR.Road.drawBackground(ctx, menuView());
       if (phase !== 'scene') DR.UI.backdrop(ctx, v.W, v.H, clock);
       if (phase === 'title') drawTitle(ctx, v);
+      else if (phase === 'name') drawName(ctx, v);
       else if (phase === 'modes') { drawModes(ctx, v); drawButton(ctx, BACK_BTN, '\u25C2 TITLE'); }
       else if (phase === 'select') { drawSelect(ctx, v); drawButton(ctx, BACK_BTN, '\u25C2 MODES'); }
       else if (phase === 'garage') drawGarage(ctx, v);
@@ -3280,6 +3692,7 @@
     DR.Car.draw(ctx, v);
     if (raceRivals) DR.Rivals.draw(ctx, v, DR.Car.roadS, 'behind');
     DR.FX.drawSparks(ctx, v);
+    DR.FX.drawDebris(ctx, v);
     DR.FX.drawSpeedLines(ctx, v);
     DR.FX.drawBurst(ctx, v);
     DR.FX.drawBoostFx(ctx, v);
@@ -3319,6 +3732,10 @@
     if (phase === 'racing') handleRaceTap();
     else updateMenu();
     phaseT += dt;
+    if (mapZoom) {
+      mapZoom.t += dt;
+      if (mapZoom.t >= MAP_ZOOM_T || phase !== 'story') { var zc = mapZoom.ci; mapZoom = null; if (phase === 'story') visitCity(zc); }
+    }
     garageSwapT += dt;
     if (garagePop) garagePop.t += dt;
     DR.UI.updateFx(dt);
@@ -3369,6 +3786,12 @@
     window.addEventListener('resize', resize);
     window.addEventListener('orientationchange', resize);
     if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
+
+    nameInput = makeNameInput();
+    /* First open: a name, then straight into the tutorial. After that, the
+       tutorial keeps opening the game until it's been finished once. */
+    if (!DR.Save.playerName()) openName(DR.Save.tutorialSeen() ? 'title' : 'tutorial');
+    else if (!DR.Save.tutorialSeen()) startTutorial();
 
     last = performance.now();
     requestAnimationFrame(frame);
@@ -3436,6 +3859,10 @@
       if (kind === 'doneRetry') return DONE_RETRY_BTN;
       if (kind === 'doneContinue') return DONE_CONT_BTN;
       if (kind === 'reset') return RESET_BTN;
+      if (kind === 'nameChip') return NAME_CHIP;
+      if (kind === 'nameDice') return NAME_DICE_BTN;
+      if (kind === 'nameGo') return NAME_GO_BTN;
+      if (kind === 'nameBox') return NAME_BOX;
       if (kind === 'mapEnter') return MAP_ENTER_BTN;
       if (kind === 'mapStory') return MAP_STORY_BTN;
       if (kind === 'cityStart') return CITY_START_BTN;
@@ -3459,6 +3886,8 @@
     scene: function () { return sceneQueue[0] ? { title: sceneQueue[0].title, line: sceneLine, lines: sceneQueue[0].lines.length, left: sceneQueue.length } : null; },
     startStoryEvent: startStoryEvent,
     storySel: function () { return storySel; },
+    openName: openName,
+    nameDraft: function () { return nameDraft; },
     citySel: function () { return citySel; },
     storyEvent: function () { return storyEvent; },
     storyResult: function () { return storyResult; },
