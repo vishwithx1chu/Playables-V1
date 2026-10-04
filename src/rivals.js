@@ -143,7 +143,7 @@
         slow: 1, bumpCool: 0,
         meter: hash(i * 13 + 5) * 0.6, boostT: 1e9, boosts: 0,
         draft: 1, kickD: 0,
-        wobT: 0, wobAmp: 0, spinT: 0, spinDir: 0, spins: 0, stunT: 0, shunts: 0,
+        wobT: 0, wobAmp: 0, spinT: 0, spinDir: 0, spins: 0, stunT: 0, shunts: 0, smokeT: 0,
         mistLap: -99, mistS: -1, mistT: 0, mistDir: 0,
         finished: false, finishT: 0
       });
@@ -316,12 +316,27 @@
         slipT += r.wobAmp * Math.sin(r.wobT * 18) * (r.wobT / 0.6);
       }
       if (r.spinT > 0) {
-        // A big fishtail: round, and back.
+        // Spun right round: a full turn, fast at first and slowing as the
+        // tyres bite, laying rubber and smoke the whole way.
         var ph = 1 - r.spinT / SPIN_T;
-        slipT = r.spinDir * 1.5 * Math.sin(ph * Math.PI);
+        var ease = 1 - Math.pow(1 - ph, 2.4);
+        slipT = r.spinDir * Math.PI * 2 * ease;
         r.slip = slipT;
+        if (Math.random() < 0.7 && DR.FX && DR.FX.skidAt) {
+          var bx = Math.sin(r.h + slipT), by = Math.cos(r.h + slipT);
+          DR.FX.skidAt(r.x - bx * 22 + by * 14, r.y - by * 22 - bx * 14, 5);
+          DR.FX.skidAt(r.x - bx * 22 - by * 14, r.y - by * 22 + bx * 14, 5);
+        }
+        if (Math.random() < 0.55 && DR.FX && DR.FX.smokeAt) DR.FX.smokeAt(r.x, r.y, 1, 12, 0.35, false);
+        if (r.spinT - dt <= 0) r.slip = 0;    // a whole turn is facing forward again
       } else {
         r.slip += (slipT - r.slip) * (1 - Math.exp(-dt / SLIP_TAU));
+      }
+
+      // Knocked about: dark smoke from the bodywork for a while after.
+      if (r.smokeT > 0) {
+        r.smokeT -= dt;
+        if (Math.random() < 0.35 && DR.FX && DR.FX.smokeAt) DR.FX.smokeAt(r.x, r.y, 1, 9, 0.28, true);
       }
 
       if (!r.finished && r.s >= ctx.finishS) {
@@ -426,6 +441,8 @@
     r.spinT = SPIN_T; r.spinDir = dir; r.spins++;
     r.slow = Math.min(r.slow, 0.8);
     r.boostT = 1e9;
+    r.smokeT = 4;
+    if (DR.FX && DR.FX.crash) DR.FX.crash(r.x, r.y, r.color, 1.1);
     if (DR.FX && DR.FX.labelAt) DR.FX.labelAt('SPUN OUT', '#ffd76a', r.x, r.y, 1.2);
   }
 

@@ -404,12 +404,12 @@
   function mapPos(ci) { return narrative(ci).map; }
   function arrivalScene(ci) {
     var c = CITIES[ci];
-    return { title: c.name, sub: 'CITY ' + (ci + 1) + ' OF ' + CITIES.length, city: ci, lines: fillLines(narrative(ci).arrive) };
+    return { key: c.id + '.in', title: c.name, sub: 'CITY ' + (ci + 1) + ' OF ' + CITIES.length, city: ci, lines: fillLines(narrative(ci).arrive) };
   }
   function aftermathScene(ci) {
     var c = CITIES[ci];
     var last = ci === CITIES.length - 1;
-    return { title: last ? 'THE TRUTH' : c.boss + ' IS BEATEN', sub: c.name, city: ci,
+    return { key: c.id + '.out', title: last ? 'THE TRUTH' : c.boss + ' IS BEATEN', sub: c.name, city: ci,
              lines: fillLines(narrative(ci).after), ending: last };
   }
 
@@ -619,7 +619,7 @@
     bossBeaten: bossBeaten, cleared: cleared, eventLocked: eventLocked,
     currentCity: currentCity, setup: setup, resolve: resolve, themeFor: themeFor,
     eventId: eventId, bossIndex: bossIndex, ratingNeed: ratingNeed,
-    prologue: function () { return { title: PROLOGUE.title, sub: PROLOGUE.sub, lines: fillLines(PROLOGUE.lines) }; },
+    prologue: function () { return { key: 'prologue', title: PROLOGUE.title, sub: PROLOGUE.sub, lines: fillLines(PROLOGUE.lines) }; },
     sayName: sayName, arrivalScene: arrivalScene,
     aftermathScene: aftermathScene, placeName: placeName, mapPos: mapPos, bossQuote: bossQuote,
     bossSkill: function (ci) { return bossSkill(ci); },
